@@ -2,9 +2,14 @@ version: "0.1"
 timezone: "Asia/Shanghai"
 
 data_repo:
+  # Top10 外部数据仓库统一放在 _warehouse 目录下
   warehouse_root: "_warehouse"
+  # 你的真实数据仓库名（GitHub 仓库名）
   repo_name: "a-share-top3-data"
-  raw_dir: "data/raw"     # _warehouse/a-share-top3-data/data/raw/YYYY/YYYYMMDD/
+  # 数据仓库内部 RAW 数据所在路径（相对 repo 根目录）
+  # 最终路径会自动解析为：
+  #   _warehouse/a-share-top3-data/data/raw/YYYY/YYYYMMDD/
+  raw_dir: "data/raw"
 
 io:
   outputs_dir: "outputs"
@@ -14,21 +19,21 @@ io:
   candidate_size_hint: [30, 200]
 
 filters:
-  # Step1 情绪开关（冻结口径）
+  # Step1 情绪开关
   emotion_gate:
     min_limit_up_cnt: 50
     max_broken_rate: 0.35
     min_max连板高度: 3
 
-  # Step2 候选池（冻结口径）
+  # Step2 候选池
   candidate_pool:
     must_close_limit_up: true
     exclude_st: true
     exclude_delist_risk: true
-    exclude_extreme_one_word: false   # 可选
+    exclude_extreme_one_word: false
 
 scores:
-  # Step3 StrengthScore（冻结权重）
+  # Step3 StrengthScore 权重
   strength:
     w_seal_early: 0.35
     w_break_less: 0.25
@@ -36,17 +41,17 @@ scores:
     w_turnover_ok: 0.20
 
 theme:
-  # Step4 ThemeBoost（冻结形式）
-  sigmoid_k: 0.18    # 只是默认值，可后续调
+  # Step4 ThemeBoost 配置
+  sigmoid_k: 0.18
   use_dragon_leader_rank: true
 
 ml:
-  # Step5（先允许 placeholder）
-  model: "placeholder"     # placeholder | logistic | lightgbm
+  # Step5 模型（目前先允许 placeholder）
+  model: "placeholder"      # placeholder | logistic | lightgbm
   features_dim: 30
 
 risk:
-  # Step6 风险剔除（冻结项目）
+  # Step6 风险剔除（剔除 ST、龙虎榜大卖、次日大面 等）
   remove_st: true
   remove_dragon_net_sell: true
   remove_high_accel: true
