@@ -101,7 +101,8 @@ def _ensure_board(df: pd.DataFrame) -> pd.Series:
     """
     board_col = _first_existing_col(df, ["board", "market", "exchange"])
     if board_col:
-        return df[board_col].astype(str)
+        # fix: avoid "nan" string
+        return df[board_col].fillna("UNK").astype(str)
 
     ts_col = _first_existing_col(df, ["ts_code", "symbol", "code"])
     if not ts_col:
@@ -125,9 +126,22 @@ def _ensure_board(df: pd.DataFrame) -> pd.Series:
 
 
 def _safe_str_series(df: pd.DataFrame, col: Optional[str], default: str = "") -> pd.Series:
+    # fix: fillna BEFORE astype(str) to avoid "nan" string
     if col is None or col not in df.columns:
         return pd.Series([default] * len(df), index=df.index, dtype="object")
-    return df[col].astype(str).fillna(default)
+    return df[col].fillna(default).astype(str)
+
+
+def _normalize_risk_score_to_01(v: np.ndarray) -> np.ndarray:
+    """
+    风险 score 可能是 0~1 或 0~100；这里做一个稳健归一化到 0~1
+    """
+    x = np.array(v, dtype="float64")
+    x = np.where(np.isfinite(x), x, 0.0)
+    # 如果大多数 > 1.5，当作 0~100
+    if (x > 1.5).mean() > 0.5:
+        x = x / 100.0
+    return np.clip(x, 0.0, 1.0)
 
 
 # -----------------------------
@@ -287,18 +301,28 @@ def _build_risk_tags(df: pd.DataFrame) -> pd.Series:
             if flag:
                 tags[i].append("DT_NET_SELL")
 
+    # HIGH_ACCEL
     ha_col = _first_existing_col(df, ["high_accel_risk", "高位加速风险", "accel_risk", "risk_high_accel"])
     ha_sc = _first_existing_col(df, ["high_risk_score", "risk_score_high", "accel_risk_score"])
     if ha_col or ha_sc:
-        v = _to_float_series(df, ha_sc or ha_col, 0.0).values
+        if ha_sc:
+            v = _to_float_series(df, ha_sc, 0.0).values
+            v = _normalize_risk_score_to_01(v)
+        else:
+            v = _to_float_series(df, ha_col, 0.0).values
         for i, x in enumerate(v):
             if x > 0.5:
                 tags[i].append("HIGH_ACCEL")
 
+    # NUKE_RISK
     nk_col = _first_existing_col(df, ["nuke_risk", "核按钮风险", "nextday_nuke_risk", "risk_nuke"])
     nk_sc = _first_existing_col(df, ["nuke_risk_score", "risk_score_nuke"])
     if nk_col or nk_sc:
-        v = _to_float_series(df, nk_sc or nk_col, 0.0).values
+        if nk_sc:
+            v = _to_float_series(df, nk_sc, 0.0).values
+            v = _normalize_risk_score_to_01(v)
+        else:
+            v = _to_float_series(df, nk_col, 0.0).values
         for i, x in enumerate(v):
             if x > 0.5:
                 tags[i].append("NUKE_RISK")
@@ -363,10 +387,10 @@ def run_step6_final_topn(df: pd.DataFrame, s=None) -> pd.DataFrame:
         amt_col = _first_existing_col(df, ["amount", "turnover", "amt", "成交额"])
         tr_col = _first_existing_col(df, ["turnover_rate", "turn_rate", "换手率"])
 
-        x_pct = _robust_minmax(_to_float_series(df, pct_col, 0.0)) if pct_col else pd.Series([0.5]*len(df), index=df.index)
-        x_vol = _robust_minmax(_to_float_series(df, volr_col, 1.0)) if volr_col else pd.Series([0.5]*len(df), index=df.index)
-        x_amt = _robust_minmax(_to_float_series(df, amt_col, 0.0)) if amt_col else pd.Series([0.5]*len(df), index=df.index)
-        x_tr  = _robust_minmax(_to_float_series(df, tr_col, 0.0))  if tr_col  else pd.Series([0.5]*len(df), index=df.index)
+        x_pct = _robust_minmax(_to_float_series(df, pct_col, 0.0)) if pct_col else pd.Series([0.5] * len(df), index=df.index)
+        x_vol = _robust_minmax(_to_float_series(df, volr_col, 1.0)) if volr_col else pd.Series([0.5] * len(df), index=df.index)
+        x_amt = _robust_minmax(_to_float_series(df, amt_col, 0.0)) if amt_col else pd.Series([0.5] * len(df), index=df.index)
+        x_tr = _robust_minmax(_to_float_series(df, tr_col, 0.0)) if tr_col else pd.Series([0.5] * len(df), index=df.index)
 
         strength01 = 0.40 * x_pct + 0.25 * x_vol + 0.25 * x_amt + 0.10 * x_tr
         strength01 = _clip(strength01, 0.0, 1.0)
@@ -433,7 +457,7 @@ def run_step6_final_topn(df: pd.DataFrame, s=None) -> pd.DataFrame:
             "StrengthScore": pd.to_numeric(top["_strength"], errors="coerce").fillna(0.0).astype(float).round(3),
             "ThemeBoost": pd.to_numeric(top["_theme_boost"], errors="coerce").fillna(1.0).astype(float).round(6),
             "risk_penalty": pd.to_numeric(top["_risk_penalty"], errors="coerce").fillna(1.0).astype(float).round(6),
-            "risk_tags": top["_risk_tags"].astype(str),
+            "risk_tags": top["_risk_tags"].fillna("").astype(str),
         }
     ).reset_index(drop=True)
 
