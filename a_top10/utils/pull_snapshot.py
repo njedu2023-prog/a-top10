@@ -2,58 +2,53 @@
 # -*- coding: utf-8 -*-
 
 """
-从 top3 数据仓库复制 snapshot 文件夹到当前 top10 工程。
-只做“数据同步”，不影响 step0~step6 的任何逻辑。
+把 Top3 的本地行情快照复制到本项目 a-top10 的 data_repo/snapshots 下，
+让主程序 step0~step6 能正常读取。
 """
 
-from pathlib import Path
+from __future__ import annotations
 import shutil
+from pathlib import Path
+
+# 你的 Top3 数据仓库快照根目录（本地路径）
+LOCAL_SNAPSHOT_ROOT = Path("/Users/xujing/Documents/TopusMlData/snapshots")
+
+# 目标：a-top10 项目的 snapshot 目录（相对当前项目）
+TARGET_SNAPSHOT_ROOT = Path(__file__).resolve().parent.parent / "data_repo" / "snapshots"
+TARGET_SNAPSHOT_ROOT.mkdir(parents=True, exist_ok=True)
 
 
-def pull_snapshot(trade_date: str,
-                  top3_repo: str = "https://github.com/njedu2023-prog/a-share-top3-data",
-                  local_top3: str = None,
-                  top10_root: str = ".") -> dict:
+def pull_one_snapshot(trade_date: str) -> str:
     """
-    trade_date: '20240203' 这样的日期字符串
-    top3_repo: 你 top3 的 GitHub 仓库（仅用于提示，不实际 clone）
-    local_top3: 你本地已经 clone 好的 top3 仓库路径，例如：/Users/hua/a-share-top3-data
-    top10_root: 当前 top10 工程根路径
+    trade_date: '20260204'
+
+    从 Top3 仓库复制 trade_date 的快照目录到本项目 data_repo/snapshots 下
     """
 
-    if local_top3 is None:
-        return {
-            "ok": False,
-            "reason": "❌ 缺少 local_top3，本地 top3 仓库路径必须提供。\n"
-                      "示例：pull_snapshot('20240203', local_top3='/Users/hua/a-share-top3-data')"
-        }
+    src = LOCAL_SNAPSHOT_ROOT / trade_date
+    dst = TARGET_SNAPSHOT_ROOT / trade_date
 
-    p3 = Path(local_top3) / "data" / "raw" / trade_date     # top3 snapshot 路径
-    p10 = Path(top10_root) / "data" / trade_date            # top10 snapshot 路径
+    if not src.exists():
+        return f"[ERROR] 源快照不存在：{src}"
 
-    if not p3.exists():
-        return {
-            "ok": False,
-            "reason": f"❌ 找不到 top3 snapshot：{p3}\n请检查本地是否已 clone 最新数据。"
-        }
+    if dst.exists():
+        shutil.rmtree(dst)
 
-    p10.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst)
+    return f"[OK] {trade_date} 快照已复制到 {dst}"
 
-    # ------- 复制所有 csv -------
-    copied = []
-    for f in p3.glob("*.csv"):
-        tgt = p10 / f.name
-        shutil.copy2(f, tgt)
-        copied.append(f.name)
 
-    return {
-        "ok": True,
-        "trade_date": trade_date,
-        "top3_path": str(p3),
-        "top10_path": str(p10),
-        "copied": copied,
-    }
+def pull_latest() -> str:
+    """
+    自动找到本地最新快照，并复制
+    """
+    all_dirs = [d for d in LOCAL_SNAPSHOT_ROOT.iterdir() if d.is_dir() and len(d.name) == 8]
+    if not all_dirs:
+        return f"[ERROR] 本地快照目录为空：{LOCAL_SNAPSHOT_ROOT}"
+
+    latest = sorted(all_dirs)[-1].name
+    return pull_one_snapshot(latest)
 
 
 if __name__ == "__main__":
-    print("pull_snapshot.py ready.")
+    print(pull_latest())
