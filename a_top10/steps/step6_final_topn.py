@@ -322,4 +322,4 @@ def run_step6_final_topn(df: pd.DataFrame, s=None) -> pd.DataFrame:
             "ts_code": _safe_str_series(top, ts_col),
             "name": _safe_str_series(top, name_col),
             "final_score": pd.to_numeric(top["_final_score"], errors="coerce").fillna(0.0).astype(float).round(6),
-            "prob": pd.to_numeric(top["_prob"], errors="coerce").fillna(0
+            "prob": pd.to_numeric(top["_prob"], errors="coerce").fillna(0）
