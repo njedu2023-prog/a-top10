@@ -8,6 +8,13 @@ on:
         required: false
         default: ""
 
+  schedule:
+    # ✅ 北京时间周一到周五 18:05 / 18:35 自动执行
+    # GitHub Actions cron 使用 UTC 时间
+    # 北京时间 = UTC + 8
+    - cron: "5 10 * * 1-5"   # UTC 10:05 = 北京 18:05
+    - cron: "35 10 * * 1-5"  # UTC 10:35 = 北京 18:35
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -31,12 +38,14 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/njedu2023-prog/a-share-top3-data.git _warehouse/a-share-top3-data
 
-      # ✅ 运行主程序（不需要 Token）
+      # ✅ 运行主程序（无需 Token）
       - name: Run Top10 Pipeline
+        env:
+          TRADE_DATE: ${{ github.event.inputs.trade_date }}
         run: |
-          python -c "from a_top10.main import run_pipeline; run_pipeline('configs/default.yml', '${{ inputs.trade_date }}')"
+          python -c "from a_top10.main import run_pipeline; run_pipeline('configs/default.yml')"
 
-      # ✅ 上传 outputs 作为产物
+      # ✅ 上传 outputs（产物）
       - name: Upload outputs
         uses: actions/upload-artifact@v4
         with:
