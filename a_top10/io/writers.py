@@ -7,40 +7,70 @@ import pandas as pd
 
 def write_outputs(settings, trade_date: str, ctx, gate, topn, learn):
     """
-    最小输出器：
-    outputs/predict_top10_YYYYMMDD.md
-    outputs/predict_top10_YYYYMMDD.json
-    outputs/latest.md
+    兼容新版 Step6 输出结构：
+      topn = {"topN": DataFrame, "full": DataFrame}
     """
 
     outdir = Path(settings.io.outputs_dir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # --- JSON ---
+    # -------------------------------------------------
+    # ① 解析 Step6 输出（兼容旧版本）
+    # -------------------------------------------------
+    topN_df = None
+    full_df = None
+
+    if isinstance(topn, dict):
+        topN_df = topn.get("topN")
+        full_df = topn.get("full")
+    else:
+        # fallback：旧版本只有 DataFrame
+        topN_df = topn
+
+    # -------------------------------------------------
+    # ② JSON 输出
+    # -------------------------------------------------
     payload = {
         "trade_date": trade_date,
         "gate": gate,
-        "topn": None if topn is None else topn.to_dict(orient="records"),
+        "topN": [] if topN_df is None else topN_df.to_dict(orient="records"),
+        "learn": learn,
     }
 
     json_path = outdir / f"predict_top10_{trade_date}.json"
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # --- Markdown ---
+    # -------------------------------------------------
+    # ③ Markdown 输出：Top10 + 可选 full 排序
+    # -------------------------------------------------
     md_path = outdir / f"predict_top10_{trade_date}.md"
 
-    if topn is None or topn.empty:
-        body = "⚠️ Gate 未通过，Top10为空。\n"
+    lines = [f"# Top10 Prediction ({trade_date})\n"]
+
+    if topN_df is None or len(topN_df) == 0:
+        lines.append("\n⚠️ Gate 未通过或候选为空。\n")
     else:
-        body = topn.to_markdown(index=False)
+        lines.append("## 🏆 TopN\n")
+        lines.append(topN_df.to_markdown(index=False))
+        lines.append("\n")
 
-    md_path.write_text(
-        f"# Top10 Prediction ({trade_date})\n\n{body}\n",
-        encoding="utf-8",
-    )
+    # full 排序（可选）
+    if full_df is not None and len(full_df) > 0:
+        lines.append("## 📊 Full Ranking\n")
+        # 只展示关键字段，避免太长
+        cols = [
+            c for c in ["ts_code", "name", "_score", "_prob", "_strength", "_theme"]
+            if c in full_df.columns
+        ]
+        lines.append(full_df[cols].head(50).to_markdown(index=False))
+        lines.append("\n")
 
-    # --- latest ---
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+
+    # -------------------------------------------------
+    # ④ latest.md
+    # -------------------------------------------------
     latest = outdir / "latest.md"
     latest.write_text(md_path.read_text(encoding="utf-8"), encoding="utf-8")
 
-    print("✅ Outputs written:", md_path)
+    print(f"✅ Outputs written: {md_path}")
