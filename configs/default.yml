@@ -1,0 +1,58 @@
+version: "0.1"
+timezone: "Asia/Shanghai"
+
+data_repo:
+  warehouse_root: "_warehouse"
+  repo_name: "a-share-top3-data"
+  raw_dir: "data/raw"     # _warehouse/a-share-top3-data/data/raw/YYYY/YYYYMMDD/
+
+io:
+  outputs_dir: "outputs"
+  keep_history: true
+  topn: 10
+  topk_strength: 50
+  candidate_size_hint: [30, 200]
+
+filters:
+  # Step1 情绪开关（冻结口径）
+  emotion_gate:
+    min_limit_up_cnt: 50
+    max_broken_rate: 0.35
+    min_max连板高度: 3
+
+  # Step2 候选池（冻结口径）
+  candidate_pool:
+    must_close_limit_up: true
+    exclude_st: true
+    exclude_delist_risk: true
+    exclude_extreme_one_word: false   # 可选
+
+scores:
+  # Step3 StrengthScore（冻结权重）
+  strength:
+    w_seal_early: 0.35
+    w_break_less: 0.25
+    w_seal_amount: 0.20
+    w_turnover_ok: 0.20
+
+theme:
+  # Step4 ThemeBoost（冻结形式）
+  sigmoid_k: 0.18    # 只是默认值，可后续调
+  use_dragon_leader_rank: true
+
+ml:
+  # Step5（先允许 placeholder）
+  model: "placeholder"     # placeholder | logistic | lightgbm
+  features_dim: 30
+
+risk:
+  # Step6 风险剔除（冻结项目）
+  remove_st: true
+  remove_dragon_net_sell: true
+  remove_high_accel: true
+  remove_next_day_nuke: true
+
+output:
+  md:
+    filename_pattern: "predict_top10_{date}.md"
+    latest_symlink: "latest.md"
