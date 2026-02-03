@@ -41,11 +41,12 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      # ✅ 3. Install dependencies
+      # ✅ 3. Install dependencies ——【仅新增 sklearn】
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install scikit-learn   # ⭐⭐ 方案 A：只新增这一行 ⭐⭐
 
       # ✅ 4. 拉取数据仓库快照（用 checkout 更稳，也更快）
       - name: Checkout data warehouse (a-share-top3-data)
@@ -77,9 +78,8 @@ jobs:
           path: outputs/
           if-no-files-found: warn
 
-      # ✅✅✅ 8. 自动提交 outputs 回仓库（修复：403 / exit code 128）
+      # ✅ 8. 自动提交 outputs 回仓库
       - name: Commit outputs back to repo
-        # 你也可以改成 always()，但一般 pipeline 失败就不建议提交
         if: success()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -89,24 +89,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # 有些情况下会提示 safe.directory（加上更稳）
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-          # ✅ 关键：强制把 origin 改成 token 方式，避免 credentials 丢失导致 403
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
-          # 先同步远端，避免非 fast-forward
           git pull --rebase origin main || true
-
           git add outputs/
 
-          # 没变化就退出
           if git diff --cached --quiet; then
             echo "No changes"
             exit 0
           fi
 
           git commit -m "auto: update top10 outputs"
-
-          # push 失败做一次重试（偶发网络/并发）
           git push origin HEAD:main || (sleep 3 && git push origin HEAD:main)
