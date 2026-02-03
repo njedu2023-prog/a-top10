@@ -1,0 +1,44 @@
+name: Run Top10 Engine (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "交易日 YYYYMMDD（留空则自动）"
+        required: false
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ✅ 拉取数据仓库快照（核心）
+      - name: Checkout data warehouse (a-share-top3-data)
+        run: |
+          git clone --depth 1 https://github.com/njedu2023-prog/a-share-top3-data.git _warehouse/a-share-top3-data
+
+      # ✅ 运行主程序（不需要 Token）
+      - name: Run Top10 Pipeline
+        run: |
+          python -c "from a_top10.main import run_pipeline; run_pipeline('configs/default.yml', '${{ inputs.trade_date }}')"
+
+      # ✅ 上传 outputs 作为产物
+      - name: Upload outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: top10-outputs
+          path: outputs/
