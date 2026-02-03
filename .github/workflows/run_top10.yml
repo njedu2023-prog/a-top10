@@ -21,6 +21,10 @@ jobs:
   run:
     runs-on: ubuntu-latest
 
+    # 再声明一次更稳（有些情况下 job 级别权限更清晰）
+    permissions:
+      contents: write
+
     steps:
       # ✅ 1. Checkout 主仓库（保留凭据用于后面 git push）
       - name: Checkout repo
@@ -28,6 +32,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # ✅ 2. Setup Python
       - name: Setup Python
@@ -42,11 +47,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ✅ 4. 拉取数据仓库快照
+      # ✅ 4. 拉取数据仓库快照（用 checkout 更稳，也更快）
       - name: Checkout data warehouse (a-share-top3-data)
-        run: |
-          rm -rf _warehouse/a-share-top3-data
-          git clone --depth 1 https://github.com/njedu2023-prog/a-share-top3-data.git _warehouse/a-share-top3-data
+        uses: actions/checkout@v4
+        with:
+          repository: njedu2023-prog/a-share-top3-data
+          path: _warehouse/a-share-top3-data
+          fetch-depth: 1
 
       # ✅ 5. Run Top10 Pipeline
       - name: Run Top10 Pipeline
@@ -63,18 +70,21 @@ jobs:
 
       # ✅ 7. 上传 artifact（无论是否 commit 成功，你都能下载到结果）
       - name: Upload outputs artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: top10-outputs
           path: outputs/
+          if-no-files-found: warn
 
       # ✅✅✅ 8. 自动提交 outputs 回仓库（修复：403 / exit code 128）
       - name: Commit outputs back to repo
+        # 你也可以改成 always()，但一般 pipeline 失败就不建议提交
+        if: success()
         env:
-          # actions/checkout 默认会把 GITHUB_TOKEN 配置为 origin 的凭据
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
+          set -euo pipefail
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -82,13 +92,19 @@ jobs:
           # 有些情况下会提示 safe.directory（加上更稳）
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+          # ✅ 关键：强制把 origin 改成 token 方式，避免 credentials 丢失导致 403
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
           # 先同步远端，避免非 fast-forward
           git pull --rebase origin main || true
 
           git add outputs/
 
           # 没变化就退出
-          git diff --cached --quiet && echo "No changes" && exit 0
+          if git diff --cached --quiet; then
+            echo "No changes"
+            exit 0
+          fi
 
           git commit -m "auto: update top10 outputs"
 
