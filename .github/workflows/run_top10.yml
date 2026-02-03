@@ -8,20 +8,33 @@ on:
         required: false
         default: ""
 
+# ✅ 关键：允许 GITHUB_TOKEN 写入仓库（否则 push 403）
+permissions:
+  contents: write
+
+# ✅ 可选：避免手动点多次造成并发写冲突
+concurrency:
+  group: run-top10-manual
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
 
     steps:
-      # ✅ 1. Checkout 主仓库
+      # ✅ 1. Checkout 主仓库（保留凭据用于后面 git push）
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       # ✅ 2. Setup Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       # ✅ 3. Install dependencies
       - name: Install dependencies
@@ -32,6 +45,7 @@ jobs:
       # ✅ 4. 拉取数据仓库快照
       - name: Checkout data warehouse (a-share-top3-data)
         run: |
+          rm -rf _warehouse/a-share-top3-data
           git clone --depth 1 https://github.com/njedu2023-prog/a-share-top3-data.git _warehouse/a-share-top3-data
 
       # ✅ 5. Run Top10 Pipeline
@@ -41,21 +55,42 @@ jobs:
         run: |
           python -c "from a_top10.main import run_pipeline; run_pipeline('configs/default.yml')"
 
-      # ✅ 6. （可选）上传 artifact
+      # ✅ 6. 确保 outputs 存在（避免 upload-artifact 或 git add 报错）
+      - name: Ensure outputs exists
+        run: |
+          mkdir -p outputs
+          ls -la outputs || true
+
+      # ✅ 7. 上传 artifact（无论是否 commit 成功，你都能下载到结果）
       - name: Upload outputs artifact
         uses: actions/upload-artifact@v4
         with:
           name: top10-outputs
           path: outputs/
 
-      # ✅✅✅ 7. 最关键：自动提交 outputs 回仓库
+      # ✅✅✅ 8. 自动提交 outputs 回仓库（修复：403 / exit code 128）
       - name: Commit outputs back to repo
+        env:
+          # actions/checkout 默认会把 GITHUB_TOKEN 配置为 origin 的凭据
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -e
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # 有些情况下会提示 safe.directory（加上更稳）
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          # 先同步远端，避免非 fast-forward
+          git pull --rebase origin main || true
+
           git add outputs/
 
-          git commit -m "auto: update top10 outputs" || echo "No changes"
+          # 没变化就退出
+          git diff --cached --quiet && echo "No changes" && exit 0
 
-          git push
+          git commit -m "auto: update top10 outputs"
+
+          # push 失败做一次重试（偶发网络/并发）
+          git push origin HEAD:main || (sleep 3 && git push origin HEAD:main)
