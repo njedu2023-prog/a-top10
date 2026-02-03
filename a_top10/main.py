@@ -11,14 +11,19 @@ from a_top10.steps.step1_emotion_gate import step1_emotion_gate
 from a_top10.steps.step2_candidate_pool import step2_build_candidates
 from a_top10.steps.step3_strength_score import run_step3
 from a_top10.steps.step4_theme_boost import run_step4
-from a_top10.steps.step5_ml_probability import run_step5
+from a_top10.steps.step5_ml_probability import run_step5, train_step5_lr
 from a_top10.steps.step6_final_topn import run_step6_final_topn
 
 # ---- Output Writer ----
 from a_top10.io.writers import write_outputs
 
 
-def run_pipeline(config_path: str, trade_date: str = "", dry_run: bool = False) -> None:
+def run_pipeline(
+    config_path: str,
+    trade_date: str = "",
+    dry_run: bool = False,
+    train_model: bool = False,
+) -> None:
     """
     完整闭环 Pipeline（Step0 → Step6）
 
@@ -30,14 +35,20 @@ def run_pipeline(config_path: str, trade_date: str = "", dry_run: bool = False) 
     Step5 ML 概率推断 Probability（可训练 LR）
     Step6 TopN 综合排序输出
 
-    输出：
-        outputs/predict_top10_YYYYMMDD.md
-        outputs/predict_top10_YYYYMMDD.json
-        outputs/latest.md
+    train_model=True:
+        每日收盘后，可调用训练 Step5 LR 模型（不会影响当日预测）
     """
     # ---- Load Settings ----
     s = load_settings(config_path)
     td = trade_date.strip() or s.trade_date_resolver()
+
+    # ---- 可选：训练模型（不影响当天预测逻辑） ----
+    train_summary = None
+    if train_model:
+        try:
+            train_summary = train_step5_lr(s)
+        except Exception as e:
+            train_summary = {"ok": False, "error": str(e)}
 
     # ---- Step0 ----
     ctx = step0_build_universe(s, td)
@@ -49,19 +60,10 @@ def run_pipeline(config_path: str, trade_date: str = "", dry_run: bool = False) 
     topn: Optional[pd.DataFrame] = None
 
     if gate.get("pass"):
-        # Step2 候选池
         candidates = step2_build_candidates(s, ctx)
-
-        # Step3 强度评分
         strength_df = run_step3(candidates)
-
-        # Step4 题材加权
         theme_df = run_step4(strength_df)
-
-        # Step5 ML 推断
         prob_df = run_step5(theme_df, s=s)
-
-        # Step6 最终 TopN
         topn = run_step6_final_topn(prob_df, s=s)
 
     # ---- 写出结果 ----
@@ -72,7 +74,7 @@ def run_pipeline(config_path: str, trade_date: str = "", dry_run: bool = False) 
             ctx=ctx,
             gate=gate,
             topn=topn,
-            learn={"updated": False, "note": "A-version: full pipeline 0–6"},
+            learn=train_summary or {"updated": False, "note": "A-version: full pipeline 0–6"},
         )
 
 
@@ -81,5 +83,8 @@ if __name__ == "__main__":
 
     config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
     trade_date = sys.argv[2] if len(sys.argv) > 2 else ""
+    
+    # 命令行第三个参数支持 "train"
+    train_flag = (len(sys.argv) > 3 and sys.argv[3].lower() == "train")
 
-    run_pipeline(config_path, trade_date)
+    run_pipeline(config_path, trade_date, train_model=train_flag)
