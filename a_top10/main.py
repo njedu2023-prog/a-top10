@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Dict
 import pandas as pd
 
 from a_top10.config import load_settings
@@ -26,23 +26,13 @@ def run_pipeline(
 ) -> None:
     """
     完整闭环 Pipeline（Step0 → Step6）
-
-    Step0 数据输入层（读快照/构造 ctx）
-    Step1 市场情绪过滤器（E1/E2/E3）
-    Step2 候选池（涨停池 + H1 粗过滤）
-    Step3 涨停质量评分 StrengthScore（A+B+C）
-    Step4 板块/题材 ThemeBoost
-    Step5 ML 概率推断 Probability（可训练 LR）
-    Step6 TopN 综合排序输出
-
-    train_model=True:
-        每日收盘后，可调用训练 Step5 LR 模型（不会影响当日预测）
     """
+
     # ---- Load Settings ----
     s = load_settings(config_path)
     td = trade_date.strip() or s.trade_date_resolver()
 
-    # ---- 可选：训练模型（不影响当天预测逻辑） ----
+    # ---- Optional: train LR model ----
     train_summary = None
     if train_model:
         try:
@@ -57,14 +47,19 @@ def run_pipeline(
     gate = step1_emotion_gate(s, ctx)
 
     # ---- Step2-6 ----
-    topn: Optional[pd.DataFrame] = None
+    topn_df = None
+    full_df = None
 
     if gate.get("pass"):
         candidates = step2_build_candidates(s, ctx)
         strength_df = run_step3(candidates)
         theme_df = run_step4(strength_df)
         prob_df = run_step5(theme_df, s=s)
-        topn = run_step6_final_topn(prob_df, s=s)
+
+        # Step6 返回 dict
+        result: Dict[str, pd.DataFrame] = run_step6_final_topn(prob_df, s=s)
+        topn_df = result.get("topN")
+        full_df = result.get("full")
 
     # ---- 写出结果 ----
     if not dry_run:
@@ -73,8 +68,9 @@ def run_pipeline(
             td,
             ctx=ctx,
             gate=gate,
-            topn=topn,
-            learn=train_summary or {"updated": False, "note": "A-version: full pipeline 0–6"},
+            topn=topn_df,     # 只写 Top10 给用户
+            full=full_df,     # 新增：写 full 排序表
+            learn=train_summary or {"updated": False},
         )
 
 
