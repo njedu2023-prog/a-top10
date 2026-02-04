@@ -53,9 +53,15 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          # ✅ pandas.DataFrame.to_markdown 依赖 tabulate；避免线上缺失导致任务失败
+          pip install -U tabulate
 
       - name: Resolve latest snapshot trade_date (auto) - scheme2(raw probe)
         id: resolve_date
