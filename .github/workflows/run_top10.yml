@@ -1,18 +1,16 @@
 name: Run Top10 Engine (Auto Daily)
 
 on:
-  workflow_dispatch:
-
   schedule:
-    # 北京时间 周一到周五 18:30（UTC 10:30）
-    - cron: "30 10 * * 1-5"
+    - cron: "30 1 * * *"  # UTC 01:30 = Asia/Shanghai 09:30
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
 concurrency:
-  group: top10-engine-${{ github.ref }}
-  cancel-in-progress: true
+  group: top10-daily
+  cancel-in-progress: false
 
 jobs:
   run:
@@ -20,190 +18,142 @@ jobs:
 
     env:
       TZ: Asia/Shanghai
-      PYTHONUTF8: "1"
-      A_TOP10_TOKEN: ${{ secrets.A_TOP10_TOKEN }}
+
+      # ---- 你的数据仓库信息（方案二：只用 raw，不用 GitHub API）----
+      DATA_GITHUB_USER: njedu2023-prog
+      DATA_REPO: a-share-top3-data
+      DATA_BRANCH: main
+
+      # ---- 与 configs/default.yml 对齐（warehouse_root / repo_name / raw_dir）----
+      WAREHOUSE_ROOT: _warehouse
+      RAW_DIR: data/raw
+
+      # ---- 需要下载的文件清单（按你数据仓库 data/raw/YYYY/YYYYMMDD/ 内实际文件名来）----
+      FILES: "daily.csv daily_basic.csv limit_list_d.csv hot_boards.csv top_list.csv"
+
+      # ---- 自动回溯天数（找最近一个有数据的交易日目录）----
+      LOOKBACK_DAYS: "20"
+
+      # ---- 用于探测数据是否存在的哨兵文件（建议选最稳定必有的）----
+      PROBE_FILE: "daily.csv"
 
     steps:
-      # =====================================================
-      # Step0: Checkout 引擎仓库（只拉自己 repo）
-      # =====================================================
       - name: Checkout engine repo (a-top10)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
-      # =====================================================
-      # Step1: Setup Python
-      # =====================================================
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # =====================================================
-      # Step2: Install dependencies
-      # =====================================================
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install requests
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # 如果你项目用 pyproject/poetry/pdm，可按需替换安装方式
 
-      # =====================================================
-      # Step3: 自动解析最新可用交易日（以 top3-data 快照为准）
-      # - 周末/节假日 => 自动回退到最近有快照的日期
-      # =====================================================
-      - name: Resolve latest snapshot trade_date (auto)
+      - name: Resolve latest snapshot trade_date (auto) - scheme2(raw probe)
+        id: resolve_date
+        shell: bash
         run: |
-          python - << 'PY'
-          import os, re, datetime as dt
-          import requests
+          set -euo pipefail
 
-          owner="njedu2023-prog"
-          repo="a-share-top3-data"
-          ref="main"
+          echo "TZ=$TZ"
+          echo "LOOKBACK_DAYS=$LOOKBACK_DAYS"
+          echo "PROBE_FILE=$PROBE_FILE"
 
-          token=os.getenv("A_TOP10_TOKEN","").strip() or os.getenv("GITHUB_TOKEN","").strip()
-          headers={"Accept":"application/vnd.github+json","User-Agent":"a-top10-engine"}
-          if token:
-            headers["Authorization"]=f"token {token}"
+          base_url="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}"
+          echo "Base raw url: ${base_url}"
 
-          def list_dir(path):
-            url=f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
-            r=requests.get(url, headers=headers, timeout=30)
-            if r.status_code!=200:
-              raise RuntimeError(f"list_dir failed: {path} HTTP {r.status_code} {r.text[:200]}")
-            return r.json()
+          found=""
+          for i in $(seq 0 "${LOOKBACK_DAYS}"); do
+            d=$(date -d "today - ${i} day" +%Y%m%d)
+            yyyy=$(date -d "${d}" +%Y)
 
-          today = dt.datetime.now().strftime("%Y%m%d")
-          year = today[:4]
+            probe_url="${base_url}/${yyyy}/${d}/${PROBE_FILE}"
+            echo "Probing: ${probe_url}"
 
-          # 先取当年 data/raw/YYYY 下的所有日期目录
-          items = list_dir(f"data/raw/{year}")
-          dates = []
-          for it in items:
-            if it.get("type")=="dir":
-              name = it.get("name","")
-              if re.fullmatch(r"\d{8}", name):
-                if name <= today:
-                  dates.append(name)
+            # 仅用 HEAD 探测是否存在
+            if curl -sI --max-time 10 "${probe_url}" | head -n 1 | grep -q "200"; then
+              found="${d}"
+              break
+            fi
+          done
 
-          if not dates:
-            # 兜底：尝试去年（跨年第一天常见）
-            prev_year = str(int(year)-1)
-            items = list_dir(f"data/raw/{prev_year}")
-            for it in items:
-              if it.get("type")=="dir":
-                name = it.get("name","")
-                if re.fullmatch(r"\d{8}", name):
-                  dates.append(name)
-            if not dates:
-              raise RuntimeError("找不到任何快照日期目录（data/raw/YYYY/YYYYMMDD）")
+          if [ -z "${found}" ]; then
+            echo "❌ No available trade_date found in last ${LOOKBACK_DAYS} days."
+            exit 1
+          fi
 
-          trade_date = sorted(dates)[-1]
-          print("Resolved TRADE_DATE =", trade_date)
+          echo "✅ trade_date=${found}"
+          echo "trade_date=${found}" >> $GITHUB_OUTPUT
 
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
-            f.write(f"TRADE_DATE={trade_date}\n")
-          PY
-
-      # =====================================================
-      # Step4: 下载快照文件（HTTP + GitHub API，不用 git）
-      # 落地：data_repo/snapshots/TRADE_DATE/*.csv
-      # =====================================================
-      - name: Download snapshot files from top3-data (via GitHub API)
+      - name: Download snapshot files from data repo (raw)
+        shell: bash
         run: |
-          python - << 'PY'
-          import os, json
-          from pathlib import Path
-          import requests
+          set -euo pipefail
 
-          trade_date = os.getenv("TRADE_DATE","").strip()
-          if not trade_date:
-            raise SystemExit("TRADE_DATE is empty")
+          TRADE_DATE="${{ steps.resolve_date.outputs.trade_date }}"
+          YYYY="${TRADE_DATE:0:4}"
 
-          owner="njedu2023-prog"
-          repo="a-share-top3-data"
-          ref="main"
-          year=trade_date[:4]
-          remote_dir=f"data/raw/{year}/{trade_date}"
+          echo "Using TRADE_DATE=${TRADE_DATE}"
 
-          token=os.getenv("A_TOP10_TOKEN","").strip() or os.getenv("GITHUB_TOKEN","").strip()
-          headers={"Accept":"application/vnd.github+json","User-Agent":"a-top10-engine"}
-          if token:
-            headers["Authorization"]=f"token {token}"
+          # 目标目录：_warehouse/<repo>/data/raw/YYYY/YYYYMMDD/
+          target_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${YYYY}/${TRADE_DATE}"
+          mkdir -p "${target_dir}"
 
-          required=["daily.csv","daily_basic.csv","limit_list_d.csv","stock_basic.csv"]
+          base_url="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}/${YYYY}/${TRADE_DATE}"
 
-          api=f"https://api.github.com/repos/{owner}/{repo}/contents/{remote_dir}?ref={ref}"
-          r=requests.get(api, headers=headers, timeout=30)
-          if r.status_code!=200:
-            print("API:", api)
-            print("HTTP:", r.status_code)
-            print(r.text[:800])
-            raise SystemExit("无法列出远端快照目录（可能是目录不存在 / token无权限）")
+          for f in ${FILES}; do
+            url="${base_url}/${f}"
+            echo "Downloading: ${url}"
+            # -f: 非 200 直接失败；-L: 跟随跳转；--retry: 网络抖动重试
+            curl -fL --retry 3 --retry-delay 1 --max-time 30 -o "${target_dir}/${f}" "${url}"
+          done
 
-          items=r.json()
-          if not isinstance(items, list):
-            print(json.dumps(items, ensure_ascii=False)[:800])
-            raise SystemExit("远端返回异常（不是文件列表）")
+          echo "✅ Download done → ${target_dir}"
+          ls -lh "${target_dir}"
 
-          name2url={it["name"]: it.get("download_url") for it in items if it.get("type")=="file"}
-          missing=[f for f in required if f not in name2url]
-          if missing:
-            print("远端目录：", f"{owner}/{repo}/{remote_dir}")
-            print("已发现文件(前30)：", sorted(list(name2url.keys()))[:30])
-            raise SystemExit(f"远端快照缺少必需文件：{missing}")
-
-          out_dir=Path("data_repo/snapshots")/trade_date
-          out_dir.mkdir(parents=True, exist_ok=True)
-
-          for f in required:
-            p=out_dir/f
-            if p.exists() and p.stat().st_size>0:
-              continue
-            rr=requests.get(name2url[f], headers=headers, timeout=60)
-            if rr.status_code!=200:
-              print("下载失败：", f, rr.status_code)
-              print(rr.text[:300])
-              raise SystemExit("download failed")
-            p.write_bytes(rr.content)
-
-          print("Snapshot ready at:", out_dir)
-          for p in out_dir.glob("*.csv"):
-            print(" -", p.name, p.stat().st_size)
-          PY
-
-      # =====================================================
-      # Step5: Run Top10 Pipeline
-      # 注意：你的主程序需要读取 data_repo/snapshots/TRADE_DATE 下文件
-      # =====================================================
       - name: Run Top10 Pipeline
+        shell: bash
         run: |
-          echo "TRADE_DATE=${TRADE_DATE}"
-          python -m a_top10.run
+          set -euo pipefail
+          TRADE_DATE="${{ steps.resolve_date.outputs.trade_date }}"
+          echo "Running pipeline for trade_date=${TRADE_DATE}"
 
-      # =====================================================
-      # Step6: Verify outputs
-      # =====================================================
+          # 你的入口是 a_top10/main.py（可用 -m 方式）
+          python -m a_top10.main "configs/default.yml" "${TRADE_DATE}"
+
       - name: Verify outputs
+        shell: bash
         run: |
-          ls -la outputs || true
+          set -euo pipefail
+          # 按 configs/default.yml: io.outputs_dir = outputs
+          if [ ! -d "outputs" ]; then
+            echo "❌ outputs/ not found"
+            exit 1
+          fi
+          echo "✅ outputs exists"
+          find outputs -maxdepth 3 -type f -print
 
-      # =====================================================
-      # Step7: Commit outputs back
-      # =====================================================
       - name: Commit outputs back to repo
+        shell: bash
         run: |
+          set -euo pipefail
+
+          TRADE_DATE="${{ steps.resolve_date.outputs.trade_date }}"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add outputs || true
 
           if git diff --cached --quiet; then
-            echo "No output changes."
+            echo "No changes to commit."
             exit 0
           fi
 
-          git commit -m "auto: update top10 outputs"
+          git commit -m "Auto: update outputs for ${TRADE_DATE}"
           git push
