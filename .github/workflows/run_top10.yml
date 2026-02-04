@@ -1,0 +1,144 @@
+name: Run Top10 Engine (Manual or Daily)
+
+on:
+  workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "交易日 YYYYMMDD（留空则自动）"
+        required: false
+        default: ""
+
+  schedule:
+    # UTC 07:22 = 北京时间 15:22（周一到周五）
+    - cron: "22 7 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: run-top10
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUTF8: "1"
+
+    steps:
+      # -----------------------
+      # 0) 打印上下文（可选，便于排查）
+      # -----------------------
+      - name: Print context
+        run: |
+          echo "repo=${GITHUB_REPOSITORY}"
+          echo "ref=${GITHUB_REF}"
+          echo "actor=${GITHUB_ACTOR}"
+          echo "event=${GITHUB_EVENT_NAME}"
+
+      # -----------------------
+      # 1) Checkout 主仓库（a-top10）
+      # -----------------------
+      - name: Checkout engine repo (a-top10)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # -----------------------
+      # 2) 安装 Python
+      # -----------------------
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # -----------------------
+      # 3) 安装依赖
+      # -----------------------
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install scikit-learn
+
+      # -----------------------
+      # 4) Checkout 数据仓库（a-share-top3-data）
+      #
+      # ✅ 若 a-share-top3-data 是 Public：下面这样即可（不需要 token）
+      # ❗ 若它是 Private：请在 a-top10 仓库 Actions secrets 里新增：
+      #    CROSS_REPO_TOKEN = 一个对 a-share-top3-data 有读取权限的 PAT
+      #    然后把下面 token 行取消注释
+      # -----------------------
+      - name: Checkout data warehouse (a-share-top3-data)
+        uses: actions/checkout@v4
+        with:
+          repository: njedu2023-prog/a-share-top3-data
+          path: _warehouse/a-share-top3-data
+          fetch-depth: 1
+          # token: ${{ secrets.CROSS_REPO_TOKEN }}
+
+      # -----------------------
+      # 5) 运行 Top10 Pipeline
+      # -----------------------
+      - name: Run Top10 Pipeline
+        env:
+          TRADE_DATE: ${{ github.event.inputs.trade_date }}
+          # 如果你的代码里需要 Tushare token，请保留下面这行（你仓库里已有 TUSHARE_TOKEN secret）
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+        run: |
+          echo "Using TRADE_DATE=${TRADE_DATE:-AUTO}"
+          python -c "from a_top10.main import run_pipeline; run_pipeline('configs/default.yml')"
+
+      # -----------------------
+      # 6) 确保 outputs 存在
+      # -----------------------
+      - name: Ensure outputs exists
+        if: always()
+        run: |
+          mkdir -p outputs
+          echo "==== outputs tree ===="
+          ls -la outputs || true
+          find outputs -maxdepth 3 -type f || true
+
+      # -----------------------
+      # 7) 上传 artifact（用于调试）
+      # -----------------------
+      - name: Upload outputs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: top10-outputs
+          path: outputs/
+          if-no-files-found: warn
+
+      # -----------------------
+      # 8) 自动提交 outputs 回主仓库
+      # ✅ 直接用 GITHUB_TOKEN（不需要你再手动拼 PAT）
+      # -----------------------
+      - name: Commit outputs back to repo
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          # 用 GITHUB_TOKEN 回写当前仓库
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          git pull --rebase origin main || true
+          git add outputs/
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "auto: update top10 outputs"
+          git push origin HEAD:main || (sleep 3 && git push origin HEAD:main)
