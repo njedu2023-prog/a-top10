@@ -8,6 +8,7 @@ tools/debug_print_snapshot.py
 - 不修改任何 step 文件
 - 单独运行即可打印 pipeline 各阶段输出
 - 兼容文件缺失 / 空文件 / 编码异常 / 分隔符异常（csv/tsv）
+- ✅ 兼容 Markdown 表格（.md）与 JSON（.json）自动解析打印
 
 用法：
   python tools/debug_print_snapshot.py
@@ -20,26 +21,74 @@ tools/debug_print_snapshot.py
 from __future__ import annotations
 
 import argparse
+import json
+import re
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict, Any
 
 import pandas as pd
 
 
 # ===========================
-# 默认输出文件（可通过参数覆盖）
+# 默认输出目录
 # ===========================
 DEFAULT_OUTPUT_DIR = Path("outputs")
 
-DEFAULT_FILES = {
-    "Step2 Candidate Pool（候选涨停池）": "step2_candidates.csv",
-    "Step3 StrengthScore 输出（强度评分）": "step3_strength.csv",
-    "Final Top10 输出（最终榜单）": "predict_top10_latest.csv",
+
+# ===========================
+# 默认文件映射（支持多个候选）
+# - 每个 title 对应多个候选文件名/通配符
+# - 会自动选择“第一个存在的”，或通配符匹配到的“最新文件”
+# ===========================
+DEFAULT_FILES: Dict[str, List[str]] = {
+    "Step2 Candidate Pool（候选涨停池）": [
+        "step2_candidates.csv",
+        "step2_candidates.tsv",
+        "step2_candidates.md",
+        "step2_candidates.json",
+    ],
+    "Step3 StrengthScore 输出（强度评分）": [
+        "step3_strength.csv",
+        "step3_strength.tsv",
+        "step3_strength.md",
+        "step3_strength.json",
+    ],
+    "Final Top10 输出（最终榜单）": [
+        # 你之前设想的
+        "predict_top10_latest.csv",
+        "predict_top10_latest.md",
+        "predict_top10_latest.json",
+        # repo 里常见的
+        "latest.md",
+        "predict_top10_*.csv",
+        "predict_top10_*.md",
+        "predict_top10_*.json",
+    ],
 }
 
 
 # ===========================
-# 读文件：尽量稳
+# 工具：选择一个可用文件（支持通配符取最新）
+# ===========================
+def _resolve_existing_file(out_dir: Path, patterns: List[str]) -> Optional[Path]:
+    candidates: List[Path] = []
+    for p in patterns:
+        if any(ch in p for ch in ["*", "?", "["]):
+            candidates.extend(sorted(out_dir.glob(p)))
+        else:
+            candidates.append(out_dir / p)
+
+    existing = [x for x in candidates if x.exists() and x.is_file() and x.stat().st_size > 0]
+    if not existing:
+        return None
+
+    # 取最新：优先按 mtime，其次按名字（predict_top10_YYYYMMDD.xxx 也能正常排序）
+    existing.sort(key=lambda x: (x.stat().st_mtime, x.name))
+    return existing[-1]
+
+
+# ===========================
+# 读 CSV/TSV：尽量稳
 # ===========================
 def _read_csv_safely(path: Path) -> Tuple[Optional[pd.DataFrame], str]:
     """
@@ -77,6 +126,123 @@ def _read_csv_safely(path: Path) -> Tuple[Optional[pd.DataFrame], str]:
 
 
 # ===========================
+# 读 Markdown 表格：尽量稳
+# ===========================
+def _read_markdown_table(path: Path) -> Tuple[Optional[pd.DataFrame], str]:
+    """
+    解析 markdown 里的 pipe 表格：
+      | a | b |
+      |---|---|
+      | 1 | 2 |
+    找到第一张表就读。
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception as e:
+        return None, f"❌ 读取失败（md）：{path}（错误：{e}）"
+
+    lines = [ln.rstrip("\n") for ln in text.splitlines()]
+    table_start = -1
+
+    # 找到表头 + 分隔线
+    for i in range(len(lines) - 1):
+        if "|" in lines[i] and "|" in lines[i + 1]:
+            sep_line = lines[i + 1].strip()
+            if re.match(r"^\s*\|?\s*[-: ]+\|\s*[-:| ]+\|?\s*$", sep_line):
+                table_start = i
+                break
+
+    if table_start < 0:
+        # 没表格就当普通文本
+        return None, f"⚠️ 未发现 Markdown 表格：{path.name}"
+
+    # 收集连续的表格行
+    tbl = []
+    j = table_start
+    while j < len(lines) and ("|" in lines[j]) and lines[j].strip():
+        tbl.append(lines[j].strip())
+        j += 1
+
+    if len(tbl) < 3:
+        return None, f"⚠️ Markdown 表格不完整：{path.name}"
+
+    header = tbl[0]
+    sep = tbl[1]
+    rows = tbl[2:]
+
+    # 清洗：去掉首尾 |
+    def split_row(r: str) -> List[str]:
+        r = r.strip()
+        if r.startswith("|"):
+            r = r[1:]
+        if r.endswith("|"):
+            r = r[:-1]
+        return [c.strip() for c in r.split("|")]
+
+    cols = split_row(header)
+    data = [split_row(r) for r in rows]
+
+    # 对齐列数
+    max_len = max(len(cols), *(len(r) for r in data))
+    cols = cols + [""] * (max_len - len(cols))
+    fixed = []
+    for r in data:
+        if len(r) < max_len:
+            r = r + [""] * (max_len - len(r))
+        fixed.append(r[:max_len])
+
+    try:
+        df = pd.DataFrame(fixed, columns=cols)
+        # 去掉空列名（很常见）
+        df.columns = [c if c else f"col_{i}" for i, c in enumerate(df.columns)]
+        return df, f"✅ 读取成功：{path.name}（markdown table）"
+    except Exception as e:
+        return None, f"❌ 解析 Markdown 表格失败：{path.name}（错误：{e}）"
+
+
+# ===========================
+# 读 JSON：尽量稳
+# ===========================
+def _read_json_safely(path: Path) -> Tuple[Optional[pd.DataFrame], str]:
+    try:
+        raw = path.read_text(encoding="utf-8", errors="ignore")
+        obj = json.loads(raw)
+
+        if isinstance(obj, list):
+            df = pd.json_normalize(obj)
+            return df, f"✅ 读取成功：{path.name}（json list）"
+
+        if isinstance(obj, dict):
+            # 常见：dict 里包了 topN / full / data 等
+            for key in ["topN", "topn", "data", "items", "rows", "result", "full"]:
+                if key in obj and isinstance(obj[key], list):
+                    df = pd.json_normalize(obj[key])
+                    return df, f"✅ 读取成功：{path.name}（json dict[{key}]）"
+            # 兜底：把 dict 展平
+            df = pd.json_normalize(obj)
+            return df, f"✅ 读取成功：{path.name}（json dict）"
+
+        return None, f"⚠️ JSON 结构不支持（不是 list/dict）：{path.name}"
+    except Exception as e:
+        return None, f"❌ 读取失败（json）：{path.name}（错误：{e}）"
+
+
+# ===========================
+# 总入口：按后缀自动选择读取方式
+# ===========================
+def _read_any_safely(path: Path) -> Tuple[Optional[pd.DataFrame], str]:
+    suf = path.suffix.lower()
+    if suf in [".csv", ".tsv"]:
+        return _read_csv_safely(path)
+    if suf in [".md", ".markdown"]:
+        return _read_markdown_table(path)
+    if suf == ".json":
+        return _read_json_safely(path)
+    # 兜底：尝试按 csv
+    return _read_csv_safely(path)
+
+
+# ===========================
 # 打印：可读、可控
 # ===========================
 def _maybe_sort(df: pd.DataFrame) -> pd.DataFrame:
@@ -89,11 +255,10 @@ def _maybe_sort(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
 
-    # 你可能会遇到的常见列
     prefer_cols = [
         "rank", "排名",
         "ts_code", "股票代码",
-        "StrengthScore", "强度得分",
+        "StrengthScore", "强度得分", "强度评分",
         "prob", "涨停概率",
         "_score", "score", "综合得分",
     ]
@@ -102,7 +267,6 @@ def _maybe_sort(df: pd.DataFrame) -> pd.DataFrame:
     if not sort_cols:
         return df
 
-    # 去重保持顺序
     seen = set()
     uniq_cols = []
     for c in sort_cols:
@@ -112,13 +276,11 @@ def _maybe_sort(df: pd.DataFrame) -> pd.DataFrame:
 
     def _asc_for(col: str) -> bool:
         key = col.lower()
-        # “排名 / rank / code”这类通常升序
         if col in ("rank", "排名", "ts_code", "股票代码"):
             return True
         if "rank" in key or "code" in key:
             return True
-        # 其余默认按“分数/概率”降序
-        return False
+        return False  # 其余默认降序
 
     ascending = [_asc_for(c) for c in uniq_cols]
 
@@ -129,16 +291,13 @@ def _maybe_sort(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _print_df(title: str, df: Optional[pd.DataFrame], n: int = 10, max_colwidth: int = 32) -> str:
-    """
-    打印并返回同样内容的字符串（方便写入 markdown）。
-    """
     lines = []
     lines.append("\n" + "=" * 78)
     lines.append(f"📌 {title}")
     lines.append("=" * 78)
 
     if df is None:
-        lines.append("（无数据）")
+        lines.append("（无数据 / 解析失败 / 文件不存在）")
         out = "\n".join(lines)
         print(out)
         return out
@@ -151,7 +310,6 @@ def _print_df(title: str, df: Optional[pd.DataFrame], n: int = 10, max_colwidth:
 
     df2 = _maybe_sort(df.copy())
 
-    # 截断超长字段，避免刷屏
     def _truncate(x):
         s = "" if pd.isna(x) else str(x)
         if len(s) > max_colwidth:
@@ -183,14 +341,11 @@ def _print_df(title: str, df: Optional[pd.DataFrame], n: int = 10, max_colwidth:
 
 
 def _to_markdown_block(title: str, df: Optional[pd.DataFrame], n: int = 10) -> str:
-    """
-    输出一个 markdown 片段（表格形式，适合放到 md 文件里）
-    """
     md = []
     md.append(f"\n## {title}\n")
 
     if df is None:
-        md.append("> （无数据）\n")
+        md.append("> （无数据 / 解析失败 / 文件不存在）\n")
         return "".join(md)
 
     if df.empty:
@@ -204,7 +359,6 @@ def _to_markdown_block(title: str, df: Optional[pd.DataFrame], n: int = 10) -> s
         md.append(f"\n- 总行数：{len(df)}\n")
         md.append(f"- 列名：{list(df.columns)}\n")
     except Exception:
-        # to_markdown 依赖 tabulate；如果没装，回退成纯文本
         md.append("```text\n")
         md.append(df2.to_string(index=False))
         md.append("\n```\n")
@@ -231,17 +385,29 @@ def main() -> int:
 
     print("\n✅ Top10 系统旁路调试打印器启动...\n")
     print(f"📁 输出目录：{out_dir.resolve()}")
-    print(f"🔎 每表显示行数：{n}\n")
+    print(f"🔎 每表显示行数：{n}")
+    print(f"📏 最大列宽：{max_colwidth}\n")
 
-    md_parts = []
+    if not out_dir.exists():
+        print(f"⚠️ 输出目录不存在：{out_dir}")
+        print("   你可以先跑一次 pipeline 生成 outputs，或指定正确 --dir\n")
+
+    md_parts: List[str] = []
     if args.md:
         md_parts.append(f"# Top10 Debug Snapshot\n\n- 输出目录：`{out_dir}`\n- 每表显示：前 {n} 行\n")
 
-    for title, fname in DEFAULT_FILES.items():
-        path = out_dir / fname
-        df, msg = _read_csv_safely(path)
-        print(msg)
+    for title, patterns in DEFAULT_FILES.items():
+        resolved = _resolve_existing_file(out_dir, patterns)
+        if resolved is None:
+            print(f"⚠️ 未找到可用文件：{title}（尝试过：{patterns}）")
+            df = None
+            _print_df(title, df, n=n, max_colwidth=max_colwidth)
+            if args.md:
+                md_parts.append(_to_markdown_block(title, df, n=n))
+            continue
 
+        df, msg = _read_any_safely(resolved)
+        print(msg + f"  -> {resolved}")
         _print_df(title, df, n=n, max_colwidth=max_colwidth)
 
         if args.md:
