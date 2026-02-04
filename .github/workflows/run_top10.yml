@@ -2,7 +2,7 @@ name: Run Top10 Engine (Auto Daily)
 
 on:
   schedule:
-    - cron: "30 1 * * *"  # UTC 01:30 = Asia/Shanghai 09:30
+    - cron: "30 1 * * *" # UTC 01:30 = Asia/Shanghai 09:30
   workflow_dispatch: {}
 
 permissions:
@@ -18,6 +18,10 @@ jobs:
 
     env:
       TZ: Asia/Shanghai
+      PYTHONUTF8: "1"
+
+      # ✅ 关键：你改了 secret 名为 A_TOP10_TOKEN，这里统一桥接到程序读取的 TUSHARE_TOKEN
+      TUSHARE_TOKEN: ${{ secrets.A_TOP10_TOKEN }}
 
       # ---- 你的数据仓库信息（方案二：只用 raw，不用 GitHub API）----
       DATA_GITHUB_USER: njedu2023-prog
@@ -52,7 +56,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          # 如果你项目用 pyproject/poetry/pdm，可按需替换安装方式
 
       - name: Resolve latest snapshot trade_date (auto) - scheme2(raw probe)
         id: resolve_date
@@ -61,99 +64,112 @@ jobs:
           set -euo pipefail
 
           echo "TZ=$TZ"
+          echo "DATA_GITHUB_USER=$DATA_GITHUB_USER"
+          echo "DATA_REPO=$DATA_REPO"
+          echo "DATA_BRANCH=$DATA_BRANCH"
           echo "LOOKBACK_DAYS=$LOOKBACK_DAYS"
           echo "PROBE_FILE=$PROBE_FILE"
 
-          base_url="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}"
-          echo "Base raw url: ${base_url}"
+          # 以北京时间为准计算“今天”
+          today="$(date +%Y%m%d)"
+          echo "today=$today"
+
+          base="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}"
 
           found=""
-          for i in $(seq 0 "${LOOKBACK_DAYS}"); do
-            d=$(date -d "today - ${i} day" +%Y%m%d)
-            yyyy=$(date -d "${d}" +%Y)
+          for i in $(seq 0 "$LOOKBACK_DAYS"); do
+            d="$(date -d "${today} -${i} day" +%Y%m%d)"
+            y="${d:0:4}"
+            url="${base}/${y}/${d}/${PROBE_FILE}"
 
-            probe_url="${base_url}/${yyyy}/${d}/${PROBE_FILE}"
-            echo "Probing: ${probe_url}"
+            # HEAD 探测是否存在
+            code="$(curl -s -o /dev/null -w "%{http_code}" -I "$url" || true)"
+            echo "[probe] ${d} => ${code} ${url}"
 
-            # 仅用 HEAD 探测是否存在
-            if curl -sI --max-time 10 "${probe_url}" | head -n 1 | grep -q "200"; then
-              found="${d}"
+            if [ "$code" = "200" ]; then
+              found="$d"
               break
             fi
           done
 
-          if [ -z "${found}" ]; then
-            echo "❌ No available trade_date found in last ${LOOKBACK_DAYS} days."
-            exit 1
+          if [ -z "$found" ]; then
+            echo "ERROR: cannot find any snapshot within last ${LOOKBACK_DAYS} days via probe: ${PROBE_FILE}"
+            exit 2
           fi
 
-          echo "✅ trade_date=${found}"
-          echo "trade_date=${found}" >> $GITHUB_OUTPUT
+          echo "Resolved trade_date=$found"
+          echo "trade_date=$found" >> "$GITHUB_OUTPUT"
 
-      - name: Download snapshot files from data repo (raw)
+      - name: Download snapshot files to warehouse (raw)
+        id: download
         shell: bash
         run: |
           set -euo pipefail
 
-          TRADE_DATE="${{ steps.resolve_date.outputs.trade_date }}"
-          YYYY="${TRADE_DATE:0:4}"
+          trade_date="${{ steps.resolve_date.outputs.trade_date }}"
+          year="${trade_date:0:4}"
 
-          echo "Using TRADE_DATE=${TRADE_DATE}"
+          dest="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"
+          mkdir -p "$dest"
 
-          # 目标目录：_warehouse/<repo>/data/raw/YYYY/YYYYMMDD/
-          target_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${YYYY}/${TRADE_DATE}"
-          mkdir -p "${target_dir}"
+          base="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}/${year}/${trade_date}"
 
-          base_url="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}/${YYYY}/${TRADE_DATE}"
+          echo "Downloading to: $dest"
+          echo "Base URL: $base"
+          echo "Files: $FILES"
 
-          for f in ${FILES}; do
-            url="${base_url}/${f}"
-            echo "Downloading: ${url}"
-            # -f: 非 200 直接失败；-L: 跟随跳转；--retry: 网络抖动重试
-            curl -fL --retry 3 --retry-delay 1 --max-time 30 -o "${target_dir}/${f}" "${url}"
+          for f in $FILES; do
+            url="${base}/${f}"
+            out="${dest}/${f}"
+
+            echo "[get] $url"
+            # 用 -f 确保 404 直接失败（避免“跑绿但没数据”）
+            curl -fL --retry 3 --retry-delay 1 -o "$out" "$url"
+            ls -lh "$out"
           done
 
-          echo "✅ Download done → ${target_dir}"
-          ls -lh "${target_dir}"
+          echo "OK: downloaded snapshots for ${trade_date}"
 
-      - name: Run Top10 Pipeline
+      - name: Debug warehouse (list)
         shell: bash
         run: |
           set -euo pipefail
-          TRADE_DATE="${{ steps.resolve_date.outputs.trade_date }}"
-          echo "Running pipeline for trade_date=${TRADE_DATE}"
+          echo "====== LIST _warehouse (top) ======"
+          ls -la _warehouse || true
+          echo "====== LIST snapshot dir ======"
+          trade_date="${{ steps.resolve_date.outputs.trade_date }}"
+          year="${trade_date:0:4}"
+          ls -la "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}" || true
 
-          # 你的入口是 a_top10/main.py（可用 -m 方式）
-          python -m a_top10.main "configs/default.yml" "${TRADE_DATE}"
-
-      - name: Verify outputs
+      - name: Run Top10 Engine
         shell: bash
+        env:
+          TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
         run: |
           set -euo pipefail
-          # 按 configs/default.yml: io.outputs_dir = outputs
-          if [ ! -d "outputs" ]; then
-            echo "❌ outputs/ not found"
-            exit 1
+          echo "Running engine with TRADE_DATE=$TRADE_DATE"
+          # 兼容两种入口：优先 run.py，其次 python -m
+          if [ -f "run.py" ]; then
+            python run.py
+          else
+            python -m a_top10
           fi
-          echo "✅ outputs exists"
-          find outputs -maxdepth 3 -type f -print
 
-      - name: Commit outputs back to repo
+      - name: Commit & push outputs (if changed)
         shell: bash
         run: |
           set -euo pipefail
 
-          TRADE_DATE="${{ steps.resolve_date.outputs.trade_date }}"
+          git status --porcelain
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add outputs || true
-
-          if git diff --cached --quiet; then
+          if [ -z "$(git status --porcelain)" ]; then
             echo "No changes to commit."
             exit 0
           fi
 
-          git commit -m "Auto: update outputs for ${TRADE_DATE}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          git commit -m "auto: run top10 ${{ steps.resolve_date.outputs.trade_date }}"
           git push
