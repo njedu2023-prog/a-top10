@@ -7,8 +7,10 @@ on:
         description: "交易日 YYYYMMDD（留空则自动）"
         required: false
         default: ""
+
   schedule:
-    - cron: "22 7 * * 1-5"   # 每个交易日前早上运行（北京时间 15:22 ≈ 美西 23:22）
+    # UTC 07:22 = 北京时间 15:22（周一到周五）
+    - cron: "22 7 * * 1-5"
 
 permissions:
   contents: write
@@ -21,18 +23,19 @@ jobs:
   run:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: write
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUTF8: "1"
 
     steps:
       # -----------------------
-      # 1) Checkout 主仓库
+      # 1) Checkout 主仓库（a-top10）
       # -----------------------
       - name: Checkout engine repo (a-top10)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
           token: ${{ secrets.A_TOP10_TOKEN }}
 
       # -----------------------
@@ -45,7 +48,7 @@ jobs:
           cache: "pip"
 
       # -----------------------
-      # 3) 安装依赖（包含 sklearn）
+      # 3) 安装依赖
       # -----------------------
       - name: Install dependencies
         run: |
@@ -54,7 +57,7 @@ jobs:
           pip install scikit-learn
 
       # -----------------------
-      # 4) Checkout 数据仓库（快照数据）
+      # 4) Checkout 数据仓库（a-share-top3-data）
       # -----------------------
       - name: Checkout data warehouse (a-share-top3-data)
         uses: actions/checkout@v4
@@ -62,24 +65,29 @@ jobs:
           repository: njedu2023-prog/a-share-top3-data
           path: _warehouse/a-share-top3-data
           fetch-depth: 1
+          persist-credentials: false
+          token: ${{ secrets.A_TOP10_TOKEN }}
 
       # -----------------------
-      # 5) 运行 a-top10 Pipeline
+      # 5) 运行 Top10 Pipeline
       # -----------------------
       - name: Run Top10 Pipeline
         env:
           TRADE_DATE: ${{ github.event.inputs.trade_date }}
         run: |
-          echo "Using TRADE_DATE=$TRADE_DATE"
+          echo "Using TRADE_DATE=${TRADE_DATE:-}"
           python -c "from a_top10.main import run_pipeline; run_pipeline('configs/default.yml')"
 
       # -----------------------
-      # 6) 确保 outputs 存在
+      # 6) 确保 outputs 存在（并打印）
       # -----------------------
       - name: Ensure outputs exists
+        if: always()
         run: |
           mkdir -p outputs
+          echo "==== outputs tree ===="
           ls -la outputs || true
+          find outputs -maxdepth 3 -type f || true
 
       # -----------------------
       # 7) 上传 artifact（用于调试）
@@ -93,7 +101,7 @@ jobs:
           if-no-files-found: warn
 
       # -----------------------
-      # 8) 自动提交 outputs 回主仓库（替换为 A_TOP10_TOKEN）
+      # 8) 自动提交 outputs 回主仓库
       # -----------------------
       - name: Commit outputs back to repo
         if: success()
@@ -106,10 +114,12 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          # ⭐ 使用 A_TOP10_TOKEN 替代 GH_TOKEN
+          # 使用 Token 写回
           git remote set-url origin "https://x-access-token:${A_TOP10_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
+          # 先同步，避免 push 冲突
           git pull --rebase origin main || true
+
           git add outputs/
 
           if git diff --cached --quiet; then
