@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -56,15 +56,17 @@ def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Any) -> bool:
     - 如果阈值不存在/读取失败，则默认通过（避免“跑绿但空结果”）
     """
     gate = gate or {}
+
+    # 1) step1 已明确给 pass
     if "pass" in gate:
         return bool(gate.get("pass"))
 
-    # 取市场指标（优先 gate，其次 ctx.market）
+    # 2) 取市场指标（优先 gate，其次 ctx.market）
     E1 = int(gate.get("E1", _safe_get(ctx, "market.E1", 0)) or 0)           # 涨停家数
     E2 = float(gate.get("E2", _safe_get(ctx, "market.E2", 0.0)) or 0.0)     # 炸板率（%）
     E3 = int(gate.get("E3", _safe_get(ctx, "market.E3", 0)) or 0)           # 最高连板高度
 
-    # 从配置读取阈值（兼容多种字段命名）
+    # 3) 从配置读取阈值（兼容多种字段命名）
     min_limit_up_cnt = _safe_get_any(
         settings,
         [
@@ -94,13 +96,13 @@ def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Any) -> bool:
         default=None,
     )
 
-    # 配置可能不存在：默认通过
+    # 4) 配置可能不存在：默认通过
     if min_limit_up_cnt is None and max_broken_rate is None and min_max_lianban is None:
         gate["pass"] = True
         gate["reason"] = (gate.get("reason", "") + " | pass=default(True) (no thresholds)").strip()
         return True
 
-    # 有阈值则按阈值判断（缺的阈值不参与）
+    # 5) 有阈值则按阈值判断（缺的阈值不参与）
     ok = True
     if min_limit_up_cnt is not None:
         try:
@@ -119,7 +121,6 @@ def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Any) -> bool:
             pass
 
     gate["pass"] = bool(ok)
-
     extra = (
         f" | gate_by_thresholds:"
         f" E1={E1}(min={min_limit_up_cnt}),"
@@ -127,7 +128,6 @@ def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Any) -> bool:
         f" E3={E3}(min={min_max_lianban})"
     )
     gate["reason"] = (gate.get("reason", "") + extra).strip()
-
     return bool(ok)
 
 
@@ -156,13 +156,13 @@ def run_pipeline(
     ctx = step0_build_universe(s, td)
 
     # ---- Step1 ----
-    gate = step1_emotion_gate(s, ctx)
+    gate = step1_emotion_gate(s, ctx) or {}
 
     # 关键修复：兼容 step1 不返回 pass 的情况，避免 “Gate 未通过 → Top10 为空”
     gate_pass = _infer_gate_pass(s, gate, ctx)
 
     # ---- Step2–6 ----
-    topn_result: Dict[str, pd.DataFrame] = {"topN": None, "full": None}
+    topn_result: Dict[str, Optional[pd.DataFrame]] = {"topN": None, "full": None}
 
     if gate_pass:
         candidates = step2_build_candidates(s, ctx)
@@ -172,6 +172,9 @@ def run_pipeline(
 
         # Step6 返回 dict = {"topN": df, "full": df_full}
         topn_result = run_step6_final_topn(prob_df, s=s)
+    else:
+        # 明确记录：为什么不过
+        gate["reason"] = (gate.get("reason", "") + " | pipeline_skipped(step2-6)").strip()
 
     # ---- 写出结果（新版 writers.py 自动识别 dict 结构）----
     if not dry_run:
