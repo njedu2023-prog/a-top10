@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
-from typing import Any, Dict, Optional, Sequence, Mapping
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 import pandas as pd
 
@@ -80,6 +80,14 @@ def _to_df(x: Any) -> Optional[pd.DataFrame]:
         return None
 
 
+def _json_default(o: Any) -> str:
+    """兜底 JSON 序列化：避免 gate/learn 内出现 Path、Timestamp 等导致 json.dumps 失败。"""
+    try:
+        return str(o)
+    except Exception:
+        return repr(o)
+
+
 def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     """
     ✅ writers.py 最终稳定版
@@ -93,7 +101,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
       - predict_top10_{trade_date}.md
       - latest.md（覆盖）
     """
-    outdir = Path(settings.io.outputs_dir)
+    outdir = Path(getattr(settings.io, "outputs_dir"))
     outdir.mkdir(parents=True, exist_ok=True)
 
     # -------------------------------------------------
@@ -124,7 +132,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
     json_path = outdir / f"predict_top10_{trade_date}.json"
     json_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
+        json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
         encoding="utf-8",
     )
 
