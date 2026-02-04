@@ -29,13 +29,26 @@ jobs:
 
     steps:
       # -----------------------
+      # 0) 基础信息
+      # -----------------------
+      - name: Print context
+        run: |
+          echo "repo=${GITHUB_REPOSITORY}"
+          echo "ref=${GITHUB_REF}"
+          echo "sha=${GITHUB_SHA}"
+          echo "actor=${GITHUB_ACTOR}"
+          echo "trade_date_input=${{ github.event.inputs.trade_date }}"
+
+      # -----------------------
       # 1) Checkout 主仓库（a-top10）
-      # ✅本仓库 checkout 不需要 token
       # -----------------------
       - name: Checkout engine repo (a-top10)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # 这里用默认 GITHUB_TOKEN checkout 即可
+          # 推送时我们会显式改 remote 为 PAT，避免权限/分支限制导致 128
+          persist-credentials: false
 
       # -----------------------
       # 2) 安装 Python
@@ -52,12 +65,15 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          # 你之前手工加的包保留（可按需删）
           pip install scikit-learn
 
       # -----------------------
       # 4) Checkout 数据仓库（a-share-top3-data）
-      # ✅跨仓库访问必须显式使用 TUSHARE_TOKEN
+      #    ✅跨仓库访问必须用 GitHub PAT（TOP10_PAT）
       # -----------------------
       - name: Checkout data warehouse (a-share-top3-data)
         uses: actions/checkout@v4
@@ -65,7 +81,7 @@ jobs:
           repository: njedu2023-prog/a-share-top3-data
           path: _warehouse/a-share-top3-data
           fetch-depth: 1
-          token: ${{ secrets.TUSHARE_TOKEN }}
+          token: ${{ secrets.TOP10_PAT }}
 
       # -----------------------
       # 5) 运行 Top10 Pipeline
@@ -73,23 +89,31 @@ jobs:
       - name: Run Top10 Pipeline
         env:
           TRADE_DATE: ${{ github.event.inputs.trade_date }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: |
+          set -euo pipefail
           echo "Using TRADE_DATE=${TRADE_DATE:-AUTO}"
+
+          # （可选）如果你的代码需要知道数据仓库位置
+          export TOP3_WAREHOUSE_DIR="$GITHUB_WORKSPACE/_warehouse/a-share-top3-data"
+          echo "TOP3_WAREHOUSE_DIR=$TOP3_WAREHOUSE_DIR"
+
           python -c "from a_top10.main import run_pipeline; run_pipeline('configs/default.yml')"
 
       # -----------------------
-      # 6) 确保 outputs 存在
+      # 6) 确保 outputs 存在 + 打印目录（用于排查）
       # -----------------------
       - name: Ensure outputs exists
         if: always()
         run: |
+          set -euo pipefail
           mkdir -p outputs
           echo "==== outputs tree ===="
           ls -la outputs || true
-          find outputs -maxdepth 3 -type f || true
+          find outputs -maxdepth 4 -type f || true
 
       # -----------------------
-      # 7) 上传 artifact（用于调试）
+      # 7) 上传 artifact（用于调试/取回结果）
       # -----------------------
       - name: Upload outputs artifact
         if: always()
@@ -100,24 +124,30 @@ jobs:
           if-no-files-found: warn
 
       # -----------------------
-      # 8) 自动提交 outputs 回主仓库
-      # ✅写回需要 PAT：TUSHARE_TOKEN
+      # 8) 自动提交 outputs 回主仓库（a-top10）
+      #    ✅最稳做法：用 PAT 推送（TOP10_PAT）
       # -----------------------
       - name: Commit outputs back to repo
         if: success()
         env:
-          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          TOP10_PAT: ${{ secrets.TOP10_PAT }}
         run: |
           set -euo pipefail
+
+          # 没有产物就不提交（避免空提交）
+          if [ -z "$(find outputs -type f 2>/dev/null | head -n 1)" ]; then
+            echo "No output files found. Skip commit."
+            exit 0
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          # ✅使用 TUSHARE_TOKEN 写回
-          git remote set-url origin "https://x-access-token:${TUSHARE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # 用 PAT 设置 remote，避免 “could not read Username / terminal prompts disabled / 128”
+          git remote set-url origin "https://x-access-token:${TOP10_PAT}@github.com/${GITHUB_REPOSITORY}.git"
 
-          git pull --rebase origin main || true
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
           git add outputs/
 
           if git diff --cached --quiet; then
@@ -126,4 +156,4 @@ jobs:
           fi
 
           git commit -m "auto: update top10 outputs"
-          git push origin HEAD:main || (sleep 3 && git push origin HEAD:main)
+          git push origin "HEAD:${GITHUB_REF_NAME}" || (sleep 3 && git push origin "HEAD:${GITHUB_REF_NAME}")
