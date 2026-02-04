@@ -29,37 +29,75 @@ def _safe_get(obj: Any, path: str, default: Any = None) -> Any:
         if cur is None:
             return default
         if isinstance(cur, dict):
-            cur = cur.get(key, default)
+            if key not in cur:
+                return default
+            cur = cur.get(key)
         else:
-            cur = getattr(cur, key, default)
-    return cur
+            if not hasattr(cur, key):
+                return default
+            cur = getattr(cur, key)
+    return default if cur is None else cur
 
 
-def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
+def _safe_get_any(obj: Any, paths: list[str], default: Any = None) -> Any:
+    """按多个候选 path 尝试读取，命中一个就返回。"""
+    for p in paths:
+        v = _safe_get(obj, p, None)
+        if v is not None:
+            return v
+    return default
+
+
+def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Any) -> bool:
     """
     兼容旧版 gate 逻辑：
     - 如果 step1 返回了 pass，就直接用
     - 否则尝试读取 configs/default.yml 中 filters.emotion_gate 阈值推导 pass
     - 如果阈值不存在/读取失败，则默认通过（避免“跑绿但空结果”）
     """
+    gate = gate or {}
     if "pass" in gate:
         return bool(gate.get("pass"))
 
     # 取市场指标（优先 gate，其次 ctx.market）
-    E1 = int(gate.get("E1", _safe_get(ctx, "market.E1", 0)) or 0)      # 涨停家数
-    E2 = float(gate.get("E2", _safe_get(ctx, "market.E2", 0.0)) or 0.0)  # 炸板率（%）
-    E3 = int(gate.get("E3", _safe_get(ctx, "market.E3", 0)) or 0)      # 最高连板高度
+    E1 = int(gate.get("E1", _safe_get(ctx, "market.E1", 0)) or 0)           # 涨停家数
+    E2 = float(gate.get("E2", _safe_get(ctx, "market.E2", 0.0)) or 0.0)     # 炸板率（%）
+    E3 = int(gate.get("E3", _safe_get(ctx, "market.E3", 0)) or 0)           # 最高连板高度
 
-    # 从配置读取阈值（如果有）
-    min_limit_up_cnt = _safe_get(settings, "filters.emotion_gate.min_limit_up_cnt", None)
-    max_broken_rate = _safe_get(settings, "filters.emotion_gate.max_broken_rate", None)
-    min_max_lianban = _safe_get(settings, "filters.emotion_gate.min_max连板高度", None)
+    # 从配置读取阈值（兼容多种字段命名）
+    min_limit_up_cnt = _safe_get_any(
+        settings,
+        [
+            "filters.emotion_gate.min_limit_up_cnt",
+            "filters.emotion_gate.min_limit_up_count",
+            "filters.emotion_gate.min_zt_cnt",
+        ],
+        default=None,
+    )
+    max_broken_rate = _safe_get_any(
+        settings,
+        [
+            "filters.emotion_gate.max_broken_rate",
+            "filters.emotion_gate.max_broken_rate_pct",
+            "filters.emotion_gate.max_zb_rate",
+        ],
+        default=None,
+    )
+    min_max_lianban = _safe_get_any(
+        settings,
+        [
+            "filters.emotion_gate.min_max_lianban",
+            "filters.emotion_gate.min_max_lianban_height",
+            "filters.emotion_gate.min_lianban_height",
+            "filters.emotion_gate.min_max连板高度",  # 兼容你之前可能写进去的旧 key
+        ],
+        default=None,
+    )
 
     # 配置可能不存在：默认通过
     if min_limit_up_cnt is None and max_broken_rate is None and min_max_lianban is None:
-        # 给 writers/报告一个明确字段
         gate["pass"] = True
-        gate["reason"] = gate.get("reason", "") + " | pass=default(True) (no thresholds)"
+        gate["reason"] = (gate.get("reason", "") + " | pass=default(True) (no thresholds)").strip()
         return True
 
     # 有阈值则按阈值判断（缺的阈值不参与）
@@ -82,8 +120,12 @@ def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Dict[str, Any]) -
 
     gate["pass"] = bool(ok)
 
-    # 补充更可读的说明（不覆盖 step1 原 reason）
-    extra = f" | gate_by_thresholds: E1={E1},E2={E2},E3={E3}"
+    extra = (
+        f" | gate_by_thresholds:"
+        f" E1={E1}(min={min_limit_up_cnt}),"
+        f" E2={E2}(max={max_broken_rate}),"
+        f" E3={E3}(min={min_max_lianban})"
+    )
     gate["reason"] = (gate.get("reason", "") + extra).strip()
 
     return bool(ok)
@@ -98,7 +140,6 @@ def run_pipeline(
     """
     完整闭环 Pipeline（Step0 → Step6）
     """
-
     # ---- Load Settings ----
     s = load_settings(config_path)
     td = trade_date.strip() or s.trade_date_resolver()
