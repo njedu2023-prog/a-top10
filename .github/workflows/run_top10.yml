@@ -51,7 +51,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install scikit-learn   # ⭐⭐ 方案 A：只新增 sklearn ⭐⭐
+          pip install scikit-learn
 
       # -----------------------
       # 4) Checkout 数据仓库（快照数据）
@@ -93,7 +93,7 @@ jobs:
           if-no-files-found: warn
 
       # -----------------------
-      # 8) 自动提交 outputs 回主仓库
+      # 8) 自动提交 outputs 回主仓库（已修复 GH_TOKEN 使用）
       # -----------------------
       - name: Commit outputs back to repo
         if: success()
@@ -106,7 +106,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # ⭐ 已修正：使用 GH_TOKEN，而不是 GITHUB_TOKEN
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           git pull --rebase origin main || true
           git add outputs/
