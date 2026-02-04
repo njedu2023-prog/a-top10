@@ -30,13 +30,12 @@ jobs:
     steps:
       # -----------------------
       # 1) Checkout 主仓库（a-top10）
+      # ✅本仓库 checkout 不需要 token
       # -----------------------
       - name: Checkout engine repo (a-top10)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
-          token: ${{ secrets.A_TOP10_TOKEN }}
 
       # -----------------------
       # 2) 安装 Python
@@ -58,6 +57,7 @@ jobs:
 
       # -----------------------
       # 4) Checkout 数据仓库（a-share-top3-data）
+      # ✅跨仓库访问必须显式使用 TUSHARE_TOKEN
       # -----------------------
       - name: Checkout data warehouse (a-share-top3-data)
         uses: actions/checkout@v4
@@ -65,8 +65,7 @@ jobs:
           repository: njedu2023-prog/a-share-top3-data
           path: _warehouse/a-share-top3-data
           fetch-depth: 1
-          persist-credentials: false
-          token: ${{ secrets.A_TOP10_TOKEN }}
+          token: ${{ secrets.TUSHARE_TOKEN }}
 
       # -----------------------
       # 5) 运行 Top10 Pipeline
@@ -75,11 +74,11 @@ jobs:
         env:
           TRADE_DATE: ${{ github.event.inputs.trade_date }}
         run: |
-          echo "Using TRADE_DATE=${TRADE_DATE:-}"
+          echo "Using TRADE_DATE=${TRADE_DATE:-AUTO}"
           python -c "from a_top10.main import run_pipeline; run_pipeline('configs/default.yml')"
 
       # -----------------------
-      # 6) 确保 outputs 存在（并打印）
+      # 6) 确保 outputs 存在
       # -----------------------
       - name: Ensure outputs exists
         if: always()
@@ -102,11 +101,12 @@ jobs:
 
       # -----------------------
       # 8) 自动提交 outputs 回主仓库
+      # ✅写回需要 PAT：TUSHARE_TOKEN
       # -----------------------
       - name: Commit outputs back to repo
         if: success()
         env:
-          A_TOP10_TOKEN: ${{ secrets.A_TOP10_TOKEN }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -114,12 +114,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          # 使用 Token 写回
-          git remote set-url origin "https://x-access-token:${A_TOP10_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # ✅使用 TUSHARE_TOKEN 写回
+          git remote set-url origin "https://x-access-token:${TUSHARE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
-          # 先同步，避免 push 冲突
           git pull --rebase origin main || true
-
           git add outputs/
 
           if git diff --cached --quiet; then
