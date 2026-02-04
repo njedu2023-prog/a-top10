@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+from pathlib import Path
+import os
+from contextlib import contextmanager
 
 import pandas as pd
 
@@ -62,9 +65,9 @@ def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Any) -> bool:
         return bool(gate.get("pass"))
 
     # 2) 取市场指标（优先 gate，其次 ctx.market）
-    E1 = int(gate.get("E1", _safe_get(ctx, "market.E1", 0)) or 0)           # 涨停家数
-    E2 = float(gate.get("E2", _safe_get(ctx, "market.E2", 0.0)) or 0.0)     # 炸板率（%）
-    E3 = int(gate.get("E3", _safe_get(ctx, "market.E3", 0)) or 0)           # 最高连板高度
+    E1 = int(gate.get("E1", _safe_get(ctx, "market.E1", 0)) or 0)  # 涨停家数
+    E2 = float(gate.get("E2", _safe_get(ctx, "market.E2", 0.0)) or 0.0)  # 炸板率（%）
+    E3 = int(gate.get("E3", _safe_get(ctx, "market.E3", 0)) or 0)  # 最高连板高度
 
     # 3) 从配置读取阈值（兼容多种字段命名）
     min_limit_up_cnt = _safe_get_any(
@@ -131,6 +134,95 @@ def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Any) -> bool:
     return bool(ok)
 
 
+@contextmanager
+def _chdir(path: Path):
+    """临时切换工作目录，确保相对路径写入到 repo 根目录。"""
+    prev = Path.cwd()
+    os.chdir(str(path))
+    try:
+        yield
+    finally:
+        os.chdir(str(prev))
+
+
+def _force_outputs_dir(settings: Any) -> Path:
+    """
+    强制输出目录固定为 <repo_root>/outputs （即 a-top10/outputs/）。
+    - 通过 __file__ 推断 repo 根目录
+    - 尝试写回 settings 里常见字段名（兼容不同配置结构）
+    - 同时设置环境变量，方便 writers 或其他模块读取
+    """
+    repo_root = Path(__file__).resolve().parents[1]  # .../a-top10
+    out_dir = repo_root / "outputs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 环境变量兜底（如果你的 writers/其他代码有读取 env 的逻辑）
+    os.environ["A_TOP10_OUTPUT_DIR"] = str(out_dir)
+    os.environ["TOP10_OUTPUT_DIR"] = str(out_dir)
+
+    # 尝试在 settings 上写入常见字段名（不保证存在，但尽力兼容）
+    candidates = [
+        "output_dir",
+        "outputs_dir",
+        "out_dir",
+        "output_path",
+        "outputs_path",
+        "output_root",
+        "outputs_root",
+        "result_dir",
+        "results_dir",
+    ]
+    for key in candidates:
+        try:
+            if hasattr(settings, key):
+                setattr(settings, key, str(out_dir))
+        except Exception:
+            pass
+
+    # 尝试写入嵌套结构：settings.io.output_dir / settings.paths.outputs_dir 等
+    nested_paths = [
+        "io.output_dir",
+        "io.outputs_dir",
+        "io.out_dir",
+        "paths.output_dir",
+        "paths.outputs_dir",
+        "paths.out_dir",
+        "writer.output_dir",
+        "writer.outputs_dir",
+        "writer.out_dir",
+        "outputs.dir",
+        "outputs.path",
+    ]
+    for p in nested_paths:
+        parts = p.split(".")
+        cur = settings
+        ok = True
+        for k in parts[:-1]:
+            try:
+                if isinstance(cur, dict):
+                    cur = cur.get(k)
+                else:
+                    cur = getattr(cur, k, None)
+            except Exception:
+                cur = None
+            if cur is None:
+                ok = False
+                break
+        if not ok:
+            continue
+        last = parts[-1]
+        try:
+            if isinstance(cur, dict):
+                cur[last] = str(out_dir)
+            else:
+                if hasattr(cur, last):
+                    setattr(cur, last, str(out_dir))
+        except Exception:
+            pass
+
+    return out_dir
+
+
 def run_pipeline(
     config_path: str,
     trade_date: str = "",
@@ -143,6 +235,9 @@ def run_pipeline(
     # ---- Load Settings ----
     s = load_settings(config_path)
     td = trade_date.strip() or s.trade_date_resolver()
+
+    # ---- 强制输出目录为 a-top10/outputs ----
+    out_dir = _force_outputs_dir(s)
 
     # ---- Optional: train LR model ----
     train_summary: Optional[Dict[str, Any]] = None
@@ -177,15 +272,17 @@ def run_pipeline(
         gate["reason"] = (gate.get("reason", "") + " | pipeline_skipped(step2-6)").strip()
 
     # ---- 写出结果（新版 writers.py 自动识别 dict 结构）----
+    # 额外保险：切到 repo_root 再写，避免 writers 使用相对路径写到别处
     if not dry_run:
-        write_outputs(
-            settings=s,
-            trade_date=td,
-            ctx=ctx,
-            gate=gate,
-            topn=topn_result,  # ✔ 直接传 dict，writers 自动解析
-            learn=train_summary or {"updated": False},
-        )
+        with _chdir(out_dir.parent):
+            write_outputs(
+                settings=s,
+                trade_date=td,
+                ctx=ctx,
+                gate=gate,
+                topn=topn_result,  # ✔ 直接传 dict，writers 自动解析
+                learn=train_summary or {"updated": False},
+            )
 
 
 if __name__ == "__main__":
