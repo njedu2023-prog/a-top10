@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Optional, Dict
+from typing import Dict, Any, Optional
+
 import pandas as pd
 
 from a_top10.config import load_settings
@@ -18,6 +19,76 @@ from a_top10.steps.step6_final_topn import run_step6_final_topn
 from a_top10.io.writers import write_outputs
 
 
+def _safe_get(obj: Any, path: str, default: Any = None) -> Any:
+    """
+    安全读取配置：同时兼容 dict / pydantic / dataclass / 普通对象
+    path 示例：'filters.emotion_gate.min_limit_up_cnt'
+    """
+    cur = obj
+    for key in path.split("."):
+        if cur is None:
+            return default
+        if isinstance(cur, dict):
+            cur = cur.get(key, default)
+        else:
+            cur = getattr(cur, key, default)
+    return cur
+
+
+def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
+    """
+    兼容旧版 gate 逻辑：
+    - 如果 step1 返回了 pass，就直接用
+    - 否则尝试读取 configs/default.yml 中 filters.emotion_gate 阈值推导 pass
+    - 如果阈值不存在/读取失败，则默认通过（避免“跑绿但空结果”）
+    """
+    if "pass" in gate:
+        return bool(gate.get("pass"))
+
+    # 取市场指标（优先 gate，其次 ctx.market）
+    E1 = int(gate.get("E1", _safe_get(ctx, "market.E1", 0)) or 0)      # 涨停家数
+    E2 = float(gate.get("E2", _safe_get(ctx, "market.E2", 0.0)) or 0.0)  # 炸板率（%）
+    E3 = int(gate.get("E3", _safe_get(ctx, "market.E3", 0)) or 0)      # 最高连板高度
+
+    # 从配置读取阈值（如果有）
+    min_limit_up_cnt = _safe_get(settings, "filters.emotion_gate.min_limit_up_cnt", None)
+    max_broken_rate = _safe_get(settings, "filters.emotion_gate.max_broken_rate", None)
+    min_max_lianban = _safe_get(settings, "filters.emotion_gate.min_max连板高度", None)
+
+    # 配置可能不存在：默认通过
+    if min_limit_up_cnt is None and max_broken_rate is None and min_max_lianban is None:
+        # 给 writers/报告一个明确字段
+        gate["pass"] = True
+        gate["reason"] = gate.get("reason", "") + " | pass=default(True) (no thresholds)"
+        return True
+
+    # 有阈值则按阈值判断（缺的阈值不参与）
+    ok = True
+    if min_limit_up_cnt is not None:
+        try:
+            ok = ok and (E1 >= int(min_limit_up_cnt))
+        except Exception:
+            pass
+    if max_broken_rate is not None:
+        try:
+            ok = ok and (E2 <= float(max_broken_rate))
+        except Exception:
+            pass
+    if min_max_lianban is not None:
+        try:
+            ok = ok and (E3 >= int(min_max_lianban))
+        except Exception:
+            pass
+
+    gate["pass"] = bool(ok)
+
+    # 补充更可读的说明（不覆盖 step1 原 reason）
+    extra = f" | gate_by_thresholds: E1={E1},E2={E2},E3={E3}"
+    gate["reason"] = (gate.get("reason", "") + extra).strip()
+
+    return bool(ok)
+
+
 def run_pipeline(
     config_path: str,
     trade_date: str = "",
@@ -33,7 +104,7 @@ def run_pipeline(
     td = trade_date.strip() or s.trade_date_resolver()
 
     # ---- Optional: train LR model ----
-    train_summary = None
+    train_summary: Optional[Dict[str, Any]] = None
     if train_model:
         try:
             train_summary = train_step5_lr(s)
@@ -46,10 +117,13 @@ def run_pipeline(
     # ---- Step1 ----
     gate = step1_emotion_gate(s, ctx)
 
+    # 关键修复：兼容 step1 不返回 pass 的情况，避免 “Gate 未通过 → Top10 为空”
+    gate_pass = _infer_gate_pass(s, gate, ctx)
+
     # ---- Step2–6 ----
     topn_result: Dict[str, pd.DataFrame] = {"topN": None, "full": None}
 
-    if gate.get("pass"):
+    if gate_pass:
         candidates = step2_build_candidates(s, ctx)
         strength_df = run_step3(candidates)
         theme_df = run_step4(strength_df)
@@ -65,7 +139,7 @@ def run_pipeline(
             trade_date=td,
             ctx=ctx,
             gate=gate,
-            topn=topn_result,   # ✔ 直接传 dict，writers 自动解析
+            topn=topn_result,  # ✔ 直接传 dict，writers 自动解析
             learn=train_summary or {"updated": False},
         )
 
