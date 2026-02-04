@@ -26,8 +26,7 @@ def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> s
         return df.to_markdown(index=False)
     except Exception:
         # 降级：手写 Markdown pipe table（简单稳定）
-        d = df.copy()
-        d = d.fillna("")
+        d = df.copy().fillna("")
         headers = list(d.columns)
 
         def esc(x: Any) -> str:
@@ -46,14 +45,19 @@ def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> s
 
 def write_outputs(settings, trade_date: str, ctx, gate, topn, learn):
     """
-    适配新版 Step6 输出结构：
-      topn = {
-        "topN": DataFrame,
+    ✅ 适配新版 Step6 输出结构：
+
+    Step6 返回 dict：
+      {
+        "topn": DataFrame,
         "full": DataFrame
       }
 
-    字段匹配 step6_final_topn.py 新版字段：
-      ["ts_code","name","score","prob","board","StrengthScore","ThemeBoost"]
+    writers.py 自动兼容：
+      topN / topn / TopN
+
+    输出字段匹配：
+      ts_code name score prob StrengthScore ThemeBoost board
     """
     outdir = Path(settings.io.outputs_dir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -65,15 +69,22 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn):
     full_df: Optional[pd.DataFrame] = None
 
     if isinstance(topn, dict):
-        topN_df = topn.get("topN")
+        # ✅ 自动兼容所有 key 写法
+        topN_df = (
+            topn.get("topN")
+            or topn.get("topn")
+            or topn.get("TopN")
+        )
         full_df = topn.get("full")
+
     else:
-        # fallback 兼容旧版本
+        # fallback 兼容旧版本（直接 DataFrame）
         topN_df = topn
 
     # 兜底：保证是 DataFrame 或 None
     if topN_df is not None and not isinstance(topN_df, pd.DataFrame):
         topN_df = pd.DataFrame(topN_df)
+
     if full_df is not None and not isinstance(full_df, pd.DataFrame):
         full_df = pd.DataFrame(full_df)
 
@@ -95,14 +106,13 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn):
     )
 
     # -------------------------------------------------
-    # ③ Markdown 输出（Top10 + full 排序）
+    # ③ Markdown 输出
     # -------------------------------------------------
     md_path = outdir / f"predict_top10_{trade_date}.md"
     lines = [f"# Top10 Prediction ({trade_date})\n"]
 
-    # --- TopN 区 ---
+    # --- Top10 区 ---
     if topN_df is None or topN_df.empty:
-        # gate 可能是 dict，尽量把原因写出来
         reason = ""
         try:
             if isinstance(gate, dict):
@@ -111,25 +121,49 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn):
                     reason = f"（{r}）"
         except Exception:
             pass
+
         lines.append(f"⚠️ Gate 未通过，Top10 为空。{reason}\n")
+
     else:
         lines.append("## 🏆 Top10 (Final Selection)\n")
-        top_cols = ["ts_code", "name", "score", "prob", "StrengthScore", "ThemeBoost", "board"]
+        top_cols = [
+            "ts_code",
+            "name",
+            "score",
+            "prob",
+            "StrengthScore",
+            "ThemeBoost",
+            "board",
+        ]
         lines.append(_df_to_md_table(topN_df, cols=top_cols))
         lines.append("\n")
 
-    # --- Full 排序区（只展示核心字段） ---
+    # --- Full 排序区 ---
     if full_df is not None and not full_df.empty:
+
         lines.append("## 📊 Full Ranking (All Candidates After Step6)\n")
 
-        # 若存在 score/prob，做一个更符合直觉的排序
         full_sorted = full_df.copy()
-        if "score" in full_sorted.columns:
-            full_sorted = full_sorted.sort_values(by=["score"], ascending=False)
-        elif "prob" in full_sorted.columns:
-            full_sorted = full_sorted.sort_values(by=["prob"], ascending=False)
 
-        display_cols = ["ts_code", "name", "score", "prob", "StrengthScore", "ThemeBoost", "board"]
+        if "_score" in full_sorted.columns:
+            full_sorted = full_sorted.sort_values(by=["_score"], ascending=False)
+
+        elif "score" in full_sorted.columns:
+            full_sorted = full_sorted.sort_values(by=["score"], ascending=False)
+
+        # ✅ Markdown 太长会炸，只展示前50
+        full_sorted = full_sorted.head(50)
+
+        display_cols = [
+            "ts_code",
+            "name",
+            "score",
+            "prob",
+            "StrengthScore",
+            "ThemeBoost",
+            "board",
+        ]
+
         lines.append(_df_to_md_table(full_sorted, cols=display_cols))
         lines.append("\n")
 
