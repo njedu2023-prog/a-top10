@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from typing import Any, Dict
+
 from a_top10.config import Settings
 
 
@@ -8,7 +10,7 @@ def _clip01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
-def _ewma(prev: float, now: float, alpha: float = 0.30) -> float:
+def _ewma(prev: float | None, now: float, alpha: float = 0.30) -> float:
     """情绪平滑：指数移动平均"""
     if prev is None:
         return now
@@ -23,12 +25,11 @@ def step1_emotion_gate(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     - 平滑后 EmotionSmooth（0~1）
     - 推导情绪权重 EmotionWeight（0.6~1.2）
     """
-
     # ---- 读取市场指标 ----
     m = ctx.get("market", {}) or {}
-    E1 = int(m.get("E1", 0) or 0)     # 涨停家数
+    E1 = int(m.get("E1", 0) or 0)        # 涨停家数
     E2 = float(m.get("E2", 0.0) or 0.0)  # 炸板率（%）
-    E3 = int(m.get("E3", 0) or 0)     # 最高连板高度
+    E3 = int(m.get("E3", 0) or 0)        # 最高连板高度
 
     # ---- 将市场指标归一化到 0~1 ----
     score_E3 = _clip01(E3 / 5.0)          # 连板高度，>=5 视为满分
@@ -36,16 +37,14 @@ def step1_emotion_gate(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     score_E1 = _clip01(E1 / 80.0)         # 涨停家数>=80 为满分
 
     # ---- 权重合成（Regime Score） ----
-    # 专业量化体系的权重：E3 连板最重要，E2 承接次之
-    emotion_score = (
+    emotion_score = _clip01(
         0.45 * score_E3 +
         0.35 * score_E2 +
         0.20 * score_E1
     )
-    emotion_score = _clip01(emotion_score)
 
     # ---- 读取昨日平滑值（若无则取 None） ----
-    prev_smooth = None
+    prev_smooth: float | None = None
     if "prev_emotion_smooth" in ctx:
         try:
             prev_smooth = float(ctx["prev_emotion_smooth"])
@@ -56,8 +55,7 @@ def step1_emotion_gate(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     emotion_smooth = _ewma(prev_smooth, emotion_score, alpha=0.30)
 
     # ---- 得到最终情绪权重（0.6 ~ 1.2）----
-    emotion_weight = 0.6 + 0.6 * emotion_smooth
-    emotion_weight = round(emotion_weight, 4)
+    emotion_weight = round(0.6 + 0.6 * emotion_smooth, 4)
 
     # ---- 市场说明 ----
     reason = (
@@ -67,8 +65,8 @@ def step1_emotion_gate(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         f"情绪:{emotion_smooth:.2f}"
     )
 
-    # ---- 返回结构兼容旧版（不再空仓）----
     return {
+        "pass": True,  # ✅ v3.0：不再空仓，默认总是通过（仍保留字段，兼容 main.py 的 gate.get("pass")）
         "E1": E1,
         "E2": E2,
         "E3": E3,
