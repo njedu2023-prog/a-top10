@@ -33,7 +33,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-          token: ${{ secrets.GH_TOKEN }}
+          token: ${{ secrets.A_TOP10_TOKEN }}
 
       # -----------------------
       # 2) 安装 Python
@@ -93,12 +93,12 @@ jobs:
           if-no-files-found: warn
 
       # -----------------------
-      # 8) 自动提交 outputs 回主仓库（已修复 GH_TOKEN 使用）
+      # 8) 自动提交 outputs 回主仓库（替换为 A_TOP10_TOKEN）
       # -----------------------
       - name: Commit outputs back to repo
         if: success()
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          A_TOP10_TOKEN: ${{ secrets.A_TOP10_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -106,8 +106,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          # ⭐ 已修正：使用 GH_TOKEN，而不是 GITHUB_TOKEN
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # ⭐ 使用 A_TOP10_TOKEN 替代 GH_TOKEN
+          git remote set-url origin "https://x-access-token:${A_TOP10_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           git pull --rebase origin main || true
           git add outputs/
