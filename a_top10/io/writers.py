@@ -12,6 +12,7 @@ def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> s
     安全地把 DataFrame 转成 Markdown 表格：
     - 优先 df.to_markdown（依赖 tabulate）
     - 若环境缺 tabulate，则降级为手写 pipe table（不会报错）
+    ✅ 表头输出为中文
     """
     if df is None or df.empty:
         return ""
@@ -20,6 +21,21 @@ def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> s
         use_cols = [c for c in cols if c in df.columns]
         if use_cols:
             df = df[use_cols].copy()
+
+    # ✅ 表头中文映射（只影响输出，不影响 DataFrame）
+    col_map = {
+        "rank": "排名",
+        "ts_code": "股票代码",
+        "name": "名称",
+        "score": "综合得分",
+        "prob": "涨停概率",
+        "StrengthScore": "强度得分",
+        "ThemeBoost": "题材加成",
+        "board": "板块",
+    }
+
+    # ✅ 输出前替换表头显示名
+    df = df.rename(columns=col_map)
 
     try:
         return df.to_markdown(index=False)
@@ -143,9 +159,15 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
         # 优先按 Step6 的内部列排序
         if "_score" in full_sorted.columns:
-            full_sorted = full_sorted.sort_values(by=["_score", "_prob"] if "_prob" in full_sorted.columns else ["_score"], ascending=False)
+            full_sorted = full_sorted.sort_values(
+                by=["_score", "_prob"] if "_prob" in full_sorted.columns else ["_score"],
+                ascending=False,
+            )
         elif "score" in full_sorted.columns:
-            full_sorted = full_sorted.sort_values(by=["score", "prob"] if "prob" in full_sorted.columns else ["score"], ascending=False)
+            full_sorted = full_sorted.sort_values(
+                by=["score", "prob"] if "prob" in full_sorted.columns else ["score"],
+                ascending=False,
+            )
         elif "prob" in full_sorted.columns:
             full_sorted = full_sorted.sort_values(by=["prob"], ascending=False)
 
