@@ -1,0 +1,18 @@
+{
+  "trade_date": "20260204",
+  "gate": {
+    "E1": 92,
+    "E2": 0.0,
+    "E3": 0,
+    "EmotionScore": 0.55,
+    "EmotionSmooth": 0.55,
+    "EmotionWeight": 0.93,
+    "reason": "连板得分:0.00, 炸板得分:1.00, 活跃度得分:1.00, 情绪:0.55",
+    "prev_emotion_smooth": 0.55
+  },
+  "topN": [],
+  "full": [],
+  "learn": {
+    "updated": false
+  }
+}
