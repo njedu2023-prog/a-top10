@@ -1,5 +1,5 @@
-pandas
-pyyaml
-loguru
+pandas>=2.0
+pyyaml>=6.0
+loguru>=0.7
 scikit-learn==1.4.2
-tabulate
+tabulate>=0.9
