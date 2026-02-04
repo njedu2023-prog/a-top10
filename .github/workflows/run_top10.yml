@@ -4,20 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       trade_date:
-        description: "交易日 YYYYMMDD（留空则自动）"
+        description: "可选：指定交易日（YYYYMMDD），留空则自动推断"
         required: false
         default: ""
 
   schedule:
-    # UTC 07:22 = 北京时间 15:22（周一到周五）
-    - cron: "22 7 * * 1-5"
+    # 北京时间 周一到周五 18:30（UTC 10:30）
+    - cron: "30 10 * * 1-5"
 
 permissions:
   contents: write
 
 concurrency:
-  group: run-top10
-  cancel-in-progress: false
+  group: top10-engine-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   run:
@@ -26,119 +26,113 @@ jobs:
     env:
       TZ: Asia/Shanghai
       PYTHONUTF8: "1"
+      TRADE_DATE: ${{ inputs.trade_date }}
 
     steps:
-      # -----------------------
-      # 0) 打印上下文（可选，便于排查）
-      # -----------------------
-      - name: Print context
-        run: |
-          echo "repo=${GITHUB_REPOSITORY}"
-          echo "ref=${GITHUB_REF}"
-          echo "actor=${GITHUB_ACTOR}"
-          echo "event=${GITHUB_EVENT_NAME}"
-
-      # -----------------------
-      # 1) Checkout 主仓库（a-top10）
-      # -----------------------
+      # =====================================================
+      # Step0: Checkout 主引擎仓库（a-top10）
+      # =====================================================
       - name: Checkout engine repo (a-top10)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      # -----------------------
-      # 2) 安装 Python
-      # -----------------------
+      # =====================================================
+      # Step1: Setup Python
+      # =====================================================
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
-      # -----------------------
-      # 3) 安装依赖
-      # -----------------------
+      # =====================================================
+      # Step2: Install dependencies
+      # =====================================================
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install scikit-learn
 
-      # -----------------------
-      # 4) Checkout 数据仓库（a-share-top3-data）
-      #
-      # ✅ 若 a-share-top3-data 是 Public：下面这样即可（不需要 token）
-      # ❗ 若它是 Private：请在 a-top10 仓库 Actions secrets 里新增：
-      #    CROSS_REPO_TOKEN = 一个对 a-share-top3-data 有读取权限的 PAT
-      #    然后把下面 token 行取消注释
-      # -----------------------
+      # =====================================================
+      # Step3: Checkout 数据仓库（a-share-top3-data）
+      # ✅ 必须明确 token + path + ref
+      # =====================================================
       - name: Checkout data warehouse (a-share-top3-data)
         uses: actions/checkout@v4
         with:
           repository: njedu2023-prog/a-share-top3-data
+          ref: main
+          token: ${{ secrets.A_TOP10_TOKEN }}
           path: _warehouse/a-share-top3-data
           fetch-depth: 1
-          # token: ${{ secrets.CROSS_REPO_TOKEN }}
 
-      # -----------------------
-      # 5) 运行 Top10 Pipeline
-      # -----------------------
+      # =====================================================
+      # Step4: ✅ 验货（最关键）
+      # 直接打印快照目录是否存在，daily.csv 是否能找到
+      # =====================================================
+      - name: Verify warehouse files
+        run: |
+          echo "=================================================="
+          echo "== VERIFY: warehouse root =="
+          ls -la _warehouse || true
+
+          echo "=================================================="
+          echo "== VERIFY: a-share-top3-data root =="
+          ls -la _warehouse/a-share-top3-data || true
+
+          echo "=================================================="
+          echo "== VERIFY: list data/raw (top) =="
+          ls -la _warehouse/a-share-top3-data/data || true
+          ls -la _warehouse/a-share-top3-data/data/raw || true
+
+          echo "=================================================="
+          echo "== VERIFY: find daily.csv (limit) =="
+          find _warehouse/a-share-top3-data -name "daily.csv" | head -n 20 || true
+
+          echo "=================================================="
+          echo "== VERIFY: find limit_list_d.csv (limit) =="
+          find _warehouse/a-share-top3-data -name "limit_list_d.csv" | head -n 20 || true
+
+          echo "=================================================="
+          echo "== DONE VERIFY =="
+          echo "=================================================="
+
+      # =====================================================
+      # Step5: 打印 TRADE_DATE
+      # =====================================================
+      - name: Print trade_date context
+        run: |
+          echo "TRADE_DATE input = $TRADE_DATE"
+          date
+
+      # =====================================================
+      # Step6: Run Top10 Pipeline
+      # =====================================================
       - name: Run Top10 Pipeline
-        env:
-          TRADE_DATE: ${{ github.event.inputs.trade_date }}
-          # 如果你的代码里需要 Tushare token，请保留下面这行（你仓库里已有 TUSHARE_TOKEN secret）
-          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: |
-          echo "Using TRADE_DATE=${TRADE_DATE:-AUTO}"
-          python -c "from a_top10.main import run_pipeline; run_pipeline('configs/default.yml')"
+          python -m a_top10.run
 
-      # -----------------------
-      # 6) 确保 outputs 存在
-      # -----------------------
+      # =====================================================
+      # Step7: Ensure outputs exists
+      # =====================================================
       - name: Ensure outputs exists
-        if: always()
         run: |
-          mkdir -p outputs
-          echo "==== outputs tree ===="
           ls -la outputs || true
-          find outputs -maxdepth 3 -type f || true
 
-      # -----------------------
-      # 7) 上传 artifact（用于调试）
-      # -----------------------
-      - name: Upload outputs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: top10-outputs
-          path: outputs/
-          if-no-files-found: warn
-
-      # -----------------------
-      # 8) 自动提交 outputs 回主仓库
-      # ✅ 直接用 GITHUB_TOKEN（不需要你再手动拼 PAT）
-      # -----------------------
+      # =====================================================
+      # Step8: Commit outputs back
+      # =====================================================
       - name: Commit outputs back to repo
-        if: success()
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          # 用 GITHUB_TOKEN 回写当前仓库
-          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-
-          git pull --rebase origin main || true
-          git add outputs/
+          git add outputs || true
 
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No output changes."
             exit 0
           fi
 
           git commit -m "auto: update top10 outputs"
-          git push origin HEAD:main || (sleep 3 && git push origin HEAD:main)
+          git push
