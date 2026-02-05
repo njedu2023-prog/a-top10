@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
 Step4 : 题材/板块加权（ThemeBoost）
 
 输入：
-    strength_df（step3输出）
-    + 可选：s（Settings/ctx），用于拿 step0 的 hot_boards / 龙虎榜等
+- strength_df（step3 输出，至少含 ts_code / name 其一）
+- ctx（step0 输出，建议包含）
+    ctx["boards"] : hot_boards.csv 读入后的 DataFrame
+        期望列：industry, limit_up_count, rank（列名大小写不敏感）
+    ctx["dragon"] : 龙虎榜 DataFrame（如存在）
+        期望列：ts_code（或类似可识别列）
 
 输出：
-    theme_df（附带 ThemeBoost + 分项）
+- theme_df：在 strength_df 基础上新增/覆盖：
+    - "题材加成"  (float)  —— 0~1 之间的加成因子（越大越有利）
+    - "板块"      (str)    —— 识别到的板块/行业（如果能识别）
+  以及若干调试分项列（不会影响后续也可以不用）
 """
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Union, List
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -23,6 +29,7 @@ import pandas as pd
 # -------------------------
 # Helpers
 # -------------------------
+
 def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
     if df is None or df.empty:
         return None
@@ -35,334 +42,216 @@ def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional
     return None
 
 
-def _to_float_series(df: pd.DataFrame, col: Optional[str], default: float) -> pd.Series:
-    if (col is None) or (col not in df.columns):
-        return pd.Series([default] * len(df), index=df.index, dtype="float64")
-    s = pd.to_numeric(df[col], errors="coerce").astype("float64")
-    s = s.replace([np.inf, -np.inf], np.nan).fillna(default)
-    return s
+def _to_float(x: Any, default: float = 0.0) -> float:
+    try:
+        if x is None:
+            return default
+        if isinstance(x, str) and x.strip() == "":
+            return default
+        return float(x)
+    except Exception:
+        return default
 
 
-def _ensure_ts_code(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    ts_col = _first_existing_col(out, ["ts_code", "code", "TS_CODE"])
-    if ts_col is None:
-        out["ts_code"] = ""
-    else:
-        out["ts_code"] = out[ts_col].astype(str)
-    return out
+def _to_int(x: Any, default: int = 0) -> int:
+    try:
+        if x is None:
+            return default
+        if isinstance(x, str) and x.strip() == "":
+            return default
+        return int(float(x))
+    except Exception:
+        return default
 
 
-def _sigmoid(x: np.ndarray) -> np.ndarray:
-    x = np.clip(x, -50, 50)
-    return 1.0 / (1.0 + np.exp(-x))
+def _clip01(x: float) -> float:
+    return max(0.0, min(1.0, x))
 
 
-def _norm_ts_code(x: Union[str, float, int, None]) -> str:
-    """
-    统一 ts_code / code：
-    - 若包含 .SZ/.SH 保留
-    - 若纯6位数字：不强行补交易所（避免误判），但保留原值
-    """
+def _safe_str(x: Any) -> str:
     if x is None:
         return ""
-    s = str(x).strip()
-    if not s or s.lower() in ("nan", "none"):
-        return ""
-    return s
+    s = str(x)
+    return s.strip()
 
 
-def _strip_exchange(ts: str) -> str:
+# -------------------------
+# Core
+# -------------------------
+
+def _build_board_score_map(boards: pd.DataFrame) -> Dict[str, float]:
     """
-    000001.SZ -> 000001
-    000001.SH -> 000001
+    将 hot_boards 表转换成：industry -> board_score(0~1)
+    规则：综合 rank（越小越好） + limit_up_count（越大越好）
     """
-    if not ts:
-        return ""
-    s = str(ts).strip()
-    if "." in s:
-        return s.split(".", 1)[0]
-    return s
+    if boards is None or boards.empty:
+        return {}
 
+    ind_col = _first_existing_col(boards, ["industry", "board", "sector", "板块", "行业"])
+    cnt_col = _first_existing_col(boards, ["limit_up_count", "limitup_count", "cnt", "count", "涨停数"])
+    rank_col = _first_existing_col(boards, ["rank", "rnk", "排名"])
 
-def _split_tags(v: Union[str, float, int, None]) -> List[str]:
-    """
-    支持 '机器人;AI,算力/军工' 等多分隔符。
-    返回去空、去重后的 tag 列表（保持顺序大致稳定）。
-    """
-    if v is None:
-        return []
-    s = str(v).strip()
-    if not s or s.lower() in ("nan", "none"):
-        return []
+    if not ind_col:
+        return {}
 
-    # 统一分隔符
-    for sep in ["；", ";", "，", ",", "/", "|", "、", "\n", "\t"]:
-        s = s.replace(sep, ";")
-    parts = [p.strip() for p in s.split(";") if p.strip()]
-    # 去重
-    out = []
-    seen = set()
-    for p in parts:
-        if p not in seen:
-            seen.add(p)
-            out.append(p)
+    tmp = boards.copy()
+
+    tmp[ind_col] = tmp[ind_col].astype(str).map(_safe_str)
+    tmp = tmp[tmp[ind_col] != ""].copy()
+    if tmp.empty:
+        return {}
+
+    # rank 越小越好；如果没有 rank，就按出现顺序给 rank
+    if rank_col:
+        tmp["_rank"] = tmp[rank_col].map(lambda v: _to_int(v, 9999))
+    else:
+        tmp["_rank"] = np.arange(1, len(tmp) + 1)
+
+    # 涨停数越大越好；如果没有就默认为 0
+    if cnt_col:
+        tmp["_cnt"] = tmp[cnt_col].map(lambda v: _to_int(v, 0))
+    else:
+        tmp["_cnt"] = 0
+
+    # 归一化
+    # rank_score：rank=1 -> 1.0；rank=10 -> 0.0（线性）
+    max_rank = max(10, int(tmp["_rank"].max() if len(tmp) else 10))
+    tmp["_rank_score"] = tmp["_rank"].map(lambda r: _clip01(1.0 - (r - 1) / (max_rank - 1 if max_rank > 1 else 1)))
+
+    # cnt_score：用 min-max（避免极端值）
+    cmin = float(tmp["_cnt"].min())
+    cmax = float(tmp["_cnt"].max())
+    if cmax <= cmin:
+        tmp["_cnt_score"] = 0.5  # 全一样就给中性
+    else:
+        tmp["_cnt_score"] = (tmp["_cnt"] - cmin) / (cmax - cmin)
+
+    # 合成
+    # rank 权重略大（更稳），cnt 次之（更敏感）
+    tmp["_board_score"] = (0.60 * tmp["_rank_score"] + 0.40 * tmp["_cnt_score"]).map(_clip01)
+
+    # 去重：同一 industry 取最大分
+    out: Dict[str, float] = {}
+    for _, row in tmp.iterrows():
+        ind = _safe_str(row[ind_col])
+        sc = float(row["_board_score"])
+        if ind and (ind not in out or sc > out[ind]):
+            out[ind] = sc
     return out
 
 
-# -------------------------
-# Step0 context fetch (boards / dragon)
-# -------------------------
-def _get_step0_boards(s) -> pd.DataFrame:
+def _extract_dragon_set(dragon: pd.DataFrame) -> set[str]:
     """
-    兼容：s 可能是 Settings，也可能是 ctx(dict)
-    期望得到 hot_boards DataFrame（包含 板块名 + 热度排名/热度值）
-    也兼容包含 ts_code 的“股票->板块/概念”映射表
+    龙虎榜集合：ts_code（大小写/空格做一下清洗）
     """
-    if s is None:
-        return pd.DataFrame()
+    if dragon is None or dragon.empty:
+        return set()
 
-    if isinstance(s, dict):
-        for k in ["boards", "hot_boards", "hot_board_df"]:
-            v = s.get(k, None)
-            if isinstance(v, pd.DataFrame):
+    code_col = _first_existing_col(dragon, ["ts_code", "code", "股票代码", "证券代码"])
+    if not code_col:
+        return set()
+
+    s = set()
+    for v in dragon[code_col].astype(str).tolist():
+        k = _safe_str(v).upper()
+        if k:
+            s.add(k)
+    return s
+
+
+def _infer_stock_board(row: pd.Series) -> str:
+    """
+    尝试从 strength_df 中推断板块字段（如果你 step3 已经带了）
+    """
+    for cands in [
+        ["板块", "行业", "industry", "board", "sector", "concept"],
+        ["所属行业", "所属板块"],
+    ]:
+        col = None
+        for name in cands:
+            if name in row.index:
+                col = name
+                break
+        if col:
+            v = _safe_str(row.get(col))
+            if v:
                 return v
+    return ""
+
+
+def step4_theme_boost(
+    strength_df: pd.DataFrame,
+    ctx: Optional[Dict[str, Any]] = None,
+    *,
+    default_theme: float = 0.891213,
+    # 下面参数你后面想调再调，不调也不会影响别的步骤
+    min_theme: float = 0.82,
+    max_theme: float = 0.96,
+    dragon_bonus: float = 0.015,
+) -> pd.DataFrame:
+    """
+    输出 “题材加成”(0~1)：
+    - 默认给 default_theme（保持稳定，避免影响其它东西）
+    - 若能识别到板块热度，则按板块热度对 default_theme 做小幅上下浮动
+    - 若在龙虎榜，则额外 + dragon_bonus（再 clip）
+    """
+    if strength_df is None or strength_df.empty:
         return pd.DataFrame()
 
-    for attr in ["ctx", "context"]:
-        if hasattr(s, attr):
-            ctx = getattr(s, attr)
-            if isinstance(ctx, dict):
-                for k in ["boards", "hot_boards", "hot_board_df"]:
-                    v = ctx.get(k, None)
-                    if isinstance(v, pd.DataFrame):
-                        return v
-    return pd.DataFrame()
+    df = strength_df.copy()
 
+    ctx = ctx or {}
+    boards_df = ctx.get("boards", None) or ctx.get("hot_boards", None)
+    dragon_df = ctx.get("dragon", None) or ctx.get("top_list", None)
 
-def _get_step0_dragon(s) -> pd.DataFrame:
-    """
-    兼容：龙虎榜/龙头数据
-    """
-    if s is None:
-        return pd.DataFrame()
+    board_score_map = _build_board_score_map(boards_df) if isinstance(boards_df, pd.DataFrame) else {}
+    dragon_set = _extract_dragon_set(dragon_df) if isinstance(dragon_df, pd.DataFrame) else set()
 
-    if isinstance(s, dict):
-        for k in ["dragon", "top_list", "dragon_df"]:
-            v = s.get(k, None)
-            if isinstance(v, pd.DataFrame):
-                return v
-        return pd.DataFrame()
+    # 找 ts_code 列（没有也不报错）
+    code_col = _first_existing_col(df, ["ts_code", "code", "股票代码", "证券代码"])
+    name_col = _first_existing_col(df, ["name", "名称", "股票名称"])
 
-    for attr in ["ctx", "context"]:
-        if hasattr(s, attr):
-            ctx = getattr(s, attr)
-            if isinstance(ctx, dict):
-                for k in ["dragon", "top_list", "dragon_df"]:
-                    v = ctx.get(k, None)
-                    if isinstance(v, pd.DataFrame):
-                        return v
-    return pd.DataFrame()
+    # 题材加成初始化（稳定默认值）
+    df["题材加成"] = float(default_theme)
+    df["板块"] = ""
 
+    # 分项（可选调试列）
+    df["_ThemeBoardScore"] = 0.0
+    df["_ThemeDragonHit"] = 0
 
-# -------------------------
-# Build board rank map
-# -------------------------
-def _build_board_rank_map(boards: pd.DataFrame) -> pd.DataFrame:
-    """
-    返回标准化 DataFrame: [_board_name, _hot_rank]
-    支持两种 boards：
-      A) board_name + (hot_rank 或 hot)
-      B) ts_code + board_name + (hot_rank 或 hot)
-    """
-    if boards is None or boards.empty:
-        return pd.DataFrame(columns=["_board_name", "_hot_rank"])
+    if board_score_map:
+        # 让 theme 在 [min_theme, max_theme] 内随 board_score(0~1) 变化
+        # board_score=0.5 -> 约等于 default_theme
+        # board_score=1.0 -> 靠近 max_theme
+        # board_score=0.0 -> 靠近 min_theme
+        def map_theme(bs: float) -> float:
+            bs = _clip01(float(bs))
+            # 线性映射到 [min_theme, max_theme]
+            return float(min_theme + (max_theme - min_theme) * bs)
 
-    b = boards.copy()
+        # 如果 df 自带板块字段优先用；否则就只能留空（不会影响稳定性）
+        for i in range(len(df)):
+            row = df.iloc[i]
+            board = _infer_stock_board(row)
+            if board:
+                df.at[df.index[i], "板块"] = board
+                bs = board_score_map.get(board, None)
+                if bs is not None:
+                    df.at[df.index[i], "_ThemeBoardScore"] = float(bs)
+                    df.at[df.index[i], "题材加成"] = map_theme(float(bs))
+            # 若没板块，不强行匹配（避免误配导致排序大波动）
 
-    # 板块名字段
-    b_name_col = _first_existing_col(b, ["board", "name", "concept", "theme", "industry", "板块", "概念"])
-    if b_name_col is None:
-        return pd.DataFrame(columns=["_board_name", "_hot_rank"])
+    # 龙虎榜加成（小幅）
+    if dragon_set and code_col:
+        for i in range(len(df)):
+            code = _safe_str(df.iloc[i].get(code_col)).upper()
+            if code and code in dragon_set:
+                df.at[df.index[i], "_ThemeDragonHit"] = 1
+                df.at[df.index[i], "题材加成"] = float(df.at[df.index[i], "题材加成"]) + float(dragon_bonus)
 
-    # 热度排名字段（没有就用热度值反推）
-    b_rank_col = _first_existing_col(b, ["hot_rank", "rank", "board_hot_rank", "热度排名", "排名"])
-    b_hot_col = _first_existing_col(b, ["hot", "heat", "score", "热度", "热度值"])
+    # 最终裁剪，避免影响过大
+    df["题材加成"] = df["题材加成"].map(lambda x: float(max(min_theme, min(max_theme, _to_float(x, default_theme)))))
 
-    b["_board_name"] = b[b_name_col].astype(str)
-
-    if b_rank_col is not None:
-        b["_hot_rank"] = pd.to_numeric(b[b_rank_col], errors="coerce")
-    elif b_hot_col is not None:
-        hot = pd.to_numeric(b[b_hot_col], errors="coerce").fillna(0.0)
-        b["_hot_rank"] = hot.rank(ascending=False, method="min")
-    else:
-        b["_hot_rank"] = np.nan
-
-    b = b[["_board_name", "_hot_rank"]].dropna()
-    if b.empty:
-        return pd.DataFrame(columns=["_board_name", "_hot_rank"])
-
-    # 同名板块可能重复：取最热（最小rank）
-    b["_hot_rank"] = pd.to_numeric(b["_hot_rank"], errors="coerce")
-    b = b.dropna(subset=["_hot_rank"])
-    if b.empty:
-        return pd.DataFrame(columns=["_board_name", "_hot_rank"])
-
-    b = b.groupby("_board_name", as_index=False)["_hot_rank"].min()
-    return b
-
-
-def _build_stock_to_board_map(boards: pd.DataFrame) -> pd.DataFrame:
-    """
-    若 boards 里包含 ts_code & board_name，则构建：[_ts, _board_name]
-    """
-    if boards is None or boards.empty:
-        return pd.DataFrame(columns=["_ts", "_board_name"])
-
-    b = boards.copy()
-    ts_col = _first_existing_col(b, ["ts_code", "code", "TS_CODE"])
-    b_name_col = _first_existing_col(b, ["board", "name", "concept", "theme", "industry", "板块", "概念"])
-
-    if ts_col is None or b_name_col is None:
-        return pd.DataFrame(columns=["_ts", "_board_name"])
-
-    b["_ts"] = b[ts_col].astype(str).map(_norm_ts_code)
-    b["_board_name"] = b[b_name_col].astype(str)
-    b = b[["_ts", "_board_name"]].dropna()
-    b = b[(b["_ts"] != "") & (b["_board_name"] != "")]
-    if b.empty:
-        return pd.DataFrame(columns=["_ts", "_board_name"])
-
-    # 去重
-    b = b.drop_duplicates()
-    return b
-
-
-# -------------------------
-# Theme Boost Core
-# -------------------------
-def calc_theme_boost(strength_df: pd.DataFrame, s=None) -> pd.DataFrame:
-    """
-    ThemeBoost = 0.8 ~ 1.3 之间的平滑加权（sigmoid）
-    - 板块热度（rank越小越热） -> _score_board
-    - 龙虎榜/龙头奖励 -> _score_dragon
-    """
-    if strength_df is None or len(strength_df) == 0:
-        return pd.DataFrame(columns=["ThemeBoost"])
-
-    out = _ensure_ts_code(strength_df)
-
-    # 规范化 ts_code（保留原字段同时给辅助字段）
-    out["ts_code"] = out["ts_code"].astype(str).map(_norm_ts_code)
-    out["_ts_plain"] = out["ts_code"].map(_strip_exchange)
-
-    # 默认不热：50名
-    out["board_hot_rank"] = pd.Series([50.0] * len(out), index=out.index, dtype="float64")
-
-    # --- 1) 合并板块热度 ---
-    boards = _get_step0_boards(s)
-
-    # 1.1 构建 “板块名 -> rank” 映射
-    board_rank_map = _build_board_rank_map(boards)
-
-    # 1.2 决定：从 strength_df 自带板块字段，还是从 boards 里 ts_code 映射出板块
-    stock_board_col = _first_existing_col(out, ["board", "concept", "theme", "industry", "板块", "概念"])
-
-    if stock_board_col is not None and (not board_rank_map.empty):
-        # strength_df 自带板块/概念字段：支持多题材拆分，取最热rank
-        tmp = out[["ts_code", "_ts_plain", stock_board_col]].copy()
-        tmp["_tags"] = tmp[stock_board_col].apply(_split_tags)
-        tmp = tmp.explode("_tags")
-        tmp["_board_name"] = tmp["_tags"].astype(str)
-        tmp = tmp.dropna(subset=["_board_name"])
-        tmp = tmp[tmp["_board_name"].astype(str).str.len() > 0]
-        tmp = tmp.merge(board_rank_map, how="left", on="_board_name")
-
-        # 每只股票取最小rank（最热）
-        tmp["_hot_rank"] = pd.to_numeric(tmp["_hot_rank"], errors="coerce")
-        best = (
-            tmp.groupby("ts_code", as_index=False)["_hot_rank"]
-            .min()
-            .rename(columns={"_hot_rank": "_best_rank"})
-        )
-        out = out.merge(best, how="left", on="ts_code")
-        out["board_hot_rank"] = pd.to_numeric(out["_best_rank"], errors="coerce").fillna(out["board_hot_rank"])
-        out.drop(columns=[c for c in ["_best_rank"] if c in out.columns], inplace=True)
-
-    else:
-        # strength_df 没有板块字段：尝试 boards 提供 ts_code->板块 映射
-        stock_to_board = _build_stock_to_board_map(boards)
-        if (not stock_to_board.empty) and (not board_rank_map.empty):
-            # out ts_code 与映射表对齐（兼容 000001 与 000001.SZ）
-            stb = stock_to_board.copy()
-            stb["_ts_plain"] = stb["_ts"].map(_strip_exchange)
-
-            # 用 plain code 先对齐
-            m = out[["ts_code", "_ts_plain"]].merge(
-                stb[["_ts_plain", "_board_name"]],
-                how="left",
-                on="_ts_plain",
-            )
-            m = m.merge(board_rank_map, how="left", on="_board_name")
-
-            # 每只股票取最热rank
-            m["_hot_rank"] = pd.to_numeric(m["_hot_rank"], errors="coerce")
-            best = (
-                m.groupby("ts_code", as_index=False)["_hot_rank"]
-                .min()
-                .rename(columns={"_hot_rank": "_best_rank"})
-            )
-            out = out.merge(best, how="left", on="ts_code")
-            out["board_hot_rank"] = pd.to_numeric(out["_best_rank"], errors="coerce").fillna(out["board_hot_rank"])
-            out.drop(columns=[c for c in ["_best_rank"] if c in out.columns], inplace=True)
-
-    out["board_hot_rank"] = pd.to_numeric(out["board_hot_rank"], errors="coerce").fillna(50.0).astype("float64")
-    out["board_hot_rank"] = out["board_hot_rank"].clip(1.0, 200.0)
-
-    # --- 2) 龙虎榜/龙头奖励 ---
-    dragon = _get_step0_dragon(s)
-    dragon_flag = pd.Series([0.0] * len(out), index=out.index, dtype="float64")
-
-    if dragon is not None and (not dragon.empty):
-        ts_col = _first_existing_col(dragon, ["ts_code", "code", "TS_CODE"])
-        if ts_col is not None:
-            d = dragon.copy()
-            d["_ts"] = d[ts_col].astype(str).map(_norm_ts_code)
-            d["_ts_plain"] = d["_ts"].map(_strip_exchange)
-            dragon_set_plain = set(d["_ts_plain"].astype(str).tolist())
-            dragon_flag = out["_ts_plain"].astype(str).apply(lambda x: 1.0 if x in dragon_set_plain else 0.0).astype("float64")
-
-    out["dragon_flag"] = dragon_flag.clip(0.0, 1.0)
-
-    # --- 3) 分项打分 ---
-    # rank 越小越热：1名接近1分，50名接近0分
-    out["_score_board"] = (1.0 - (out["board_hot_rank"] / 50.0)).clip(0.0, 1.0)
-    out["_score_dragon"] = out["dragon_flag"].clip(0.0, 1.0)
-
-    # --- 4) Sigmoid 合成（0.8~1.3） ---
-    raw = out["_score_board"].astype(float).values + 0.6 * out["_score_dragon"].astype(float).values
-    out["ThemeBoost"] = 0.8 + 0.5 * _sigmoid(3.0 * (raw - 0.5))
-
-    # 清理内部辅助列（保留可解释字段）
-    for c in ["_ts_plain"]:
-        if c in out.columns:
-            out.drop(columns=[c], inplace=True)
-
-    return out.sort_values("ThemeBoost", ascending=False)
-
-
-# -------------------------
-# Runner
-# -------------------------
-def run_step4(strength_df: pd.DataFrame, s=None) -> pd.DataFrame:
-    return calc_theme_boost(strength_df, s=s)
-
-
-# Backward-compatible alias
-def run(df: pd.DataFrame, s=None) -> pd.DataFrame:
-    return run_step4(df, s=s)
-
-
-if __name__ == "__main__":
-    print("Step4 ThemeBoost ready.")
+    # 清理一下展示（你不想要分项列也可以删）
+    # 保留：题材加成、板块
+    return df
