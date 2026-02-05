@@ -259,3 +259,6 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     info["rows"] = int(len(out))
     dbg["step4"] = info
     return ctx
+    
+def run_step4(df: pd.DataFrame, ctx: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+    return step4_theme_boost(df, ctx)
