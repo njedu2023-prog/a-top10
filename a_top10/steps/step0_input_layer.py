@@ -49,8 +49,7 @@ def _pick_snapshot_dir(s: Settings, trade_date: str) -> Tuple[Path, List[str]]:
     if primary.exists() and primary.is_dir():
         return primary, tried
 
-    # 2) 兜底：常见目录形态（兼容你截图里提到的 snap/xxx.csv 这种旧约定）
-    # 注意：这里不假设这些一定存在，只是“尝试并记录”
+    # 2) 兜底：常见目录形态（兼容 snap/xxx.csv 这种旧约定）
     year = trade_date[:4]
     candidates: List[Path] = [
         Path("snap"),  # 例如：snap/daily.csv（不带日期子目录的老约定）
@@ -87,30 +86,6 @@ def _build_missing_list(snapshot_dir: Path, files: List[str]) -> List[str]:
     return missing
 
 
-def _safe_int(x: Any, default: int = 0) -> int:
-    try:
-        if x is None:
-            return default
-        s = str(x).strip()
-        if not s:
-            return default
-        return int(float(s))
-    except Exception:
-        return default
-
-
-def _safe_float(x: Any, default: float = 0.0) -> float:
-    try:
-        if x is None:
-            return default
-        s = str(x).strip()
-        if not s:
-            return default
-        return float(s)
-    except Exception:
-        return default
-
-
 def _first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     if df is None or df.empty:
         return None
@@ -137,14 +112,14 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     # 1) 选择快照目录（并记录尝试路径）
     snap, snap_tried = _pick_snapshot_dir(s, trade_date)
 
-    # 2) 定义要读取的文件集合（和你们 top3-data 常见快照对齐）
+    # 2) 定义要读取的文件集合（与 TOP3 数据仓库快照对齐的常见集合）
     files_needed = [
         "daily.csv",
         "daily_basic.csv",
         "limit_list_d.csv",
-        "limit_break_d.csv",  # 炸板池（如果有）
+        "limit_break_d.csv",
         "hot_boards.csv",
-        "top_list.csv",  # 龙虎榜（如果有）
+        "top_list.csv",
         "stock_basic.csv",
     ]
     snapshot_missing = _build_missing_list(snap, files_needed)
@@ -164,11 +139,9 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     if not daily.empty:
         cols = {str(c).lower(): c for c in daily.columns}
         ts_col = cols.get("ts_code", None) or cols.get("code", None)
-
         if ts_col:
             universe["ts_code"] = daily[ts_col].astype(str)
 
-        # name/close/pct_chg 兼容多种字段
         name_col = _first_existing_col(daily, ["name", "ts_name", "股票名称"])
         close_col = _first_existing_col(daily, ["close", "收盘价"])
         pct_col = _first_existing_col(daily, ["pct_chg", "pct_change", "change_pct", "涨跌幅"])
@@ -181,7 +154,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
             universe["pct_chg"] = daily[pct_col].astype(str)
 
     # 若 daily 没有 name，则用 stock_basic 尝试补（可选）
-    if (("name" in universe.columns) and universe["name"].isna().all()) or ("name" not in universe.columns):
+    if ("name" in universe.columns and universe["name"].isna().all()) or ("name" not in universe.columns):
         if (not stock_basic.empty) and ("ts_code" in universe.columns) and (not universe.empty):
             sb_ts = _first_existing_col(stock_basic, ["ts_code", "code"])
             sb_name = _first_existing_col(stock_basic, ["name"])
@@ -191,10 +164,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
                 tmp["_ts"] = tmp["_ts"].astype(str)
                 tmp["_name"] = tmp["_name"].astype(str)
                 universe = universe.merge(tmp, how="left", left_on="ts_code", right_on="_ts")
-                if "name" not in universe.columns:
-                    universe["name"] = universe["_name"]
-                else:
-                    universe["name"] = universe["name"].fillna(universe["_name"])
+                universe["name"] = universe.get("name", pd.Series([""] * len(universe))).fillna(universe["_name"])
                 universe.drop(columns=[c for c in ["_ts", "_name"] if c in universe.columns], inplace=True)
 
     # 5) market（E1/E2/E3）尽量从快照推断
@@ -202,19 +172,13 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     e1 = 0
     if not limit_list_d.empty:
         ts_col = _first_existing_col(limit_list_d, ["ts_code", "code"])
-        if ts_col:
-            e1 = int(limit_list_d[ts_col].astype(str).nunique())
-        else:
-            e1 = int(len(limit_list_d))
+        e1 = int(limit_list_d[ts_col].astype(str).nunique()) if ts_col else int(len(limit_list_d))
 
     # E2 炸板率（%）：若存在 limit_break_d（炸板池），用 炸板数 / (涨停数 + 炸板数)
     e2 = 0.0
     if not limit_break_d.empty:
         ts_col = _first_existing_col(limit_break_d, ["ts_code", "code"])
-        if ts_col:
-            brk = int(limit_break_d[ts_col].astype(str).nunique())
-        else:
-            brk = int(len(limit_break_d))
+        brk = int(limit_break_d[ts_col].astype(str).nunique()) if ts_col else int(len(limit_break_d))
         denom = max(1, (e1 + brk))
         e2 = round(100.0 * brk / denom, 4)
 
@@ -230,7 +194,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
 
     market = {"E1": int(e1), "E2": float(e2), "E3": int(e3)}
 
-    # 6) ctx 输出（包含你要的 debug 三项）
+    # 6) ctx 输出（包含 debug 三项）
     ctx: Dict[str, Any] = {
         "trade_date": trade_date,
         "snapshot_dir": str(snap),
