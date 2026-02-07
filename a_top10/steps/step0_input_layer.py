@@ -49,14 +49,33 @@ def _pick_snapshot_dir(s: Settings, trade_date: str) -> Tuple[Path, List[str]]:
     if primary.exists() and primary.is_dir():
         return primary, tried
 
-    # 2) 兜底：常见目录形态（兼容 snap/xxx.csv 这种旧约定）
+    # 2) 兜底：常见目录形态
     year = trade_date[:4]
+
+    # 能从 settings 里拿到 repo_name 的话，优先拼一个“正确形态”
+    repo_name = None
+    try:
+        repo_name = getattr(getattr(s, "data_repo", None), "name", None)
+    except Exception:
+        repo_name = None
+    if not repo_name:
+        # 你系统里 repo 名固定就是 a-share-top3-data；拿不到就用这个兜底
+        repo_name = "a-share-top3-data"
+
     candidates: List[Path] = [
-        Path("snap"),  # 例如：snap/daily.csv（不带日期子目录的老约定）
+        Path("snap"),  # snap/daily.csv（不带日期子目录的老约定）
         Path("snap") / trade_date,  # snap/20260205/daily.csv
         Path("snapshots") / trade_date,  # snapshots/20260205/daily.csv
         Path("data_repo") / "snapshots" / trade_date,  # data_repo/snapshots/20260205/...
-        Path("_warehouse") / "data" / "raw" / year / trade_date,  # _warehouse/data/raw/YYYY/YYYYMMDD
+
+        # ✅ 关键：你现在真实数据形态（不要写错）
+        Path("_warehouse") / repo_name / "data" / "raw" / year / trade_date,
+
+        # 兼容少数旧形态（有人把 raw 放在仓库根 data/raw）
+        Path("_warehouse") / repo_name / "raw" / year / trade_date,
+
+        # 你之前那个（保留但放最后，因为大概率是错的）
+        Path("_warehouse") / "data" / "raw" / year / trade_date,
     ]
 
     key_files = [
@@ -167,6 +186,43 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
                 universe["name"] = universe.get("name", pd.Series([""] * len(universe))).fillna(universe["_name"])
                 universe.drop(columns=[c for c in ["_ts", "_name"] if c in universe.columns], inplace=True)
 
+    # ✅ 关键增强：尽量把 “行业/板块/industry” merge 进 universe（供 Step4 使用）
+    # 优先 stock_basic，其次 daily_basic
+    def _merge_industry_from(df_src: pd.DataFrame) -> None:
+        nonlocal universe
+        if df_src is None or df_src.empty or universe is None or universe.empty:
+            return
+        u_ts = _first_existing_col(universe, ["ts_code", "code"])
+        if not u_ts:
+            return
+
+        src_ts = _first_existing_col(df_src, ["ts_code", "code"])
+        src_ind = _first_existing_col(df_src, ["industry", "行业", "板块", "所属行业", "所属板块"])
+        if not (src_ts and src_ind):
+            return
+
+        tmp = df_src[[src_ts, src_ind]].copy()
+        tmp.columns = ["_ts", "_industry"]
+        tmp["_ts"] = tmp["_ts"].astype(str)
+        tmp["_industry"] = tmp["_industry"].astype(str)
+
+        universe = universe.merge(tmp, how="left", left_on=u_ts, right_on="_ts")
+        # 统一字段名用 “行业”，Step4 会同时识别 “行业/industry/板块”
+        if "行业" not in universe.columns:
+            universe["行业"] = ""
+        universe["行业"] = universe["行业"].fillna("").astype(str)
+        universe["_industry"] = universe["_industry"].fillna("").astype(str)
+        # 只在行业为空时补
+        universe.loc[universe["行业"].str.strip() == "", "行业"] = universe.loc[
+            universe["行业"].str.strip() == "", "_industry"
+        ]
+        universe.drop(columns=[c for c in ["_ts", "_industry"] if c in universe.columns], inplace=True)
+
+    if not stock_basic.empty:
+        _merge_industry_from(stock_basic)
+    if not daily_basic.empty:
+        _merge_industry_from(daily_basic)
+
     # 5) market（E1/E2/E3）尽量从快照推断
     # E1 涨停家数：优先 limit_list_d 的去重 ts_code 行数
     e1 = 0
@@ -194,20 +250,41 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
 
     market = {"E1": int(e1), "E2": float(e2), "E3": int(e3)}
 
+    # ✅ debug：用行数确认到底有没有读到数据（定位题材加成为 0 的根因）
+    debug_tables = {
+        "rows_daily": int(len(daily)) if isinstance(daily, pd.DataFrame) else 0,
+        "rows_daily_basic": int(len(daily_basic)) if isinstance(daily_basic, pd.DataFrame) else 0,
+        "rows_limit_list_d": int(len(limit_list_d)) if isinstance(limit_list_d, pd.DataFrame) else 0,
+        "rows_limit_break_d": int(len(limit_break_d)) if isinstance(limit_break_d, pd.DataFrame) else 0,
+        "rows_hot_boards": int(len(hot_boards)) if isinstance(hot_boards, pd.DataFrame) else 0,
+        "rows_top_list": int(len(top_list)) if isinstance(top_list, pd.DataFrame) else 0,
+        "rows_stock_basic": int(len(stock_basic)) if isinstance(stock_basic, pd.DataFrame) else 0,
+        "rows_universe": int(len(universe)) if isinstance(universe, pd.DataFrame) else 0,
+        "universe_has_industry": bool(isinstance(universe, pd.DataFrame) and ("行业" in universe.columns or "板块" in universe.columns)),
+    }
+
     # 6) ctx 输出（包含 debug 三项）
     ctx: Dict[str, Any] = {
         "trade_date": trade_date,
         "snapshot_dir": str(snap),
         "snapshot_dir_tried": snap_tried,
         "snapshot_missing": snapshot_missing,
+        "debug_step0": debug_tables,
+
         # 原始表
         "universe": universe,
         "daily": daily,
         "daily_basic": daily_basic,
         "limit_list_d": limit_list_d,
         "limit_break_d": limit_break_d,
+
+        # ✅ 同时写两个 key：兼容不同 step 的读取习惯
         "boards": hot_boards,
+        "hot_boards": hot_boards,
+
         "dragon": top_list,
+        "top_list": top_list,
+
         "stock_basic": stock_basic,
         "market": market,
     }
