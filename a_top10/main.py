@@ -282,6 +282,10 @@ def run_pipeline(
 
     # ---- 写出结果（新版 writers.py 自动识别 dict 结构）----
     # 额外保险：切到 repo_root 再写，避免 writers 使用相对路径写到别处
+    
+    print("DEBUG.step4 =", ctx.get("debug", {}).get("step4"))
+    print("DEBUG.step4_theme =", ctx.get("debug", {}).get("step4_theme"))
+    
     if not dry_run:
         with _chdir(out_dir.parent):
             write_outputs(
