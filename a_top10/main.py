@@ -262,7 +262,16 @@ def run_pipeline(
     if gate_pass:
         candidates = step2_build_candidates(s, ctx)
         strength_df = run_step3(candidates)
-        theme_df = run_step4(strength_df, ctx)
+
+        # Step3 结果写入 ctx，供 Step4 主线入口读取
+        ctx["strength_df"] = strength_df
+
+        # Step4 按主线接口运行，返回更新后的 ctx
+        ctx = run_step4(s, ctx)
+
+        # 从 ctx 取出加权后的 df（key 与写入一致）
+        theme_df = ctx.get("strength_df", strength_df)
+
         prob_df = run_step5(theme_df, s=s)
 
         # Step6 返回 dict = {"topN": df, "full": df_full}
