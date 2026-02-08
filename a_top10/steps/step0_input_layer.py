@@ -117,6 +117,70 @@ def _first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str
     return None
 
 
+def _normalize_industry_table(df: pd.DataFrame, *, table_name: str) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    关键修复：把“行业/板块”相关字段统一规范为 df["industry"]，供 Step4 直接读取。
+    同时确保存在 df["ts_code"]（如果只有 code，也会补一列 ts_code=code）。
+
+    返回：(new_df, debug_info)
+    """
+    dbg: Dict[str, Any] = {
+        "table": table_name,
+        "rows": int(len(df)) if isinstance(df, pd.DataFrame) else 0,
+        "has_ts_code": False,
+        "code_col_used": None,
+        "industry_col_used": None,
+        "industry_nonempty": 0,
+    }
+
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df, dbg
+
+    out = df.copy()
+
+    # 1) 统一 code 列：保证 ts_code 存在
+    code_col = _first_existing_col(out, ["ts_code", "code", "股票代码", "证券代码"])
+    if code_col:
+        dbg["code_col_used"] = code_col
+        if "ts_code" not in out.columns:
+            out["ts_code"] = out[code_col].astype(str)
+        else:
+            # ts_code 存在也做一次 str 规范
+            out["ts_code"] = out["ts_code"].astype(str)
+        dbg["has_ts_code"] = True
+
+    # 2) 统一行业列：industry
+    # 扩展候选，兼容你们不同快照命名（industry/行业/所属行业/板块/申万行业/行业名称等）
+    ind_col = _first_existing_col(
+        out,
+        [
+            "industry",
+            "行业",
+            "所属行业",
+            "所属板块",
+            "板块",
+            "板块名称",
+            "行业名称",
+            "申万行业",
+            "sw_industry",
+            "sw_industry_name",
+            "concept",
+            "题材",
+        ],
+    )
+    if ind_col:
+        dbg["industry_col_used"] = ind_col
+        # 创建/覆盖 industry（不破坏原列）
+        out["industry"] = out[ind_col].astype(str).fillna("").map(lambda x: str(x).strip())
+    else:
+        # 没找到就保证列存在
+        if "industry" not in out.columns:
+            out["industry"] = ""
+
+    dbg["industry_nonempty"] = int((out["industry"].astype(str).str.strip() != "").sum())
+    return out, dbg
+
+
 # -------------------------
 # Step0 Core
 # -------------------------
@@ -145,12 +209,16 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
 
     # 3) 读取数据（缺了就空表，不报错）
     daily = _read_csv_if_exists(snap / "daily.csv")
-    daily_basic = _read_csv_if_exists(snap / "daily_basic.csv")
+    daily_basic_raw = _read_csv_if_exists(snap / "daily_basic.csv")
     limit_list_d = _read_csv_if_exists(snap / "limit_list_d.csv")
     limit_break_d = _read_csv_if_exists(snap / "limit_break_d.csv")
     hot_boards = _read_csv_if_exists(snap / "hot_boards.csv")
     top_list = _read_csv_if_exists(snap / "top_list.csv")
-    stock_basic = _read_csv_if_exists(snap / "stock_basic.csv")
+    stock_basic_raw = _read_csv_if_exists(snap / "stock_basic.csv")
+
+    # ✅ 关键修复：规范化 stock_basic / daily_basic 的 industry/ts_code，供 Step4 使用
+    stock_basic, dbg_stock_basic = _normalize_industry_table(stock_basic_raw, table_name="stock_basic")
+    daily_basic, dbg_daily_basic = _normalize_industry_table(daily_basic_raw, table_name="daily_basic")
 
     # 4) 构造 Universe（统一底表）——尽量从 daily / stock_basic 补齐
     universe = pd.DataFrame(columns=["ts_code", "name", "close", "pct_chg"])
@@ -186,17 +254,19 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
                 universe["name"] = universe.get("name", pd.Series([""] * len(universe))).fillna(universe["_name"])
                 universe.drop(columns=[c for c in ["_ts", "_name"] if c in universe.columns], inplace=True)
 
-    # ✅ 关键增强：尽量把 “行业/板块/industry” merge 进 universe（供 Step4 使用）
+    # ✅ 关键增强：尽量把 “行业/板块/industry” merge 进 universe（供 Step2/Step3 侧使用）
     # 优先 stock_basic，其次 daily_basic
     def _merge_industry_from(df_src: pd.DataFrame) -> None:
         nonlocal universe
         if df_src is None or df_src.empty or universe is None or universe.empty:
             return
+
         u_ts = _first_existing_col(universe, ["ts_code", "code"])
         if not u_ts:
             return
 
         src_ts = _first_existing_col(df_src, ["ts_code", "code"])
+        # 注意：这里优先用规范化后的 industry
         src_ind = _first_existing_col(df_src, ["industry", "行业", "板块", "所属行业", "所属板块"])
         if not (src_ts and src_ind):
             return
@@ -207,15 +277,17 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         tmp["_industry"] = tmp["_industry"].astype(str)
 
         universe = universe.merge(tmp, how="left", left_on=u_ts, right_on="_ts")
+
         # 统一字段名用 “行业”，Step4 会同时识别 “行业/industry/板块”
         if "行业" not in universe.columns:
             universe["行业"] = ""
         universe["行业"] = universe["行业"].fillna("").astype(str)
         universe["_industry"] = universe["_industry"].fillna("").astype(str)
+
         # 只在行业为空时补
-        universe.loc[universe["行业"].str.strip() == "", "行业"] = universe.loc[
-            universe["行业"].str.strip() == "", "_industry"
-        ]
+        mask = universe["行业"].astype(str).str.strip() == ""
+        universe.loc[mask, "行业"] = universe.loc[mask, "_industry"]
+
         universe.drop(columns=[c for c in ["_ts", "_industry"] if c in universe.columns], inplace=True)
 
     if not stock_basic.empty:
@@ -260,7 +332,15 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         "rows_top_list": int(len(top_list)) if isinstance(top_list, pd.DataFrame) else 0,
         "rows_stock_basic": int(len(stock_basic)) if isinstance(stock_basic, pd.DataFrame) else 0,
         "rows_universe": int(len(universe)) if isinstance(universe, pd.DataFrame) else 0,
-        "universe_has_industry": bool(isinstance(universe, pd.DataFrame) and ("行业" in universe.columns or "板块" in universe.columns)),
+        "universe_has_industry": bool(
+            isinstance(universe, pd.DataFrame) and ("行业" in universe.columns or "板块" in universe.columns or "industry" in universe.columns)
+        ),
+        # ✅ 行业链路关键诊断（给 Step4 用）
+        "stock_basic_norm": dbg_stock_basic,
+        "daily_basic_norm": dbg_daily_basic,
+        "universe_industry_nonempty": int((universe.get("行业", pd.Series([], dtype=str)).astype(str).str.strip() != "").sum())
+        if isinstance(universe, pd.DataFrame) and (not universe.empty) and ("行业" in universe.columns)
+        else 0,
     }
 
     # 6) ctx 输出（包含 debug 三项）
@@ -274,7 +354,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         # 原始表
         "universe": universe,
         "daily": daily,
-        "daily_basic": daily_basic,
+        "daily_basic": daily_basic,  # ✅ 写回规范化后的 daily_basic
         "limit_list_d": limit_list_d,
         "limit_break_d": limit_break_d,
 
@@ -285,7 +365,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         "dragon": top_list,
         "top_list": top_list,
 
-        "stock_basic": stock_basic,
+        "stock_basic": stock_basic,  # ✅ 写回规范化后的 stock_basic（关键！供 Step4 _ensure_industry 补齐行业）
         "market": market,
     }
     return ctx
