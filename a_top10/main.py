@@ -262,7 +262,7 @@ def run_pipeline(
     if gate_pass:
         candidates = step2_build_candidates(s, ctx)
         strength_df = run_step3(candidates)
-        theme_df = run_step4(strength_df)
+        theme_df = run_step4(strength_df, ctx)
         prob_df = run_step5(theme_df, s=s)
 
         # Step6 返回 dict = {"topN": df, "full": df_full}
