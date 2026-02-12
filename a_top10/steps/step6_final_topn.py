@@ -14,7 +14,7 @@ Step6: Final Selector (TopN + Full Ranking) — Engine 3.2 (稳定增强版)
 支持 settings(s) 可选参数（均可缺省）:
     - topn / TOPN: int，默认 10
     - score_mode: "geo" | "mul" | "add"   （默认 "geo"）
-    - w_prob / w_strength / w_theme: float 权重（默认 0.50/0.35/0.15）
+    - w_prob / w_strength / w_theme: float 权重（默认 0.85/0.12/0.03）
     - min_prob: float，低于该概率直接过滤（默认 0.0 不过滤）
     - st_penalty: float，ST 惩罚因子（默认 0.85）
     - dedup_by_ts_code: bool，是否按 ts_code 去重（默认 True）
@@ -180,9 +180,9 @@ def run_step6_final_topn(df: pd.DataFrame, s=None) -> Dict[str, pd.DataFrame]:
     # -------------------------------------------------------
     score_mode = str(_get_setting(s, ["score_mode", "SCORE_MODE"], "geo")).lower()
 
-    w_prob = float(_get_setting(s, ["w_prob", "W_PROB"], 0.50))
-    w_strength = float(_get_setting(s, ["w_strength", "W_STRENGTH"], 0.35))
-    w_theme = float(_get_setting(s, ["w_theme", "W_THEME"], 0.15))
+    w_prob = float(_get_setting(s, ["w_prob", "W_PROB"], 0.85))
+    w_strength = float(_get_setting(s, ["w_strength", "W_STRENGTH"], 0.12))
+    w_theme = float(_get_setting(s, ["w_theme", "W_THEME"], 0.03))
     # 归一化权重（避免用户乱填）
     w_sum = max(1e-9, (w_prob + w_strength + w_theme))
     w_prob, w_strength, w_theme = w_prob / w_sum, w_strength / w_sum, w_theme / w_sum
