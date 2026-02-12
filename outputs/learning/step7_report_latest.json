@@ -1,0 +1,21 @@
+{
+  "ok": false,
+  "lookback": 150,
+  "outputs_files": 8,
+  "evaluate_days": 30,
+  "trained_models": {
+    "ok": false,
+    "lr": {
+      "ok": false,
+      "model": "lr",
+      "reason": "not enough snapshots"
+    },
+    "lgbm": {
+      "ok": false,
+      "model": "lgbm",
+      "reason": "lightgbm not installed"
+    }
+  },
+  "hit_rate_last_days": 6,
+  "hit_rate_last": 0.18333333333333335
+}
