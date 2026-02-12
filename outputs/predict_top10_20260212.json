@@ -1,5 +1,6 @@
 {
   "trade_date": "20260212",
+  "verify_date": "",
   "gate": {
     "pass": true,
     "E1": 92,
@@ -1684,6 +1685,12 @@
     "updated": false
   },
   "metrics": {
+    "hit_count": 10,
+    "top_count": 10,
+    "limit_count": 92,
+    "hit_rate": "100%"
+  },
+  "metrics_same_day": {
     "hit_count": 10,
     "top_count": 10,
     "limit_count": 92,
