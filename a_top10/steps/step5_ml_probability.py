@@ -10,7 +10,7 @@ Step5 : 概率模型推断（ML核心层） + 可训练闭环（LR + LightGBM）
     prob_df（附带 Probability / _prob_src 等）
 
 闭环训练：
-    - 训练数据：历史若干天的 step4 输出（建议落盘为 step4_theme.csv）
+    - 训练数据：历史若干天的 step4 输出（建议落盘为 step4_theme.csv））
     - 标签：next_day 是否涨停（用 next_day 的 limit_list_d.csv 来打标）
     - 模型：
         1) LogisticRegression（标准化 + class_weight=balanced）
@@ -18,6 +18,11 @@ Step5 : 概率模型推断（ML核心层） + 可训练闭环（LR + LightGBM）
     - 持久化：
         models/step5_lr.joblib
         models/step5_lgbm.joblib
+
+
+这个文件的主要目标是保证：
+1) 你各个步骤文件里字段名改动，step5 也能自动映射，不会因为缺字段装 0 造成 ThemeBoost 永远是 0；
+2) 涨停打标 id 格式不一致时，也能对齐（有时候 ts_code：000001.SZ，有时候 code：000001）。
 """
 
 from __future__ import annotations
@@ -55,33 +60,169 @@ FEATURES = [
     "turnover_rate",
 ]
 
-ID_COL_CANDIDATES = ["ts_code", "code", "TS_CODE"]
+# 字段别名映射：不同步骤文件输出的字段名不必一样，通过这里相互对应
+FEATURE_ALIASES: Dict[str, Sequence[str]] = {
+    "StrengthScore": [
+        "StrengthScore",
+        "strengthscore",
+        "strength_score",
+        "Strength",
+        "strength",
+        "强度得分",
+        "强度",
+        "强度分",
+    ],
+    "ThemeBoost": [
+        "ThemeBoost",
+        "themeboost",
+        "theme_boost",
+        "theme_boost_score",
+        "theme_boost_value",
+        "theme_boost_ratio",
+        "题材加成",
+        "题材加成分",
+        "题材加成得分",
+        "题材",
+    ],
+    "seal_amount": [
+        "seal_amount",
+        "sealamount",
+        "seal_amt",
+        "sealAmount",
+        "seal",
+        "封单金额",
+        "封单",
+    ],
+    "open_times": [
+        "open_times",
+        "opentimes",
+        "open_time",
+        "openTimes",
+        "open_count",
+        "openings",
+        "打开次数",
+        "打开次",
+        "开板次数",
+    ],
+    "turnover_rate": [
+        "turnover_rate",
+        "turnoverrate",
+        "turnover",
+        "turnoverRate",
+        "换手率",
+        "换手",
+        "换手率%",
+    ],
+}
+
+# id 别名（用于涨停打标 / 组装数据）
+TS_CODE_ALIASES = [
+    "ts_code",
+    "TS_CODE",
+    "tscode",
+    "TScode",
+    "stock_code",
+    "symbol",
+    "sec_code",
+    "stk_code",
+    "code",
+    "证券代码",
+    "股票代码",
+    "代码",
+]
 
 
 # -------------------------
 # Helpers
 # -------------------------
-def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
+def _lower_map(df: pd.DataFrame) -> Dict[str, str]:
+    return {str(c).strip().lower(): c for c in df.columns}
+
+
+def _normalize_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """ 
+    将各种可能的字段名同一步进行基本的横向对齐：
+    假设 step4 输出里映射字段名为“题材加成分”，那么在 step5 里就会填充到 ThemeBoost 中。
+    """
     if df is None or df.empty:
-        return None
-    cols = list(df.columns)
-    lower_map = {str(c).lower(): c for c in cols}
-    for name in candidates:
-        key = str(name).lower()
-        if key in lower_map:
-            return lower_map[key]
-    return None
+        return df
+
+    out = df.copy()
+    lower = _lower_map(out)
+
+    for canonical, aliases in FEATURE_ALIASES.items():
+        key = str(canonical).strip().lower()
+        if key in lower:
+            # 原表本来就有（可能大小写或样式不同），正式组合到 canonical
+            col = lower[key]
+            if col != canonical:
+                out[canonical] = out[col]
+            continue
+
+        # 一个名都没找到，去找 alias
+        found = False
+        for alias in aliases:
+            alias_key = str(alias).strip().lower()
+            if alias_key in lower:
+                out[canonical] = out[lower[alias_key]]
+                found = True
+                break
+        if not found:
+            # 缺失的情况下，先填 NaN（后续 _ensure_features 统一转 numeric + fillna）
+            out[canonical] = np.nan
+
+    return out
+
+
+def _normalize_id_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """ 
+    将 id 列动态映射到 ts_code（尽量）：
+    一个原始列和多个别名中，最终做到：起码没 ts_code 的情况下，在尽可能的情况下生成一个 ts_code。
+    """
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    lower = _lower_map(out)
+
+    ts_code = None
+    for name in TS_CODE_ALIASES:
+        key = str(name).strip().lower()
+        if key in lower:
+            ts_code = lower[key]
+            break
+
+    if ts_code is not None and ts_code != "ts_code":
+        out["ts_code"] = out[ts_code]
+
+    return out
 
 
 def _get_ts_code_col(df: pd.DataFrame) -> Optional[str]:
-    return _first_existing_col(df, ID_COL_CANDIDATES)
+    if df is None or df.empty:
+        return None
+    lower = _lower_map(df)
+    for name in TS_CODE_ALIASES:
+        key = str(name).strip().lower()
+        if key in lower:
+            return lower[key]
+    return None
+
+
+def _to_nosuffix(ts: str) -> str:
+    ts = str(ts).strip()
+    if not ts:
+        return ts
+    return ts.split(".")[0]
 
 
 def _ensure_features(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
+    out = _normalize_feature_columns(df)
+
     for c in FEATURES:
         if c not in out.columns:
-            out[c] = 0.0
+            out[c] = np.nan
+
         out[c] = (
             pd.to_numeric(out[c], errors="coerce")
             .replace([np.inf, -np.inf], np.nan)
@@ -106,6 +247,15 @@ def _read_csv_if_exists(p: Path) -> pd.DataFrame:
             return pd.read_csv(p, dtype=str, encoding="gbk")
         except Exception:
             return pd.DataFrame()
+
+
+def _safe_log1p_pos(x: np.ndarray) -> np.ndarray:
+    """
+    用于金额/成交额等“正值长尾”的压缩：log1p(max(x,0))
+    """
+    x = np.where(np.isfinite(x), x, 0.0)
+    x = np.maximum(x, 0.0)
+    return np.log1p(x)
 
 
 # -------------------------
@@ -190,15 +340,29 @@ def save_lgbm(model, s=None) -> None:
 # -------------------------
 def _label_from_next_day_limit_list(next_snap: Path) -> set:
     """
-    用 next_day 的 limit_list_d.csv 打标签：在涨停列表里 => y=1
+    用 next_day 的 limit_list_d.csv 打标：在涨停列表里 => y=1
+
+    实践中时常会被「ts_code、code、不同格式（带不带 .SZ/.SH）、不一致，所以统一并存两个格式：
+    - raw：原来格式，也存下
+    - no_suffix：000001
     """
     ll = _read_csv_if_exists(next_snap / "limit_list_d.csv")
     if ll.empty:
         return set()
+
+    ll = _normalize_id_columns(ll)
     ts_col = _get_ts_code_col(ll)
     if ts_col is None:
         return set()
-    return set(ll[ts_col].astype(str).tolist())
+
+    codes = set()
+    for v in ll[ts_col].astype(str).tolist():
+        v = str(v).strip()
+        if not v:
+            continue
+        codes.add(v)
+        codes.add(_to_nosuffix(v))
+    return codes
 
 
 def _build_xy_from_history(
@@ -207,7 +371,7 @@ def _build_xy_from_history(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     snapshot_dirs: [(trade_date, snap_path)]，按日期升序
-    对每一天 d，用 d 的 step4_theme.csv 作为特征，用 d+1 的涨停列表打标签
+    对每一天 d，用 d 的 step4_theme.csv 作为特征，用 d+1 的涨停列表打标
     """
     X_rows: List[np.ndarray] = []
     y_rows: List[np.ndarray] = []
@@ -220,6 +384,7 @@ def _build_xy_from_history(
         if feat_df.empty:
             continue
 
+        feat_df = _normalize_id_columns(feat_df)
         ts_col = _get_ts_code_col(feat_df)
         if ts_col is None:
             continue
@@ -227,7 +392,8 @@ def _build_xy_from_history(
         feat_df = _ensure_features(feat_df)
         limit_set = _label_from_next_day_limit_list(snap_next)
 
-        y = feat_df[ts_col].astype(str).apply(lambda x: 1 if x in limit_set else 0).astype(int).values
+        codes = feat_df[ts_col].astype(str).str.strip().values
+        y = np.array([1 if (c in limit_set or _to_nosuffix(c) in limit_set) else 0 for c in codes], dtype=int)
         X = feat_df[FEATURES].astype(float).values
 
         mask = np.isfinite(X).all(axis=1) & (np.abs(X).sum(axis=1) > 0)
@@ -262,7 +428,7 @@ def _resolve_snapshot_dirs_from_settings(s, lookback: int) -> List[Tuple[str, Pa
     if hasattr(dr, "list_snapshot_dates"):
         dates = list(dr.list_snapshot_dates())
     else:
-        # 兜底：扫描你仓库本地快照根目录（按你当前仓库结构：_warehouse/a-share-top3-data/data/raw/YYYY/YYYYMMDD）
+        # 仇底：扫描你仓库本地快照根目录（按你当前仓库结构：_warehouse/a-share-top3-data/data/raw/YYYY/YYYYMMDD）
         # 如果你们 data_repo.py 已经封装了 snapshot_dir，就尽量走 snapshot_dir(date)
         root = getattr(dr, "warehouse_root", None)
         repo_name = getattr(dr, "repo_name", None)
@@ -281,7 +447,7 @@ def _resolve_snapshot_dirs_from_settings(s, lookback: int) -> List[Tuple[str, Pa
                             tmp.append(ddir.name)
                 dates = sorted(tmp)
         else:
-            # 最后一层兜底：尝试 data_repo/snapshots（你之前也建了这个目录）
+            # 最后一层仇底：尝试 data_repo/snapshots（你之前也建了这个目录）
             base = Path("data_repo/snapshots")
             if base.exists():
                 dates = sorted([p.name for p in base.iterdir() if p.is_dir()])
@@ -294,7 +460,7 @@ def _resolve_snapshot_dirs_from_settings(s, lookback: int) -> List[Tuple[str, Pa
         if hasattr(dr, "snapshot_dir"):
             p = Path(dr.snapshot_dir(d))
         else:
-            # 若没有 snapshot_dir，只能按 data_repo/snapshots/date 兜底
+            # 若没有 snapshot_dir，只能按 data_repo/snapshots/date 仇底
             p = Path("data_repo/snapshots") / d
         if p.exists():
             out.append((d, p))
@@ -394,7 +560,9 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
     推断优先级：
     1) LightGBM（若存在已训练模型）
     2) LogisticRegression（若存在已训练模型）
-    3) pseudo-sigmoid（兜底）
+    3) pseudo-sigmoid（仇底）
+
+    通过这个顺序，你就缺一个模型（没装 lightgbm），也不会大约死机，然后再增强：字段名变来变去，一样不会因为填 0 把 ThemeBoost 吃光。
     """
     out = _ensure_features(theme_df)
     X = out[FEATURES].astype(float).values
@@ -420,12 +588,28 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         except Exception:
             pass
 
-    # 兜底 pseudo probability
+    # 仇底 pseudo probability。
+    # 无论你想怎么改各种字段名，这一层最起码保证进入正序运行，
+    # 同时尽量避免超长尾数值直接“硬塞入”。
+    strength = np.clip(out["StrengthScore"].astype(float).values / 100.0, 0.0, 1.5)
+    theme = np.clip(out["ThemeBoost"].astype(float).values, 0.0, 2.0)
+
+    seal = out["seal_amount"].astype(float).values
+    seal = _safe_log1p_pos(seal)
+    seal = np.clip(seal / 16.0, 0.0, 1.5)
+
+    opens = np.clip(out["open_times"].astype(float).values, 0.0, 20.0)
+    turnover = np.clip(out["turnover_rate"].astype(float).values, 0.0, 50.0) / 50.0
+
+    # 线性打分 -> sigmoid（权重只是设定约）
     z = (
-        0.04 * out["StrengthScore"].astype(float).values
-        + 1.5 * out["ThemeBoost"].astype(float).values
-        - 0.3 * out["open_times"].astype(float).values
+        1.20 * strength
+        + 1.10 * theme
+        + 0.90 * seal
+        + 0.35 * turnover
+        - 0.60 * (opens / 10.0)
     )
+
     out["Probability"] = _sigmoid(z)
     out["_prob_src"] = "pseudo"
     return out.sort_values("Probability", ascending=False)
@@ -437,5 +621,3 @@ def run(df: pd.DataFrame, s=None) -> pd.DataFrame:
 
 if __name__ == "__main__":
     print("Step5 Probability model loaded.")
-
-
