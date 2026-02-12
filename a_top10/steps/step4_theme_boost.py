@@ -1,27 +1,60 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Step4 : 题材/板块加权（ThemeBoost）
 
 目标（0204-TOP10）：
-- 输出字段：题材加成（0~1）
+- 输出字段：题材加成（0~1） / ThemeBoost（0~1）
 - 先用 hot_boards.csv（行业热度）跑通最小闭环
 - 若缺行业字段，自动从 stock_basic 补齐
 - 全程写 debug：到底读到了什么、匹配了多少、为何为 0
-
-重要：
-- 主线 main.py 需要 import 的入口：run_step4(s, ctx) -> Dict[str, Any]
-- 不能再定义第二个同名 run_step4 覆盖它
+- 入口：run_step4(s, ctx) -> Dict[str, Any]
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Sequence, Tuple
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Optional, Sequence, Tuple, List
 
 import numpy as np
 import pandas as pd
 
 from a_top10.config import Settings
+
+
+# -------------------------
+# Config
+# -------------------------
+INDUSTRY_COL_CANDIDATES = [
+    "industry",
+    "industry_name",
+    "industryName",
+    "申万行业",
+    "申万一级行业",
+    "一级行业",
+    "行业",
+    "行业名称",
+]
+
+CODE_COL_CANDIDATES = ["ts_code", "code", "TS_CODE", "股票代码", "证券代码"]
+
+HOT_BOARDS_INDUSTRY_COLS = ["industry", "industry_name", "行业", "板块", "板块名称", "行业名称"]
+HOT_BOARDS_RANK_COLS = ["rank", "Rank", "排名", "hot_rank", "热度排名"]
+
+# 龙虎榜：若 ctx 有 top_list（或 snap/top_list.csv），命中则加分
+DRAGON_CODE_COLS = ["ts_code", "code", "TS_CODE", "股票代码", "证券代码"]
+
+# 默认龙虎榜加成（你现在看到的 0.08 就是它）
+DEFAULT_DRAGON_BONUS = 0.08
+
+# 行业热度衰减参数：rank 越小分越高
+# score = exp(-k*(rank-1))
+DEFAULT_RANK_DECAY_K = 0.18
+
+# 只取热榜前 N 个行业参与（避免长尾噪声）
+DEFAULT_TOPK_INDUSTRY = 40
 
 
 # -------------------------
@@ -39,6 +72,16 @@ def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional
     return None
 
 
+def _safe_str(x: Any) -> str:
+    if x is None:
+        return ""
+    return str(x).strip()
+
+
+def _clip01(x: float) -> float:
+    return max(0.0, min(1.0, x))
+
+
 def _to_float(x: Any, default: float = 0.0) -> float:
     try:
         if x is None:
@@ -50,25 +93,36 @@ def _to_float(x: Any, default: float = 0.0) -> float:
         return default
 
 
-def _to_int(x: Any, default: int = 0) -> int:
-    try:
-        if x is None:
+def _parse_rank_int(x: Any, default: int = 9999) -> int:
+    """
+    强韧 rank 解析：
+    支持： 1 / 1.0 / "01" / "第1名" / "1/10" / "No.1" / "1名"
+    取第一个正整数。
+    """
+    if x is None:
+        return default
+    if isinstance(x, (int, np.integer)):
+        return int(x)
+    if isinstance(x, (float, np.floating)):
+        if np.isnan(x):
             return default
-        if isinstance(x, str) and x.strip() == "":
-            return default
-        return int(float(x))
-    except Exception:
+        return int(x)
+
+    s = str(x).strip()
+    if not s:
         return default
 
-
-def _clip01(x: float) -> float:
-    return max(0.0, min(1.0, x))
-
-
-def _safe_str(x: Any) -> str:
-    if x is None:
-        return ""
-    return str(x).strip()
+    # 常见形式：1/10 -> 1
+    m = re.search(r"(\d+)", s)
+    if not m:
+        return default
+    try:
+        v = int(m.group(1))
+        if v <= 0:
+            return default
+        return v
+    except Exception:
+        return default
 
 
 def _norm_code(code: Any) -> Tuple[str, str]:
@@ -77,302 +131,373 @@ def _norm_code(code: Any) -> Tuple[str, str]:
     - 返回 (ts_code_upper, code6)
     支持：
     - 002506.SZ -> ("002506.SZ", "002506")
-    - 002506 -> ("", "002506")
+    - 002506 -> ("002506", "002506")
     """
     s = _safe_str(code).upper()
     if not s:
-        return "", ""
-    if "." in s:
-        parts = s.split(".")
-        c6 = parts[0]
-        c6 = "".join([ch for ch in c6 if ch.isdigit()])[:6]
-        return s, c6
-    # 纯 6 位
-    c6 = "".join([ch for ch in s if ch.isdigit()])[:6]
-    return "", c6
+        return ("", "")
+    code6 = s.split(".")[0]
+    if len(code6) > 6 and code6.isdigit():
+        code6 = code6[-6:]
+    return (s, code6)
 
 
-# -------------------------
-# Core internal
-# -------------------------
-def _build_industry_score_map(hot_boards: pd.DataFrame) -> Dict[str, float]:
-    """
-    hot_boards.csv -> industry -> score(0~1)
-
-    你现在的 hot_boards.csv 字段是：
-    trade_date, industry, limit_up_count, rank
-
-    规则（稳定 & 可解释）：
-    - 以 rank 为主：score = (K - rank + 1) / K，默认 K=10（取榜单长度）
-    - 若 rank 缺失，则按行号生成 rank
-    """
-    if hot_boards is None or hot_boards.empty:
-        return {}
-
-    ind_col = _first_existing_col(hot_boards, ["industry", "行业", "板块"])
-    rank_col = _first_existing_col(hot_boards, ["rank", "rnk", "排名"])
-
-    if not ind_col:
-        return {}
-
-    tmp = hot_boards.copy()
-    tmp[ind_col] = tmp[ind_col].astype(str).map(_safe_str)
-    tmp = tmp[tmp[ind_col] != ""].copy()
-    if tmp.empty:
-        return {}
-
-    if rank_col:
-        tmp["_rank"] = tmp[rank_col].map(lambda v: _to_int(v, 9999))
-    else:
-        tmp["_rank"] = np.arange(1, len(tmp) + 1)
-
-    # 只取前 K 名更稳定
-    K = int(min(10, len(tmp)))
-    tmp = tmp.sort_values("_rank", ascending=True).head(K).copy()
-
-    def rank_to_score(r: int) -> float:
-        r = int(r)
-        if r <= 0:
-            r = 1
-        return _clip01((K - r + 1) / float(K))
-
-    tmp["_score"] = tmp["_rank"].map(rank_to_score)
-
-    out: Dict[str, float] = {}
-    for _, row in tmp.iterrows():
-        ind = _safe_str(row[ind_col])
-        sc = float(row["_score"])
-        if ind and (ind not in out or sc > out[ind]):
-            out[ind] = sc
-    return out
-
-
-def _extract_dragon_set(dragon: pd.DataFrame) -> set[str]:
-    """
-    龙虎榜命中集合：同时支持 ts_code 形态与 code6 形态
-    返回集合里只存两种 key：
-    - "TS:002506.SZ"
-    - "C6:002506"
-    """
-    if dragon is None or dragon.empty:
-        return set()
-
-    code_col = _first_existing_col(dragon, ["ts_code", "code", "股票代码", "证券代码"])
-    if not code_col:
-        return set()
-
-    sset: set[str] = set()
-    for v in dragon[code_col].astype(str).tolist():
-        ts, c6 = _norm_code(v)
-        if ts:
-            sset.add(f"TS:{ts}")
-        if c6:
-            sset.add(f"C6:{c6}")
-    return sset
-
-
-def _ensure_industry(df: pd.DataFrame, ctx: Dict[str, Any]) -> Tuple[pd.DataFrame, int]:
-    """
-    若 df 缺 industry/行业，则尝试用 ctx["stock_basic"] 补齐。
-    返回 (new_df, filled_count)
-    """
-    if df is None or df.empty:
-        return df, 0
-
-    # df 已有行业字段就不补
-    ind_col_df = _first_existing_col(df, ["industry", "行业", "所属行业", "板块"])
-    if ind_col_df:
-        return df, int((df[ind_col_df].astype(str).map(_safe_str) != "").sum())
-
-    stock_basic = ctx.get("stock_basic")
-    if not isinstance(stock_basic, pd.DataFrame) or stock_basic.empty:
-        return df, 0
-
-    # stock_basic 需要：ts_code + industry（或 行业）
-    sb_code = _first_existing_col(stock_basic, ["ts_code", "code", "股票代码", "证券代码"])
-    sb_ind = _first_existing_col(stock_basic, ["industry", "行业", "所属行业"])
-    if not sb_code or not sb_ind:
-        return df, 0
-
-    out = df.copy()
-
-    df_code = _first_existing_col(out, ["ts_code", "code", "股票代码", "证券代码"])
-    if not df_code:
-        return df, 0
-
-    # 统一用 code6 做 join，避免 .SZ/.SH 不一致
-    out["_code6"] = out[df_code].map(lambda x: _norm_code(x)[1])
-    sb = stock_basic.copy()
-    sb["_code6"] = sb[sb_code].map(lambda x: _norm_code(x)[1])
-    sb = sb[sb["_code6"].astype(str).map(_safe_str) != ""].copy()
-    sb["_industry"] = sb[sb_ind].astype(str).map(_safe_str)
-    sb = sb[sb["_industry"] != ""].copy()
-
-    if sb.empty:
-        out.drop(columns=["_code6"], inplace=True, errors="ignore")
-        return out, 0
-
-    out = out.merge(sb[["_code6", "_industry"]].drop_duplicates("_code6"), on="_code6", how="left")
-    out.rename(columns={"_industry": "industry"}, inplace=True)
-
-    filled = int((out["industry"].astype(str).map(_safe_str) != "").sum())
-    out.drop(columns=["_code6"], inplace=True, errors="ignore")
-    return out, filled
-
-
-def step4_theme_boost(
-    strength_df: pd.DataFrame,
-    ctx: Optional[Dict[str, Any]] = None,
-    *,
-    dragon_bonus: float = 0.08,
-) -> pd.DataFrame:
-    """
-    输出 “题材加成”(0~1) —— 最小闭环版：
-    - 行业热度：来自 ctx["hot_boards"]（即 hot_boards.csv）
-    - 龙虎榜：来自 ctx["top_list"]（若命中额外加 dragon_bonus）
-    - 若行业缺失：自动从 ctx["stock_basic"] 补齐 industry
-
-    默认：
-    - 没匹配到行业热度 -> 题材加成 = 0
-    - 匹配到 -> 题材加成 = industry_score(0~1)
-    - 龙虎榜命中 -> + dragon_bonus 再 clip(0~1)
-    """
-    if strength_df is None or strength_df.empty:
+def _read_csv_guess(path: Path) -> pd.DataFrame:
+    if path is None or not Path(path).exists():
         return pd.DataFrame()
+    for enc in ("utf-8", "utf-8-sig", "gbk"):
+        try:
+            return pd.read_csv(path, dtype=str, encoding=enc)
+        except Exception:
+            pass
+    return pd.DataFrame()
 
-    ctx = ctx or {}
-    df = strength_df.copy()
 
-    # 题材源
-    hot_boards_df = ctx.get("hot_boards")
-    if not isinstance(hot_boards_df, pd.DataFrame):
-        hot_boards_df = ctx.get("boards") if isinstance(ctx.get("boards"), pd.DataFrame) else None
+def _ctx_get_df(ctx: Dict[str, Any], keys: Sequence[str]) -> pd.DataFrame:
+    for k in keys:
+        v = ctx.get(k)
+        if isinstance(v, pd.DataFrame):
+            return v
+    return pd.DataFrame()
 
-    dragon_df = ctx.get("top_list")
-    if not isinstance(dragon_df, pd.DataFrame):
-        dragon_df = ctx.get("dragon") if isinstance(ctx.get("dragon"), pd.DataFrame) else None
 
-    industry_score_map = _build_industry_score_map(hot_boards_df) if isinstance(hot_boards_df, pd.DataFrame) else {}
-    dragon_set = _extract_dragon_set(dragon_df) if isinstance(dragon_df, pd.DataFrame) else set()
+def _ctx_get_path(ctx: Dict[str, Any], keys: Sequence[str]) -> Optional[Path]:
+    for k in keys:
+        v = ctx.get(k)
+        if v is None:
+            continue
+        try:
+            return Path(v)
+        except Exception:
+            continue
+    return None
 
-    # 先保证 df 有 industry
-    df, industry_filled = _ensure_industry(df, ctx)
 
-    # 初始化输出列（保证 writer 一定能写出来）
-    df["题材加成"] = 0.0
-    df["板块"] = ""
-    df["_ThemeIndustryHit"] = 0
-    df["_ThemeDragonHit"] = 0
+def _ensure_outputs_dir(ctx: Dict[str, Any], s: Optional[Settings]) -> Path:
+    # 优先 ctx 里 outputs_dir
+    p = _ctx_get_path(ctx, ["outputs_dir", "output_dir", "out_dir"])
+    if p is not None:
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    # 再尝试 settings
+    if s is not None:
+        try:
+            od = getattr(s, "output", None)
+            if od is not None and hasattr(od, "dir"):
+                p2 = Path(od.dir)
+                p2.mkdir(parents=True, exist_ok=True)
+                return p2
+        except Exception:
+            pass
+    # 兜底
+    p3 = Path("outputs")
+    p3.mkdir(parents=True, exist_ok=True)
+    return p3
 
-    ind_col = _first_existing_col(df, ["industry", "行业", "所属行业", "板块"])
-    code_col = _first_existing_col(df, ["ts_code", "code", "股票代码", "证券代码"])
 
-    # 行业热度加成
-    matched_industry = 0
-    if industry_score_map and ind_col:
-        for i in range(len(df)):
-            ind = _safe_str(df.iloc[i].get(ind_col))
-            if ind:
-                df.at[df.index[i], "板块"] = ind
-                sc = industry_score_map.get(ind)
-                if sc is not None:
-                    matched_industry += 1
-                    df.at[df.index[i], "_ThemeIndustryHit"] = 1
-                    df.at[df.index[i], "题材加成"] = float(_clip01(sc))
-
-    # 龙虎榜额外加成（支持 ts_code / code6）
-    dragon_hits = 0
-    if dragon_set and code_col:
-        for i in range(len(df)):
-            ts, c6 = _norm_code(df.iloc[i].get(code_col))
-            hit = False
-            if ts and f"TS:{ts}" in dragon_set:
-                hit = True
-            elif c6 and f"C6:{c6}" in dragon_set:
-                hit = True
-
-            if hit:
-                dragon_hits += 1
-                df.at[df.index[i], "_ThemeDragonHit"] = 1
-                df.at[df.index[i], "题材加成"] = float(_clip01(float(df.at[df.index[i], "题材加成"]) + float(dragon_bonus)))
-
-    # 最终 clip
-    df["题材加成"] = df["题材加成"].map(lambda x: float(_clip01(_to_float(x, 0.0))))
-
-    # 把 step4 关键诊断写入 ctx.debug（若存在）
-    dbg = ctx.get("debug")
-    if isinstance(dbg, dict):
-        dbg.setdefault("step4_theme", {})
-        dbg["step4_theme"].update(
-            {
-                "hot_boards_rows": int(len(hot_boards_df)) if isinstance(hot_boards_df, pd.DataFrame) else 0,
-                "hot_boards_cols": list(hot_boards_df.columns) if isinstance(hot_boards_df, pd.DataFrame) else [],
-                "industry_score_map_size": int(len(industry_score_map)),
-                "industry_filled_count": int(industry_filled),
-                "matched_industry_count": int(matched_industry),
-                "dragon_set_size": int(len(dragon_set)),
-                "dragon_hits": int(dragon_hits),
-                "note": "题材加成=行业热度(0~1) + 龙虎榜加成；缺行业则从 stock_basic 补齐",
-            }
-        )
-
-    return df
+def _resolve_trade_date(ctx: Dict[str, Any]) -> str:
+    # 多个可能字段
+    for k in ("trade_date", "TRADE_DATE", "date", "run_date"):
+        v = ctx.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    # 兜底：unknown
+    return "unknown"
 
 
 # -------------------------
-# Mainline entrypoint (required by a_top10.main import)
+# Core: compute ThemeBoost
+# -------------------------
+@dataclass
+class ThemeDebug:
+    hot_boards_rows: int = 0
+    hot_boards_cols: List[str] = None
+    hot_rank_col: str = ""
+    hot_industry_col: str = ""
+    industry_score_map_size: int = 0
+    industry_score_min: float = 0.0
+    industry_score_max: float = 0.0
+    matched_industry_count: int = 0
+    dragon_hits: int = 0
+    theme_boost_nonzero: int = 0
+    reason: str = ""
+
+
+def _build_industry_score_map(
+    hot_boards: pd.DataFrame,
+    k: float = DEFAULT_RANK_DECAY_K,
+    topk: int = DEFAULT_TOPK_INDUSTRY,
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """
+    从 hot_boards 构建：industry -> score(0..1)
+    """
+    dbg: Dict[str, Any] = {}
+    if hot_boards is None or hot_boards.empty:
+        dbg["ok"] = False
+        dbg["reason"] = "hot_boards empty"
+        return {}, dbg
+
+    ind_col = _first_existing_col(hot_boards, HOT_BOARDS_INDUSTRY_COLS)
+    rank_col = _first_existing_col(hot_boards, HOT_BOARDS_RANK_COLS)
+    dbg["industry_col"] = ind_col or ""
+    dbg["rank_col"] = rank_col or ""
+
+    if not ind_col or not rank_col:
+        dbg["ok"] = False
+        dbg["reason"] = "hot_boards missing industry/rank col"
+        return {}, dbg
+
+    df = hot_boards[[ind_col, rank_col]].copy()
+    df[ind_col] = df[ind_col].astype(str).map(lambda x: _safe_str(x))
+    df[rank_col] = df[rank_col].map(lambda x: _parse_rank_int(x, default=9999))
+
+    # 过滤无效
+    df = df[(df[ind_col] != "") & (df[rank_col] < 9999)]
+    if df.empty:
+        dbg["ok"] = False
+        dbg["reason"] = "hot_boards rank parse all invalid"
+        return {}, dbg
+
+    # 去重：同一行业取最好（rank最小）
+    df = df.sort_values(rank_col, ascending=True)
+    df = df.drop_duplicates(subset=[ind_col], keep="first")
+
+    # 取 topk
+    if topk and topk > 0:
+        df = df.head(int(topk))
+
+    # score
+    ranks = df[rank_col].astype(int).values
+    scores = np.exp(-k * (ranks - 1.0))
+    # 归一化到 0..1（防止全部接近 1 或接近 0）
+    # 如果 max==min，就保持原值但 clip
+    s_min = float(np.min(scores))
+    s_max = float(np.max(scores))
+    if abs(s_max - s_min) > 1e-9:
+        scores = (scores - s_min) / (s_max - s_min)
+    scores = np.clip(scores, 0.0, 1.0)
+
+    mp: Dict[str, float] = {}
+    for ind, sc in zip(df[ind_col].tolist(), scores.tolist()):
+        if ind:
+            mp[str(ind).strip()] = float(sc)
+
+    dbg["ok"] = True
+    dbg["n"] = int(len(mp))
+    dbg["score_min"] = float(np.min(list(mp.values()))) if mp else 0.0
+    dbg["score_max"] = float(np.max(list(mp.values()))) if mp else 0.0
+    dbg["top5"] = sorted(mp.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    return mp, dbg
+
+
+def _apply_industry_and_dragon(
+    cand_df: pd.DataFrame,
+    stock_basic: pd.DataFrame,
+    top_list: pd.DataFrame,
+    industry_score: Dict[str, float],
+    dragon_bonus: float = DEFAULT_DRAGON_BONUS,
+) -> Tuple[pd.DataFrame, ThemeDebug]:
+    """
+    对候选df计算 ThemeBoost / 题材加成：
+    - industry_boost：按行业热度映射
+    - dragon_bonus：命中龙虎榜则加固定值（默认0.08）
+    """
+    dbg = ThemeDebug(hot_boards_cols=[],)
+
+    if cand_df is None or cand_df.empty:
+        dbg.reason = "candidate df empty"
+        out = pd.DataFrame() if cand_df is None else cand_df.copy()
+        return out, dbg
+
+    out = cand_df.copy()
+
+    # code 列
+    code_col = _first_existing_col(out, CODE_COL_CANDIDATES)
+    if not code_col:
+        dbg.reason = "candidate missing code col"
+        # 兜底：直接给 0
+        out["ThemeBoost"] = 0.0
+        out["题材加成"] = 0.0
+        return out, dbg
+
+    # industry 列：若没有，用 stock_basic 补
+    ind_col = _first_existing_col(out, INDUSTRY_COL_CANDIDATES)
+    if not ind_col and stock_basic is not None and not stock_basic.empty:
+        sb_code_col = _first_existing_col(stock_basic, CODE_COL_CANDIDATES)
+        sb_ind_col = _first_existing_col(stock_basic, INDUSTRY_COL_CANDIDATES)
+        if sb_code_col and sb_ind_col:
+            tmp = stock_basic[[sb_code_col, sb_ind_col]].copy()
+            tmp["_code6"] = tmp[sb_code_col].map(lambda x: _norm_code(x)[1])
+            tmp = tmp.dropna(subset=["_code6"]).drop_duplicates(subset=["_code6"], keep="first")
+
+            out["_code6"] = out[code_col].map(lambda x: _norm_code(x)[1])
+            out = out.merge(tmp[["_code6", sb_ind_col]], on="_code6", how="left")
+            ind_col = sb_ind_col  # merge 后列名保持 sb_ind_col
+        # 否则只能没有行业
+
+    # 龙虎榜命中集合
+    dragon_set6 = set()
+    dragon_set_ts = set()
+    if top_list is not None and not top_list.empty:
+        tl_code_col = _first_existing_col(top_list, DRAGON_CODE_COLS)
+        if tl_code_col:
+            for v in top_list[tl_code_col].tolist():
+                ts, c6 = _norm_code(v)
+                if ts:
+                    dragon_set_ts.add(ts)
+                if c6:
+                    dragon_set6.add(c6)
+
+    # 计算 industry_boost
+    industry_boost = np.zeros(len(out), dtype=float)
+    matched = 0
+    if ind_col and industry_score:
+        inds = out[ind_col].astype(str).map(lambda x: _safe_str(x)).tolist()
+        for i, ind in enumerate(inds):
+            if not ind:
+                continue
+            sc = industry_score.get(ind, None)
+            if sc is None:
+                # 轻微容错：去空格/全角空格
+                ind2 = re.sub(r"\s+", "", ind)
+                sc = industry_score.get(ind2, None)
+            if sc is not None:
+                industry_boost[i] = float(sc)
+                matched += 1
+
+    dbg.matched_industry_count = int(matched)
+
+    # 龙虎榜加成
+    dragon_bonus_arr = np.zeros(len(out), dtype=float)
+    dh = 0
+    codes = out[code_col].tolist()
+    for i, v in enumerate(codes):
+        ts, c6 = _norm_code(v)
+        hit = (ts in dragon_set_ts) or (c6 in dragon_set6)
+        if hit:
+            dragon_bonus_arr[i] = float(dragon_bonus)
+            dh += 1
+    dbg.dragon_hits = int(dh)
+
+    theme = industry_boost + dragon_bonus_arr
+    theme = np.clip(theme, 0.0, 1.0)
+
+    out["ThemeBoost"] = theme.astype("float64")
+    out["题材加成"] = out["ThemeBoost"]
+
+    # 方便报告展示：输出板块/行业字段
+    if ind_col and ind_col in out.columns:
+        out["板块"] = out[ind_col].astype(str).map(lambda x: _safe_str(x))
+    else:
+        out["板块"] = ""
+
+    dbg.theme_boost_nonzero = int((out["ThemeBoost"] > 0).sum())
+    return out, dbg
+
+
+# -------------------------
+# Entry
 # -------------------------
 def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
-    主线入口：从 ctx 中找到 step3 输出的 df，做题材加权，再写回 ctx。
-    兼容 key（不写死）：优先按这些顺序找：
-    - ctx["strength_df"] / ctx["strength"]
-    - ctx["step3"] / ctx["step3_df"]
-    - ctx["candidates"] / ctx["pool"]（找不到也不报错）
+    输入：
+      ctx 中应有候选 df（通常 step3 输出），以及 hot_boards / stock_basic / top_list（可选）
+    输出：
+      ctx["theme_df"]：带 ThemeBoost/题材加成 的 df
+      ctx["debug"]["step4_theme"]：可复盘诊断
+      并尝试落盘 outputs/debug_step4_theme_YYYYMMDD.json
     """
-    if not isinstance(ctx, dict):
-        return {"debug": {"step4": {"status": "skip", "note": "ctx 非 dict"}}}
+    ctx = ctx or {}
+    ctx.setdefault("debug", {})
+    dbg_all: Dict[str, Any] = {}
 
-    dbg = ctx.get("debug")
-    if not isinstance(dbg, dict):
-        dbg = {}
-        ctx["debug"] = dbg
+    # 1) 取候选df（尽量兼容）
+    cand_df = _ctx_get_df(ctx, ["step3_df", "candidates", "candidate_df", "df"])
+    if cand_df is None or cand_df.empty:
+        # 兜底：若 ctx 里有 step3 的结构
+        v = ctx.get("step3", None)
+        if isinstance(v, dict):
+            cand_df = v.get("df", pd.DataFrame())
+    if cand_df is None:
+        cand_df = pd.DataFrame()
 
-    info: Dict[str, Any] = {"step": "step4_theme_boost", "status": "ok", "note": ""}
+    # 2) hot_boards / stock_basic / top_list
+    hot_boards = _ctx_get_df(ctx, ["hot_boards", "hot_boards_df"])
+    stock_basic = _ctx_get_df(ctx, ["stock_basic", "stock_basic_df"])
+    top_list = _ctx_get_df(ctx, ["top_list", "top_list_df", "龙虎榜", "longhu"])
 
-    keys_try = ["strength_df", "strength", "step3", "step3_df", "candidates", "pool"]
-    src_key = None
-    src_df = None
-    for k in keys_try:
-        v = ctx.get(k)
-        if isinstance(v, pd.DataFrame):
-            src_key = k
-            src_df = v
-            break
+    # 若 ctx 里没带 df，尝试从 snapshot_dir 读取
+    snapshot_dir = _ctx_get_path(ctx, ["snapshot_dir", "snap_dir", "snapshot_path"])
+    if snapshot_dir is not None:
+        if hot_boards.empty:
+            hot_boards = _read_csv_guess(Path(snapshot_dir) / "hot_boards.csv")
+        if stock_basic.empty:
+            stock_basic = _read_csv_guess(Path(snapshot_dir) / "stock_basic.csv")
+        if top_list.empty:
+            # 你仓库里有 top_list.csv（历史快照字段列表也包含 top_list.csv）
+            top_list = _read_csv_guess(Path(snapshot_dir) / "top_list.csv")
 
-    if src_df is None or src_df.empty:
-        info["status"] = "skip"
-        info["note"] = "ctx 中未找到可用的 DataFrame（strength/step3/candidates/pool），step4 跳过"
-        dbg["step4"] = info
-        return ctx
+    # 3) build industry score map
+    industry_map, dbg_map = _build_industry_score_map(
+        hot_boards,
+        k=float(getattr(getattr(s, "weights", {}), "rank_decay_k", DEFAULT_RANK_DECAY_K))
+        if s is not None else DEFAULT_RANK_DECAY_K,
+        topk=DEFAULT_TOPK_INDUSTRY,
+    )
 
-    out = step4_theme_boost(src_df, ctx)
+    # 4) apply
+    out_df, dbg_apply = _apply_industry_and_dragon(
+        cand_df=cand_df,
+        stock_basic=stock_basic,
+        top_list=top_list,
+        industry_score=industry_map,
+        dragon_bonus=DEFAULT_DRAGON_BONUS,
+    )
 
-    # 写回同一个 key，保证后续步骤读到的是加权后的 df
-    ctx[src_key] = out
-    info["source_key"] = src_key
-    info["rows"] = int(len(out))
+    # 5) assemble debug
+    td = _resolve_trade_date(ctx)
+    dbg_all["trade_date"] = td
+    dbg_all["hot_boards_rows"] = int(len(hot_boards)) if isinstance(hot_boards, pd.DataFrame) else 0
+    dbg_all["hot_boards_cols"] = list(hot_boards.columns) if isinstance(hot_boards, pd.DataFrame) else []
+    dbg_all["industry_score_map"] = {
+        "ok": bool(dbg_map.get("ok")),
+        "reason": dbg_map.get("reason", ""),
+        "industry_col": dbg_map.get("industry_col", ""),
+        "rank_col": dbg_map.get("rank_col", ""),
+        "size": int(dbg_map.get("n", 0)) if dbg_map.get("ok") else 0,
+        "score_min": float(dbg_map.get("score_min", 0.0)),
+        "score_max": float(dbg_map.get("score_max", 0.0)),
+        "top5": dbg_map.get("top5", []),
+    }
 
-    # 额外写一点关键统计，方便你一眼判断“是不是全 0”
+    dbg_all["matched_industry_count"] = int(getattr(dbg_apply, "matched_industry_count", 0))
+    dbg_all["dragon_hits"] = int(getattr(dbg_apply, "dragon_hits", 0))
+    dbg_all["theme_boost_nonzero"] = int(getattr(dbg_apply, "theme_boost_nonzero", 0))
+
+    # 关键判断：为什么会“全是 0.08”
+    if dbg_all["matched_industry_count"] == 0 and dbg_all["dragon_hits"] > 0:
+        dbg_all["diagnosis"] = "industry heat NOT applied; only dragon bonus applied -> many 0.08"
+    elif dbg_all["matched_industry_count"] == 0 and dbg_all["dragon_hits"] == 0:
+        dbg_all["diagnosis"] = "both industry heat and dragon bonus NOT applied -> all 0"
+    else:
+        dbg_all["diagnosis"] = "industry heat applied (ok)"
+
+    ctx["theme_df"] = out_df
+    ctx["debug"]["step4_theme"] = dbg_all
+
+    # 6) best-effort write debug file
     try:
-        info["theme_nonzero"] = int((pd.to_numeric(out["题材加成"], errors="coerce").fillna(0.0) > 0).sum())
+        out_dir = _ensure_outputs_dir(ctx, s)
+        p = out_dir / f"debug_step4_theme_{td}.json"
+        p.write_text(json.dumps(dbg_all, ensure_ascii=False, indent=2), encoding="utf-8")
+        ctx["debug"]["step4_theme"]["debug_file"] = str(p)
     except Exception:
-        info["theme_nonzero"] = -1
+        # 不影响主链路
+        pass
 
-    dbg["step4"] = info
     return ctx
 
 
-# 便捷函数：给你本地/旁路调试用，不影响主线 import
-def run_step4_df(df: pd.DataFrame, ctx: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
-    return step4_theme_boost(df, ctx)
+def run_step4_theme_boost(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """兼容旧入口名（如果你的 main.py 曾经调用过这个）。"""
+    return run_step4(s, ctx)
