@@ -1,0 +1,45 @@
+{
+  "trade_date": "20260212",
+  "hot_boards_rows": 10,
+  "hot_boards_cols": [
+    "trade_date",
+    "industry",
+    "limit_up_count",
+    "rank"
+  ],
+  "industry_score_map": {
+    "ok": true,
+    "reason": "",
+    "industry_col": "industry",
+    "rank_col": "rank",
+    "size": 10,
+    "score_min": 0.0,
+    "score_max": 1.0,
+    "top5": [
+      [
+        "电气设备",
+        1.0
+      ],
+      [
+        "机械基件",
+        0.7946272018253463
+      ],
+      [
+        "专用机械",
+        0.6230854212758787
+      ],
+      [
+        "汽车配件",
+        0.479801681970459
+      ],
+      [
+        "通信设备",
+        0.36012104274902346
+      ]
+    ]
+  },
+  "matched_industry_count": 0,
+  "dragon_hits": 0,
+  "theme_boost_nonzero": 0,
+  "diagnosis": "both industry heat and dragon bonus NOT applied -> all 0"
+}
