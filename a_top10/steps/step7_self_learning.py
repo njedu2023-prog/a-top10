@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -46,19 +46,9 @@ def _parse_topn_codes(md_path: Path, topn: int) -> List[str]:
     return codes
 
 
-def _load_limit_codes(limit_csv: Path) -> List[str]:
-    p = Path(limit_csv)
-    if not p.exists():
+def _limit_codes_from_df(df: pd.DataFrame) -> List[str]:
+    if df is None or df.empty:
         return []
-
-    try:
-        df = pd.read_csv(p, dtype=str, encoding="utf-8")
-    except Exception:
-        try:
-            df = pd.read_csv(p, dtype=str, encoding="gbk")
-        except Exception:
-            return []
-
     df = _normalize_id_columns(df)
     ts_col = _get_ts_code_col(df)
     if ts_col is None or ts_col not in df.columns:
@@ -72,6 +62,26 @@ def _load_limit_codes(limit_csv: Path) -> List[str]:
         vals.append(v)
         vals.append(_to_nosuffix(v))
     return vals
+
+
+def _load_limit_codes(limit_csv: Path) -> List[str]:
+    """
+    兼容旧逻辑：如果仍传入 CSV 路径，则从文件读取。
+    新逻辑优先走 DataRepo.read_limit_list(next_d) 直接拿 DataFrame。
+    """
+    p = Path(limit_csv)
+    if not p.exists():
+        return []
+
+    try:
+        df = pd.read_csv(p, dtype=str, encoding="utf-8")
+    except Exception:
+        try:
+            df = pd.read_csv(p, dtype=str, encoding="gbk")
+        except Exception:
+            return []
+
+    return _limit_codes_from_df(df)
 
 
 def _dedup_history(df: pd.DataFrame) -> pd.DataFrame:
@@ -100,7 +110,7 @@ def run_step7_self_learning(s: Settings, lookback: int = 150, evaluate_days: int
 
     data.sort(key=lambda x: x[0])
 
-    metrics: Dict = {
+    metrics: Dict[str, Any] = {
         "ok": bool(model_info.get("ok")),
         "lookback": int(lookback),
         "outputs_files": int(len(data)),
@@ -116,7 +126,7 @@ def run_step7_self_learning(s: Settings, lookback: int = 150, evaluate_days: int
         return metrics
 
     topn = int(getattr(s.io, "topn", 10))
-    records: List[Dict] = []
+    records: List[Dict[str, Any]] = []
 
     for i in range(len(data) - 1):
         d, md_path = data[i]
@@ -126,9 +136,16 @@ def run_step7_self_learning(s: Settings, lookback: int = 150, evaluate_days: int
         if not codes:
             continue
 
-        limit_csv = Path(s.data_repo.path_limit_list(next_d))
-        limit_codes = set(_load_limit_codes(limit_csv))
+        # ✅ 修复点：DataRepo 没有 path_limit_list()，应使用 read_limit_list()
+        try:
+            df_limit = s.data_repo.read_limit_list(next_d)  # type: ignore[attr-defined]
+        except Exception:
+            df_limit = pd.DataFrame()
+
+        limit_codes = set(_limit_codes_from_df(df_limit))
         if not limit_codes:
+            # 兜底：如果 read_limit_list 异常或返回空，允许未来用文件路径方案（不影响主流程）
+            # 但这里不再调用不存在的 path_limit_list
             continue
 
         hits = [1 if (c in limit_codes or _to_nosuffix(c) in limit_codes) else 0 for c in codes]
