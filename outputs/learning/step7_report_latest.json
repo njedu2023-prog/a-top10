@@ -17,5 +17,8 @@
     }
   },
   "hit_rate_last_days": 6,
-  "hit_rate_last": 0.18333333333333335
+  "hit_rate_last": 0.18333333333333335,
+  "hit_cnt_last": 11,
+  "hit_rate_total": 0.18333333333333335,
+  "hit_cnt_total": 11
 }
