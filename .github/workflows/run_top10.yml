@@ -152,9 +152,9 @@ jobs:
           set -euo pipefail
           echo "Running engine with TRADE_DATE=$TRADE_DATE"
           if [ -f "run.py" ]; then
-            python run.py
+            python run.py && python -m a_top10.steps.step7_self_learning
           else
-            python -m a_top10
+            python -m a_top10 && python -m a_top10.steps.step7_self_learning
           fi
 
       - name: Commit & push outputs (if changed)
