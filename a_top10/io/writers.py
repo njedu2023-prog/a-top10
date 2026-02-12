@@ -305,44 +305,133 @@ def _topN_to_hit_df(topN_df: Optional[pd.DataFrame], limit_df: pd.DataFrame) -> 
     return df, metrics
 
 
+def _list_trade_dates(settings) -> List[str]:
+    """
+    用 DataRepo 自带 list_snapshot_dates 作为交易日历（最稳）。
+    找不到就兜底用已有 outputs 文件名推断。
+    """
+    dates: List[str] = []
+    dr = getattr(settings, "data_repo", None)
+    if dr is not None:
+        fn = getattr(dr, "list_snapshot_dates", None)
+        if callable(fn):
+            try:
+                dates = list(fn()) or []
+            except Exception:
+                pass
+    return sorted([d for d in dates if isinstance(d, str) and len(d) == 8 and d.isdigit()])
+
+
+def _prev_next_trade_date(calendar: List[str], trade_date: str) -> Tuple[str, str]:
+    if calendar and trade_date in calendar:
+        i = calendar.index(trade_date)
+        prev_td = calendar[i - 1] if i - 1 >= 0 else ""
+        next_td = calendar[i + 1] if i + 1 < len(calendar) else ""
+        return prev_td, next_td
+
+    # 兜底：不懂交易日历就返回空（不要乱加日期，避免误导）
+    return "", ""
+
+
+def _load_json_topN(outdir: Path, td: str) -> Optional[pd.DataFrame]:
+    p = outdir / f"predict_top10_{td}.json"
+    if not p.exists():
+        return None
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    top = payload.get("topN") or payload.get("topn") or []
+    return _to_df(top)
+
+
+def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """
+    筛出当日涨停股，并输出 StrengthScore / ThemeBoost / board（强度列表）
+    都来自主程序字段，writer 只做 join/filter。
+    """
+    if limit_df is None or limit_df.empty:
+        return None
+
+    lcode = _first_existing_col(limit_df, CODE_COL_CANDIDATES)
+    if not lcode:
+        return None
+
+    # 如果 full_df 不存在，尽量用 limit_df 自身输出
+    if full_df is None or full_df.empty:
+        df = limit_df[[lcode]].copy()
+        df["板块"] = ""
+        return df.rename(columns={lcode: "ts_code"})
+
+    fcode = _first_existing_col(full_df, CODE_COL_CANDIDATES)
+    if not fcode:
+        return None
+
+    l = limit_df[[lcode]].copy()
+    f = full_df.copy()
+
+    if lcode != "ts_code":
+        l["ts_code"] = l[lcode]
+    if fcode != "ts_code":
+        f["ts_code"] = f[fcode]
+
+    # 优先用 StrengthScore 作为强度排序，其次 score 再其次 prob
+    sort_cols = []
+    if "StrengthScore" in f.columns:
+        sort_cols = ["StrengthScore"]
+    elif "score" in f.columns:
+        sort_cols = ["score"]
+    elif "prob" in f.columns:
+        sort_cols = ["prob"]
+
+    # merge
+    m = pd.merge(l[["ts_code"]], f, on="ts_code", how="left")
+
+    # 结果输出必要列
+    # 保证 name 列存在（给 _df_to_md_table 重命名）
+    if "name" not in m.columns and _first_existing_col(m, NAME_COL_CANDIDATES):
+        m["name"] = m[_first_existing_col(m, NAME_COL_CANDIDATES)]
+    if "板块" not in m.columns and _first_existing_col(m, BOARD_COL_CANDIDATES):
+        m["板块"] = m[_first_existing_col(m, BOARD_COL_CANDIDATES)]
+
+    if sort_cols:
+        m = m.sort_values(by=sort_cols, ascending=False)
+
+    return m
+
+
 def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.DataFrame:
+    """
+    近10日命中率口径：predict_date -> next_trade_date 的 limit_list。
+    """
+    calendar = _list_trade_dates(settings)
     files = sorted(outdir.glob("predict_top10_*.json"), key=lambda p: p.name, reverse=True)
     rows: List[Dict[str, Any]] = []
+
     for f in files:
         m = re.match(r"predict_top10_(\d{8})\.json", f.name)
         if not m:
             continue
         d = m.group(1)
-        try:
-            payload = json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
+
+        _, next_td = _prev_next_trade_date(calendar, d)
+        if not next_td:
+            # 如果没有 next_td，无法验证命中，就跳过
             continue
 
-        metrics = payload.get("metrics") if isinstance(payload, dict) else None
+        topN_df = _load_json_topN(outdir, d)
+        ldf = _load_limit_df(settings, ctx, next_td)
+        hit_df, mres = _topN_to_hit_df(topN_df, ldf)
 
-        hit_count = None
-        top_count = None
-        limit_count = None
-        hit_rate = None
-
-        if isinstance(metrics, dict):
-            hit_count = metrics.get("hit_count")
-            top_count = metrics.get("top_count")
-            limit_count = metrics.get("limit_count")
-            hit_rate = metrics.get("hit_rate")
-
-        if hit_count is None or top_count is None:
-            top = payload.get("topN") or payload.get("topn") or []
-            tdf = _to_df(top)
-            ldf = _load_limit_df(settings, ctx, d)
-            hit_df, mres = _topN_to_hit_df(tdf, ldf)
-            hit_count = mres.get("hit_count")
-            top_count = mres.get("top_count")
-            limit_count = mres.get("limit_count")
-            hit_rate = mres.get("hit_rate")
+        hit_count = mres.get("hit_count")
+        top_count = mres.get("top_count")
+        limit_count = mres.get("limit_count")
+        hit_rate = mres.get("hit_rate")
 
         if hit_count is None or top_count is None:
             continue
+
         rows.append({
             "日期": d,
             "命中数": int(hit_count),
@@ -378,18 +467,25 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     topN_df = _to_df(topN_df)
     full_df = _to_df(full_df)
 
-    # compute hit
-    limit_df = _load_limit_df(settings, ctx, trade_date)
-    hit_df, metrics = _topN_to_hit_df(topN_df, limit_df)
+    # trade calendar
+    calendar = _list_trade_dates(settings)
+    prev_td, next_td = _prev_next_trade_date(calendar, trade_date)
 
-    # JSON
+    # 本日 limit_list（用于第2块验证命中；第3块强度列表）
+    limit_df_current = _load_limit_df(settings, ctx, trade_date)
+
+    # JSON payload：保持兼容，不大动 payload 结构（metrics 仍按“预测日验证预测日”的旧口径）
+    hit_df_same_day, metrics_same_day = _topN_to_hit_df(topN_df, limit_df_current)
+
     payload: Dict[str, Any] = {
         "trade_date": trade_date,
+        "verify_date": next_td,  # 下一交易日：预测目标日（report 第1块标题里的那个）
         "gate": gate,
         "topN": [] if topN_df is None else topN_df.to_dict(orient="records"),
         "full": [] if full_df is None else full_df.to_dict(orient="records"),
         "learn": learn,
-        "metrics": metrics,
+        "metrics": metrics_same_day,  # 保持原字段用途
+        "metrics_same_day": metrics_same_day,
     }
 
     json_path = outdir / f"predict_top10_{trade_date}.json"
@@ -398,9 +494,15 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         encoding="utf-8",
     )
 
-    # Markdown
+    # Markdown（你要的四块中文标题）
     md_path = outdir / f"predict_top10_{trade_date}.md"
-    lines = [f"# Top10 Prediction ({trade_date})\n"]
+    lines = [f"# {trade_date} 预测报告\n"]
+
+    # 第1块：预测（trade_date -> next_td）
+    if next_td:
+        lines.append(f"## 《{trade_date} 预测：{next_td} 涨停 TOP 10》\n")
+    else:
+        lines.append(f"## 《{trade_date} 预测：下一交易日 涨停 TOP 10》\n")
 
     if topN_df is None or topN_df.empty:
         reason = ""
@@ -411,61 +513,44 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
                     reason = f"（{r}）"
         except Exception:
             pass
-        lines.append(f"⚠️ Gate 未通过，Top10 为空。{reason}\n")
+        lines.append(f"⚠️ Gate 未通过，Top10 为空。{reason}\n\n")
     else:
-        lines.append("## ✅ 收盘命中检查\n")
-        lines.append(_df_to_md_table(hit_df, cols=["ts_code", "name", "prob", "命中", "板块"]))
+        lines.append(_df_to_md_table(
+            topN_df,
+            cols=["rank", "ts_code", "name", "prob", "StrengthScore", "ThemeBoost", "board"],
+        ))
         lines.append("\n")
 
-    # limit list
-    lines.append("### 当日涨停标的（limit_list）\n")
-    if limit_df is None or limit_df.empty:
-        lines.append("(未能找到 limit_list_d.csv)\n\n")
+    # 第2块：命中情况（prev_td -> trade_date）
+    if prev_td:
+        lines.append(f"## 《{prev_td} 预测：{trade_date} 命中情况》\n")
+        prev_topN_df = _load_json_topN(outdir, prev_td)
+        prev_hit_df, prev_metrics = _topN_to_hit_df(prev_topN_df, limit_df_current)
+        if prev_topN_df is None or prev_topN_df.empty:
+            lines.append("（未找到上一交易日预测文件或上一交易日 Top10 为空）\n\n")
+        else:
+            lines.append(_df_to_md_table(prev_hit_df, cols=["ts_code", "name", "prob", "命中", "板块"]))
+            lines.append("\n")
     else:
-        code_col = _first_existing_col(limit_df, CODE_COL_CANDIDATES) or "ts_code"
-        show = limit_df[[code_col]].head(30).copy()
-        lines.append(_df_to_md_table(show, cols=[code_col]))
+        lines.append(f"## 《上一交易日预测：{trade_date} 命中情况》\n（找不到上一交易日）\n\n")
+
+    # 第3块：强度列表（trade_date 所有涨停）
+    lines.append(f"## 《{trade_date} 所有涨停股票的强度列表》\n")
+    strength_limit_df = _join_limit_strength(limit_df_current, full_df)
+    if strength_limit_df is None or strength_limit_df.empty:
+        lines.append("(未能生成强度列表：limit_list 或 full_df 空)\n\n")
+    else:
+        lines.append(_df_to_md_table(
+            strength_limit_df,
+            cols=["ts_code", "name", "StrengthScore", "ThemeBoost", "board"],
+        ))
         lines.append("\n")
 
-    # history
+    # 第4块：近10日命中率（predict_date -> next_trade_date 验证日）
     hist_df = _recent_hit_history(outdir, settings, ctx, max_days=10)
     if hist_df is not None and not hist_df.empty:
-        lines.append("## 📈 最近10日 Top10 命中率\n")
+        lines.append("## 《近10日 Top10 命中率》\n")
         lines.append(_df_to_md_table(hist_df, cols=["日期", "命中数", "命中率", "当日涨停家数"]))
-        lines.append("\n")
-
-    # full ranking
-    if full_df is not None and not full_df.empty:
-        lines.append("## 📊 Full Ranking (All Candidates After Step6)\n")
-        full_sorted = full_df.copy()
-        try:
-            if "_score" in full_sorted.columns:
-                full_sorted = full_sorted.sort_values(
-                    by=["_score", "_prob"] if "_prob" in full_sorted.columns else ["_score"],
-                    ascending=False,
-                )
-            elif "score" in full_sorted.columns:
-                full_sorted = full_sorted.sort_values(
-                    by=["score", "prob"] if "prob" in full_sorted.columns else ["score"],
-                    ascending=False,
-                )
-            elif "prob" in full_sorted.columns:
-                full_sorted = full_sorted.sort_values(by=["prob"], ascending=False)
-        except Exception:
-            pass
-
-        full_sorted = full_sorted.head(50)
-        display_cols = [
-            "rank",
-            "ts_code",
-            "name",
-            "score",
-            "prob",
-            "StrengthScore",
-            "ThemeBoost",
-            "board",
-        ]
-        lines.append(_df_to_md_table(full_sorted, cols=display_cols))
         lines.append("\n")
 
     md_path.write_text("\n".join(lines), encoding="utf-8")
