@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, List
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -323,14 +324,40 @@ def _list_trade_dates(settings) -> List[str]:
 
 
 def _prev_next_trade_date(calendar: List[str], trade_date: str) -> Tuple[str, str]:
+    """只按已存在的交易日历计算上下交易日"""
     if calendar and trade_date in calendar:
         i = calendar.index(trade_date)
         prev_td = calendar[i - 1] if i - 1 >= 0 else ""
         next_td = calendar[i + 1] if i + 1 < len(calendar) else ""
         return prev_td, next_td
-
-    # 兜底：不懂交易日历就返回空（不要乱加日期，避免误导）
     return "", ""
+
+
+def _prev_next_trade_date_with_fallback(calendar: List[str], trade_date: str) -> Tuple[str, str]:
+    """用于报告显示：next_td 可以用工作日规则兜底出来"""
+    prev_td, next_td = _prev_next_trade_date(calendar, trade_date)
+    if prev_td and next_td:
+        return prev_td, next_td
+
+    try:
+        d = datetime.strptime(trade_date, "%Y%m%d")
+    except Exception:
+        return prev_td or "", next_td or ""
+
+    prev_d = d - timedelta(days=1)
+    while prev_d.weekday() >= 5:
+        prev_d -= timedelta(days=1)
+
+    next_d = d + timedelta(days=1)
+    while next_d.weekday() >= 5:
+        next_d += timedelta(days=1)
+
+    if not prev_td:
+        prev_td = prev_d.strftime("%Y%m%d")
+    if not next_td:
+        next_td = next_d.strftime("%Y%m%d")
+
+    return prev_td, next_td
 
 
 def _load_json_topN(outdir: Path, td: str) -> Optional[pd.DataFrame]:
@@ -404,6 +431,8 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
 def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.DataFrame:
     """
     近10日命中率口径：predict_date -> next_trade_date 的 limit_list。
+
+    注意：latest（未来没有 next_td 的）会被跳过，避免用空 limit_list 得出误导 0。
     """
     calendar = _list_trade_dates(settings)
     files = sorted(outdir.glob("predict_top10_*.json"), key=lambda p: p.name, reverse=True)
@@ -417,7 +446,6 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
 
         _, next_td = _prev_next_trade_date(calendar, d)
         if not next_td:
-            # 如果没有 next_td，无法验证命中，就跳过
             continue
 
         topN_df = _load_json_topN(outdir, d)
@@ -469,7 +497,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
     # trade calendar
     calendar = _list_trade_dates(settings)
-    prev_td, next_td = _prev_next_trade_date(calendar, trade_date)
+    prev_td, next_td = _prev_next_trade_date_with_fallback(calendar, trade_date)
 
     # 本日 limit_list（用于第2块验证命中；第3块强度列表）
     limit_df_current = _load_limit_df(settings, ctx, trade_date)
@@ -484,7 +512,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         "topN": [] if topN_df is None else topN_df.to_dict(orient="records"),
         "full": [] if full_df is None else full_df.to_dict(orient="records"),
         "learn": learn,
-        "metrics": metrics_same_day,  # 保持原字段用途
+        "metrics": metrics_same_day,
         "metrics_same_day": metrics_same_day,
     }
 
@@ -499,10 +527,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     lines = [f"# {trade_date} 预测报告\n"]
 
     # 第1块：预测（trade_date -> next_td）
-    if next_td:
-        lines.append(f"## 《{trade_date} 预测：{next_td} 涨停 TOP 10》\n")
-    else:
-        lines.append(f"## 《{trade_date} 预测：下一交易日 涨停 TOP 10》\n")
+    lines.append(f"## 《{trade_date} 预测：{next_td} 涨停 TOP 10》\n")
 
     if topN_df is None or topN_df.empty:
         reason = ""
@@ -522,17 +547,14 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         lines.append("\n")
 
     # 第2块：命中情况（prev_td -> trade_date）
-    if prev_td:
-        lines.append(f"## 《{prev_td} 预测：{trade_date} 命中情况》\n")
-        prev_topN_df = _load_json_topN(outdir, prev_td)
-        prev_hit_df, prev_metrics = _topN_to_hit_df(prev_topN_df, limit_df_current)
-        if prev_topN_df is None or prev_topN_df.empty:
-            lines.append("（未找到上一交易日预测文件或上一交易日 Top10 为空）\n\n")
-        else:
-            lines.append(_df_to_md_table(prev_hit_df, cols=["ts_code", "name", "prob", "命中", "板块"]))
-            lines.append("\n")
+    lines.append(f"## 《{prev_td} 预测：{trade_date} 命中情况》\n")
+    prev_topN_df = _load_json_topN(outdir, prev_td)
+    prev_hit_df, prev_metrics = _topN_to_hit_df(prev_topN_df, limit_df_current)
+    if prev_topN_df is None or prev_topN_df.empty:
+        lines.append("（未找到上一交易日预测文件或上一交易日 Top10 为空）\n\n")
     else:
-        lines.append(f"## 《上一交易日预测：{trade_date} 命中情况》\n（找不到上一交易日）\n\n")
+        lines.append(_df_to_md_table(prev_hit_df, cols=["ts_code", "name", "prob", "命中", "板块"]))
+        lines.append("\n")
 
     # 第3块：强度列表（trade_date 所有涨停）
     lines.append(f"## 《{trade_date} 所有涨停股票的强度列表》\n")
