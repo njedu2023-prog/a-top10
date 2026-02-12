@@ -179,7 +179,7 @@ def run_step7_self_learning(s: Settings, lookback: int = 150, evaluate_days: int
 
     if not df_all.empty:
         metrics["hit_rate_last_days"] = int(min(evaluate_days, len(df_all)))
-        metrics["hit_rate_last"] = float(df_all["hit_rate"].tail(evaluate_days).mean())
+        metrics["hit_rate_last"] = float(df_all["hit_rate"].tail(evaluate_days).mean()); metrics["hit_cnt_last"] = int(df_all["hit_cnt"].tail(evaluate_days).sum()); metrics["hit_rate_total"] = float(df_all["hit_rate"].mean()); metrics["hit_cnt_total"] = int(df_all["hit_cnt"].sum())
 
     report_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
     return metrics
