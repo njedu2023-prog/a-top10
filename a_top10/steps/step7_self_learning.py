@@ -87,7 +87,7 @@ def _load_limit_codes(limit_csv: Path) -> List[str]:
 def _dedup_history(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
-    df = df.copy()
+    df = df.copy(); df["trade_date"] = df["trade_date"].astype(str); df["next_trade_date"] = df["next_trade_date"].astype(str)
     df = df.sort_values(["trade_date", "next_trade_date"]).drop_duplicates(
         subset=["trade_date", "next_trade_date"], keep="last"
     )
