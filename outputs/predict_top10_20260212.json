@@ -188,7 +188,7 @@
       "score_netflow": 0.5,
       "turnover_rate": 5.0,
       "score_turnover": 0.375,
-      "score_lhb": 0.8666062730850514,
+      "score_lhb": 0.8666062730850513,
       "score_size": 1.0,
       "StrengthScore": 79.53180215646721,
       "ThemeBoost": 0.0,
@@ -625,8 +625,8 @@
       "_emotion_factor": 1.0,
       "_strength01": 0.7023057908189504,
       "_theme01": 0.0,
-      "_base_score": 0.03317393662285438,
-      "_score": 0.03317393662285438,
+      "_base_score": 0.03317393662285439,
+      "_score": 0.03317393662285439,
       "rank": 13
     },
     {
@@ -719,10 +719,10 @@
       "ThemeBoost": 0.0,
       "seal_amount": 0.0,
       "open_times": 0.0,
-      "Probability": 0.6964856576973608,
+      "Probability": 0.6964856576973607,
       "_prob_src": "pseudo",
       "board": "",
-      "_prob": 0.6964856576973608,
+      "_prob": 0.6964856576973607,
       "_strength": 66.30152794249024,
       "_theme": 0.0,
       "_st_flag": 0.0,
@@ -905,8 +905,8 @@
       "_emotion_factor": 1.0,
       "_strength01": 0.6420175481852423,
       "_theme01": 0.0,
-      "_base_score": 0.0317996397035297,
-      "_score": 0.0317996397035297,
+      "_base_score": 0.031799639703529704,
+      "_score": 0.031799639703529704,
       "rank": 21
     },
     {
@@ -1220,8 +1220,8 @@
       "_emotion_factor": 1.0,
       "_strength01": 0.6171006670732178,
       "_theme01": 0.0,
-      "_base_score": 0.031216139409365424,
-      "_score": 0.031216139409365424,
+      "_base_score": 0.031216139409365427,
+      "_score": 0.031216139409365427,
       "rank": 30
     },
     {
@@ -1407,7 +1407,7 @@
       "float_values": NaN,
       "l_amount": 0.0,
       "amount_rate": NaN,
-      "score_momentum": 0.9111534014291118,
+      "score_momentum": 0.9111534014291117,
       "score_amount": 0.576190166949366,
       "net_amount": 0.0,
       "score_netflow": 0.5,
@@ -1605,8 +1605,8 @@
       "_emotion_factor": 1.0,
       "_strength01": 0.5972079274004172,
       "_theme01": 0.0,
-      "_base_score": 0.030743324284879584,
-      "_score": 0.030743324284879584,
+      "_base_score": 0.03074332428487958,
+      "_score": 0.03074332428487958,
       "rank": 41
     },
     {
@@ -1682,5 +1682,11 @@
   ],
   "learn": {
     "updated": false
+  },
+  "metrics": {
+    "hit_count": 10,
+    "top_count": 10,
+    "limit_count": 92,
+    "hit_rate": "100%"
   }
 }
