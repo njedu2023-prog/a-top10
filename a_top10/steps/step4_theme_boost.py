@@ -38,13 +38,13 @@ INDUSTRY_COL_CANDIDATES = [
     "行业名称",
 ]
 
-CODE_COL_CANDIDATES = ["ts_code", "code", "TS_CODE", "股票代码", "证券代码"]
+CODE_COL_CANDIDATES = ["ts_code", "code", "TS_CODE", "股票代码", "证券代码",  "代码"]
 
 HOT_BOARDS_INDUSTRY_COLS = ["industry", "industry_name", "行业", "板块", "板块名称", "行业名称"]
 HOT_BOARDS_RANK_COLS = ["rank", "Rank", "排名", "hot_rank", "热度排名"]
 
 # 龙虎榜：若 ctx 有 top_list（或 snap/top_list.csv），命中则加分
-DRAGON_CODE_COLS = ["ts_code", "code", "TS_CODE", "股票代码", "证券代码"]
+DRAGON_CODE_COLS = ["ts_code", "code", "TS_CODE", "股票代码", "证券代码",  "代码"]
 
 # 默认龙虎榜加成（你现在看到的 0.08 就是它）
 DEFAULT_DRAGON_BONUS = 0.08
@@ -324,6 +324,23 @@ def _apply_industry_and_dragon(
     ind_col = _first_existing_col(out, INDUSTRY_COL_CANDIDATES)
     if not ind_col and stock_basic is not None and not stock_basic.empty:
         sb_code_col = _first_existing_col(stock_basic, CODE_COL_CANDIDATES)
+         try:
+        snap_dir = _ctx_get_path(ctx, ["snapshot_dir", "snapshot_dir", "snapshot"])
+    except Exception:
+        snap_dir = None
+    if snap_dir is None:
+        snap_dir = Path(getattr(s.io, "snapshot_dir", getattr(s.io, "snapshot", getattr(s.io, "snapshot_dir", "outputs"))))
+    try:
+        Path(snap_dir).mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        theme_df = ctx.get("theme_df")
+        if theme_df is not None:
+            theme_df.to_csv(Path(snap_dir) / "step4_theme.csv", index=False)
+    except Exception:
+        pass
+
         sb_ind_col = _first_existing_col(stock_basic, INDUSTRY_COL_CANDIDATES)
         if sb_code_col and sb_ind_col:
             tmp = stock_basic[[sb_code_col, sb_ind_col]].copy()
