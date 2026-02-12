@@ -174,4 +174,4 @@ jobs:
 
           git add -A
           git commit -m "auto: run top10 ${{ steps.resolve_date.outputs.trade_date }}"
-          git push
+          git pull --rebase origin main && git push
