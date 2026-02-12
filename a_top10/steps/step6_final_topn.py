@@ -213,14 +213,14 @@ def run_step6_final_topn(df: pd.DataFrame, s=None) -> Dict[str, pd.DataFrame]:
     # -------------------------------------------------------
     dedup = bool(_get_setting(s, ["dedup_by_ts_code", "DEDUP_BY_TS_CODE"], True))
     if dedup and ts_col in out.columns:
-        out.sort_values(["_score", "_prob", "_strength"], ascending=False, inplace=True)
+        out.sort_values(["_prob", "_strength", "_score"], ascending=False, inplace=True)
         out = out.drop_duplicates(subset=[ts_col], keep="first").copy()
 
     # -------------------------------------------------------
     # ⑨ full 排序（tie-break 更稳定）
     # -------------------------------------------------------
     full_sorted = out.sort_values(
-        ["_score", "_prob", "_strength", "_theme"],
+        ["_prob", "_strength", "_theme", "_score"],
         ascending=False
     ).copy()
     full_sorted.reset_index(drop=True, inplace=True)
