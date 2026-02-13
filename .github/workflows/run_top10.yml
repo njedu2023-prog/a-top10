@@ -158,7 +158,177 @@ jobs:
             python -m a_top10 && python -m a_top10.steps.step7_self_learning
           fi
 
-      - name: Commit & push outputs (if changed)
+      # =====================================================
+      # P1: Debug Report (machine + human) — ALWAYS run
+      # - 每次 run 生成新文件（带 run_id）
+      # - 同时覆盖 latest 固定入口（step_health.md / run_meta.json）
+      # =====================================================
+      - name: Generate Debug Reports (always)
+        if: always()
+        shell: bash
+        env:
+          TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p outputs/debug
+
+          RUN_ID="${{ github.run_id }}"
+          RUN_NUM="${{ github.run_number }}"
+          SHA="${{ github.sha }}"
+          REF="${{ github.ref }}"
+          WF="${{ github.workflow }}"
+          JOB="${{ github.job }}"
+          ACTOR="${{ github.actor }}"
+          EVENT="${{ github.event_name }}"
+          REPO="${{ github.repository }}"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # ---- machine readable: run_meta_<run_id>.json + run_meta.json(latest) ----
+          python - << 'PY'
+          import json, os, pathlib, datetime, platform
+
+          out_dir = pathlib.Path("outputs/debug")
+          out_dir.mkdir(parents=True, exist_ok=True)
+
+          run_id = os.environ.get("RUN_ID","")
+          meta = {
+            "schema": "a-top10.debug.run_meta.v1",
+            "trade_date": os.environ.get("TRADE_DATE",""),
+            "run_id": run_id,
+            "run_number": os.environ.get("RUN_NUM",""),
+            "repo": os.environ.get("REPO",""),
+            "workflow": os.environ.get("WF",""),
+            "job": os.environ.get("JOB",""),
+            "ref": os.environ.get("REF",""),
+            "sha": os.environ.get("SHA",""),
+            "actor": os.environ.get("ACTOR",""),
+            "event": os.environ.get("EVENT",""),
+            "run_url": os.environ.get("RUN_URL",""),
+            "utc_time": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+          }
+
+          p_unique = out_dir / f"run_meta_{run_id}.json"
+          p_latest = out_dir / "run_meta.json"
+          p_unique.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+          p_latest.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+          print("Wrote:", p_unique, p_latest)
+          PY
+          # 传 env 给上面的 python
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUM: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+          WF: ${{ github.workflow }}
+          JOB: ${{ github.job }}
+          ACTOR: ${{ github.actor }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Generate Step Health (always)
+        if: always()
+        shell: bash
+        env:
+          TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p outputs/debug
+
+          RUN_ID="${{ github.run_id }}"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TD="${TRADE_DATE}"
+          YEAR="${TD:0:4}"
+          SNAP_DIR="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${YEAR}/${TD}"
+
+          HEALTH_UNIQ="outputs/debug/step_health_${RUN_ID}.md"
+          HEALTH_LATEST="outputs/debug/step_health.md"
+
+          {
+            echo "# Step Health Report"
+            echo ""
+            echo "- trade_date: **${TD}**"
+            echo "- run_id: **${RUN_ID}**"
+            echo "- run_url: ${RUN_URL}"
+            echo "- sha: **${{ github.sha }}**"
+            echo "- ref: **${{ github.ref }}**"
+            echo ""
+            echo "## 1) 数据仓库快照（warehouse）"
+            echo ""
+            echo "- snapshot_dir: \`${SNAP_DIR}\`"
+            if [ -d "$SNAP_DIR" ]; then
+              echo "- snapshot_dir_exists: ✅"
+              echo ""
+              echo "### snapshot files"
+              echo ""
+              echo '```text'
+              ls -la "$SNAP_DIR" || true
+              echo '```'
+            else
+              echo "- snapshot_dir_exists: ❌"
+              echo ""
+            fi
+
+            echo "## 2) 输出目录（outputs）"
+            echo ""
+            echo "### outputs tree (top)"
+            echo ""
+            echo '```text'
+            ls -la outputs || true
+            echo '```'
+            echo ""
+
+            echo "## 3) 关键产物检查"
+            echo ""
+            for f in \
+              "outputs/predict_top10_${TD}.md" \
+              "outputs/predict_top10_${TD}.json" \
+              "outputs/latest.md" \
+              "outputs/debug_step4_theme_${TD}.json"
+            do
+              if [ -f "$f" ]; then
+                echo "- ✅ exists: \`$f\` (size=$(wc -c <"$f" 2>/dev/null || echo 0))"
+              else
+                echo "- ❌ missing: \`$f\`"
+              fi
+            done
+            echo ""
+
+            echo "## 4) Step7 自学习（learning）目录"
+            echo ""
+            if [ -d "outputs/learning" ]; then
+              echo "- outputs/learning: ✅"
+              echo ""
+              echo '```text'
+              ls -la outputs/learning || true
+              echo '```'
+            else
+              echo "- outputs/learning: ❌"
+            fi
+            echo ""
+
+            echo "## 5) 结论（你应该先看这一段）"
+            echo ""
+            if [ ! -d "$SNAP_DIR" ]; then
+              echo "- 当前 run 失败/异常的首要可能：**快照目录不存在或未下载成功**"
+              echo "- 建议：先看 Actions 日志里 Download step 的 curl 是否 404/403"
+            else
+              echo "- 快照目录存在：✅"
+              echo "- 若仍失败：优先看 **Run Top10 Engine** step 的 traceback"
+            fi
+          } > "$HEALTH_UNIQ"
+
+          cp -f "$HEALTH_UNIQ" "$HEALTH_LATEST"
+
+          echo "Wrote:"
+          ls -lh "$HEALTH_UNIQ" "$HEALTH_LATEST"
+
+      - name: Commit & push outputs (always)
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -174,5 +344,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add -A
-          git commit -m "auto: run top10 ${{ steps.resolve_date.outputs.trade_date }}"
-          git pull --rebase origin main && git push
+
+          # commit message 带 trade_date + run_id，方便追溯
+          td="${{ steps.resolve_date.outputs.trade_date }}"
+          rid="${{ github.run_id }}"
+          git commit -m "auto: run top10 ${td} (run=${rid})" || true
+
+          # 不让 rebase/push 失败导致整个 job 失败（debug 产物已生成）
+          git pull --rebase origin main || true
+          git push || true
