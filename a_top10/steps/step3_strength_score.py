@@ -20,6 +20,7 @@ Step3: Strength Score (方案A)
 from __future__ import annotations
 
 from typing import Iterable, Optional
+
 import numpy as np
 import pandas as pd
 
@@ -39,20 +40,27 @@ def _to_float_series(df: pd.DataFrame, col: Optional[str], default: float = 0.0)
     if not col or col not in df.columns:
         return pd.Series([default] * len(df), index=df.index, dtype="float64")
     s = pd.to_numeric(df[col], errors="coerce").astype("float64")
-    s = s.fillna(default)
-    return s
+    return s.fillna(default)
 
 
-def _clip01(x: pd.Series | np.ndarray) -> pd.Series:
-    return pd.Series(np.clip(np.asarray(x, dtype="float64"), 0.0, 1.0), index=getattr(x, "index", None))
+def _clip01(x) -> pd.Series:
+    """把输入压到 0~1，保持 index（如果有）"""
+    if isinstance(x, pd.Series):
+        arr = x.to_numpy(dtype="float64", copy=False)
+        return pd.Series(np.clip(arr, 0.0, 1.0), index=x.index, dtype="float64")
+    arr = np.asarray(x, dtype="float64")
+    return pd.Series(np.clip(arr, 0.0, 1.0), dtype="float64")
 
 
 def _winsorize(s: pd.Series, lower_q: float = 0.02, upper_q: float = 0.98) -> pd.Series:
     """分位截尾，减少极端值影响"""
-    if len(s) == 0:
+    if s is None or len(s) == 0:
         return s
-    lo = float(s.quantile(lower_q))
-    hi = float(s.quantile(upper_q))
+    s2 = s.replace([np.inf, -np.inf], np.nan).dropna()
+    if len(s2) == 0:
+        return s.fillna(0.0)
+    lo = float(s2.quantile(lower_q))
+    hi = float(s2.quantile(upper_q))
     return s.clip(lo, hi)
 
 
@@ -61,11 +69,16 @@ def _robust_minmax(s: pd.Series, lower_q: float = 0.05, upper_q: float = 0.95) -
     稳健 MinMax：先按分位截尾，再映射到 0~1
     - 对长尾更稳健
     """
+    if s is None or len(s) == 0:
+        return pd.Series([], dtype="float64")
+
+    s = s.astype("float64").replace([np.inf, -np.inf], np.nan).fillna(0.0)
     s2 = _winsorize(s, lower_q, upper_q)
+
     lo = float(s2.min())
     hi = float(s2.max())
-    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-        return pd.Series([0.0] * len(s), index=s.index, dtype="float64")
+    if (not np.isfinite(lo)) or (not np.isfinite(hi)) or hi <= lo:
+        return pd.Series([0.0] * len(s2), index=s2.index, dtype="float64")
     return (s2 - lo) / (hi - lo)
 
 
@@ -76,21 +89,54 @@ def _logistic01(s: pd.Series, center: float, scale: float) -> pd.Series:
     - scale: 越小越陡（需要 >0）
     """
     scale = max(float(scale), 1e-9)
-    x = (s - float(center)) / scale
-    # 防溢出保护
-    x = x.clip(-60, 60)
-    return pd.Series(1.0 / (1.0 + np.exp(-x)), index=s.index, dtype="float64")
+    x = (s.astype("float64") - float(center)) / scale
+    x = x.replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(-60, 60)
+    return pd.Series(1.0 / (1.0 + np.exp(-x.to_numpy(dtype="float64"))), index=s.index, dtype="float64")
 
 
 def _normalize_turnover_rate(s: pd.Series) -> pd.Series:
     """
     将换手率转为百分比口径（如果本来是 0~1 小数则 *100）
     """
-    s = s.copy()
-    med = float(s.replace([np.inf, -np.inf], np.nan).dropna().median()) if len(s) else np.nan
+    s = s.astype("float64").replace([np.inf, -np.inf], np.nan).fillna(0.0).copy()
+    med = float(s.median()) if len(s) else np.nan
     if np.isfinite(med) and med <= 1.5:  # 常见：0.03 表示 3%
         s = s * 100.0
     return s
+
+
+def _ensure_identity_columns(out: pd.DataFrame) -> pd.DataFrame:
+    """
+    修复/补齐关键身份列，保证后续 Step4/5 可用：
+    - ts_code
+    - name
+    - industry
+    """
+    if out is None or len(out) == 0:
+        return out
+
+    # 1) ts_code
+    if "ts_code" not in out.columns or out["ts_code"].isna().all():
+        for c in ["代码", "code", "symbol", "证券代码"]:
+            if c in out.columns and not out[c].isna().all():
+                out["ts_code"] = out[c].astype(str)
+                break
+
+    # 2) name
+    if "name" not in out.columns or out["name"].isna().all():
+        for c in ["股票", "名称", "stock_name"]:
+            if c in out.columns and not out[c].isna().all():
+                out["name"] = out[c].astype(str)
+                break
+
+    # 3) industry
+    if "industry" not in out.columns or out["industry"].isna().all():
+        for c in ["行业", "板块", "industry_name"]:
+            if c in out.columns and not out[c].isna().all():
+                out["industry"] = out[c].astype(str)
+                break
+
+    return out
 
 
 # -------------------------
@@ -103,7 +149,7 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
     1) “动量/强势”：涨跌幅越强越好（尤其是强阳线/涨停附近）
     2) “成交/关注度”：成交额越大越好（但做对数+稳健归一化）
     3) “资金净流”：净额/净占比越正越好（稳健映射）
-    4) “换手结构”：过低=没流动性，过高=可能分歧大；偏好中高但不过热（用钟形/分段方式）
+    4) “换手结构”：过低=没流动性，过高=可能分歧大；偏好中高但不过热（用分段方式）
     5) “龙虎榜强度”：若有 l_amount / amount_rate 等，作为强化项
     6) “规模惩罚（轻微）”：流通市值过大通常弹性小（可选、权重小）
     """
@@ -111,38 +157,15 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     out = df.copy()
-    
-    # --- FIX: normalize required identity columns for downstream steps (step4 needs them) ---
 
-   # 1) ts_code
-   if "ts_code" not in out.columns or out["ts_code"].isna().all():
-    for c in ["代码", "code", "symbol", "证券代码"]:
-        if c in out.columns and not out[c].isna().all():
-            out["ts_code"] = out[c].astype(str)
-            break
-
-   # 2) name
-   if "name" not in out.columns or out["name"].isna().all():
-    for c in ["股票", "名称", "stock_name"]:
-        if c in out.columns and not out[c].isna().all():
-            out["name"] = out[c].astype(str)
-            break
-
-   # 3) industry
-   if "industry" not in out.columns or out["industry"].isna().all():
-    for c in ["行业", "板块", "industry_name"]:
-        if c in out.columns and not out[c].isna().all():
-            out["industry"] = out[c].astype(str)
-            break
+    # ✅ 关键：先补齐身份列（避免 Step4/5 缺主键）
+    out = _ensure_identity_columns(out)
 
     # ---------- A1: Momentum / pct_change ----------
     pct_col = _first_existing_col(out, ["pct_change", "change_pct", "pct_chg", "涨跌幅"])
     pct = _to_float_series(out, pct_col, default=0.0)
 
-    # 经验：A股日内强势通常在 3%~10%+，用 logistic 更平滑
-    # center=3, scale=3 => 3% 左右为中性，>8% 接近高分
     score_momo = _logistic01(pct, center=3.0, scale=3.0)
-
     out["pct_change"] = pct
     out["score_momentum"] = score_momo
 
@@ -150,9 +173,8 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
     amt_col = _first_existing_col(out, ["amount", "成交额", "turnover_amount", "amt"])
     amount = _to_float_series(out, amt_col, default=0.0).clip(0.0, float("inf"))
 
-    # 对数压缩 + 稳健归一化（成交额常长尾）
-    log_amt = np.log1p(amount)
-    score_amt = _robust_minmax(pd.Series(log_amt, index=out.index))
+    log_amt = pd.Series(np.log1p(amount.to_numpy(dtype="float64")), index=out.index, dtype="float64")
+    score_amt = _robust_minmax(log_amt)
 
     out["amount"] = amount
     out["score_amount"] = score_amt
@@ -164,66 +186,51 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
     net_amt = _to_float_series(out, net_amt_col, default=0.0)
     net_rate = _to_float_series(out, net_rate_col, default=np.nan)
 
-    # 资金净流：优先 net_rate（更可比），否则用 net_amount（做尺度压缩）
     if net_rate_col:
-        # net_rate 通常是百分比（可能 -xx ~ +xx）
-        score_net = _logistic01(net_rate, center=0.0, scale=5.0)  # 0% 中性，>10% 很强
+        score_net = _logistic01(net_rate.fillna(0.0), center=0.0, scale=5.0)
         out["net_rate"] = net_rate
     else:
-        # net_amount：对数压缩并保留符号（正好，负差）
-        signed = np.sign(net_amt) * np.log1p(np.abs(net_amt))
-        score_net = _logistic01(pd.Series(signed, index=out.index), center=0.0, scale=2.0)
+        signed = np.sign(net_amt.to_numpy(dtype="float64")) * np.log1p(np.abs(net_amt.to_numpy(dtype="float64")))
+        signed_s = pd.Series(signed, index=out.index, dtype="float64")
+        score_net = _logistic01(signed_s, center=0.0, scale=2.0)
         out["net_amount"] = net_amt
 
     out["score_netflow"] = score_net
 
     # ---------- A4: Turnover structure / turnover_rate ----------
     tr_col = _first_existing_col(out, ["turnover_rate", "turn_rate", "换手率", "turnover"])
-    tr = _normalize_turnover_rate(_to_float_series(out, tr_col, default=5.0)).clip(0.0, 100.0)
+    tr = _to_float_series(out, tr_col, default=5.0)
+    tr = _normalize_turnover_rate(tr).clip(0.0, 100.0)
+
     out["turnover_rate"] = tr
 
-    # 偏好：中高换手（例如 6%~20%），过低/过高扣分
-    # 用“分段三角形”更直观稳健
-    #  - <=2% 低分
-    #  - 2%~10% 上升到高分
-    #  - 10%~25% 缓慢下降
-    #  - >25% 逐步扣到低分
     score_turn = pd.Series(0.0, index=out.index, dtype="float64")
     t = tr
 
-    # 上升段 2~10
     m1 = (t > 2.0) & (t <= 10.0)
-    score_turn[m1] = (t[m1] - 2.0) / (10.0 - 2.0)
+    score_turn.loc[m1] = (t.loc[m1] - 2.0) / (10.0 - 2.0)
 
-    # 平台/缓降 10~25：从 1 降到 0.4
     m2 = (t > 10.0) & (t <= 25.0)
-    score_turn[m2] = 1.0 - 0.6 * ((t[m2] - 10.0) / (25.0 - 10.0))
+    score_turn.loc[m2] = 1.0 - 0.6 * ((t.loc[m2] - 10.0) / (25.0 - 10.0))
 
-    # 超高 >25：从 0.4 继续降到 0（到 60% 视为极端）
     m3 = t > 25.0
-    score_turn[m3] = 0.4 * (1.0 - ((t[m3] - 25.0) / (60.0 - 25.0))).clip(0.0, 1.0)
+    score_turn.loc[m3] = 0.4 * (1.0 - ((t.loc[m3] - 25.0) / (60.0 - 25.0))).clip(0.0, 1.0)
 
-    # 极低 <=2：保持 0
     out["score_turnover"] = _clip01(score_turn)
 
     # ---------- A5: LHB strength (optional) ----------
-    # 龙虎榜成交额/成交额占比：存在则加强
     l_amt_col = _first_existing_col(out, ["l_amount", "龙虎榜成交额", "lhb_amount"])
     amt_rate_col = _first_existing_col(out, ["amount_rate", "成交额占比", "lhb_amount_rate"])
 
     l_amt = _to_float_series(out, l_amt_col, default=0.0).clip(0.0, float("inf"))
-    amt_rate = _to_float_series(out, amt_rate_col, default=np.nan)
+    score_lhb_amt = _robust_minmax(pd.Series(np.log1p(l_amt.to_numpy(dtype="float64")), index=out.index, dtype="float64"))
 
-    # l_amount：对数+稳健归一化
-    score_lhb_amt = _robust_minmax(pd.Series(np.log1p(l_amt), index=out.index))
-
-    # amount_rate：通常 0~100 或 0~1，统一到 0~100 再 logistic
     if amt_rate_col:
-        ar = amt_rate.copy()
+        ar = _to_float_series(out, amt_rate_col, default=0.0)
         med_ar = float(ar.replace([np.inf, -np.inf], np.nan).dropna().median()) if len(ar) else np.nan
         if np.isfinite(med_ar) and med_ar <= 1.5:
             ar = ar * 100.0
-        score_lhb_rate = _logistic01(ar.fillna(0.0), center=10.0, scale=10.0)  # 10% 左右中性
+        score_lhb_rate = _logistic01(ar.fillna(0.0), center=10.0, scale=10.0)
         out["amount_rate"] = ar
     else:
         score_lhb_rate = pd.Series(0.0, index=out.index, dtype="float64")
@@ -235,24 +242,16 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
     fv_col = _first_existing_col(out, ["float_values", "流通市值", "float_mv"])
     fv = _to_float_series(out, fv_col, default=np.nan).clip(0.0, float("inf"))
 
-    # 市值越大弹性越小：用对数后做“反向得分”（但权重很小，避免误伤）
     if fv_col:
-        log_fv = pd.Series(np.log1p(fv.fillna(0.0)), index=out.index)
-        size01 = _robust_minmax(log_fv)          # 大市值 -> 1
-        score_size = 1.0 - size01                # 大市值 -> 0
+        log_fv = pd.Series(np.log1p(fv.fillna(0.0).to_numpy(dtype="float64")), index=out.index, dtype="float64")
+        size01 = _robust_minmax(log_fv)      # 大市值 -> 1
+        score_size = 1.0 - size01            # 大市值 -> 0
         out["float_values"] = fv
         out["score_size"] = _clip01(score_size)
     else:
-        out["score_size"] = 0.5  # 没有就给中性常数，避免影响
+        out["score_size"] = 0.5
 
     # ---------- Final aggregation ----------
-    # 权重解释：
-    # - momentum:   0.30  (强势/动量)
-    # - amount:     0.22  (关注度/流动性)
-    # - netflow:    0.18  (资金净流)
-    # - turnover:   0.16  (结构健康)
-    # - lhb:        0.10  (龙虎榜强化，可选)
-    # - size:       0.04  (轻微规模因子)
     out["StrengthScore"] = (
         0.30 * out["score_momentum"]
         + 0.22 * out["score_amount"]
@@ -262,9 +261,7 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
         + 0.04 * out["score_size"]
     ) * 100.0
 
-    # 排序：StrengthScore 高者优先
     out = out.sort_values("StrengthScore", ascending=False)
-
     return out
 
 
@@ -284,8 +281,8 @@ def run_step3(candidates_df: pd.DataFrame, top_k: int = 50) -> pd.DataFrame:
     return scored
 
 
-# Backward-compatible alias：主程序若统一用 run() 调用每一步，这里也给出
 def run(df: pd.DataFrame, s=None, top_k: int = 50) -> pd.DataFrame:
+    """Backward-compatible alias"""
     return run_step3(df, top_k=top_k)
 
 
