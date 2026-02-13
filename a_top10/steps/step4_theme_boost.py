@@ -36,15 +36,40 @@ INDUSTRY_COL_CANDIDATES = [
     "一级行业",
     "行业",
     "行业名称",
+    "板块",
+    "板块名称",
 ]
 
-CODE_COL_CANDIDATES = ["ts_code", "code", "TS_CODE", "股票代码", "证券代码"]
+# ✅ 修复点：兼容更多常见“代码列”命名（尤其是 tushare stock_basic 的 symbol）
+CODE_COL_CANDIDATES = [
+    "ts_code",
+    "code",
+    "TS_CODE",
+    "股票代码",
+    "证券代码",
+    "symbol",
+    "Symbol",
+    "ticker",
+    "sec_code",
+    "证券简称代码",
+]
 
 HOT_BOARDS_INDUSTRY_COLS = ["industry", "industry_name", "行业", "板块", "板块名称", "行业名称"]
 HOT_BOARDS_RANK_COLS = ["rank", "Rank", "排名", "hot_rank", "热度排名"]
 
 # 龙虎榜：若 ctx 有 top_list（或 snap/top_list.csv），命中则加分
-DRAGON_CODE_COLS = ["ts_code", "code", "TS_CODE", "股票代码", "证券代码"]
+# ✅ 同样增强代码列候选
+DRAGON_CODE_COLS = [
+    "ts_code",
+    "code",
+    "TS_CODE",
+    "股票代码",
+    "证券代码",
+    "symbol",
+    "Symbol",
+    "ticker",
+    "sec_code",
+]
 
 # 默认龙虎榜加成（你现在看到的 0.08 就是它）
 DEFAULT_DRAGON_BONUS = 0.08
@@ -132,14 +157,37 @@ def _norm_code(code: Any) -> Tuple[str, str]:
     支持：
     - 002506.SZ -> ("002506.SZ", "002506")
     - 002506 -> ("002506", "002506")
+    - "SZ002506" / "sh600410" 之类的也尽量提取 6 位数字
     """
     s = _safe_str(code).upper()
     if not s:
         return ("", "")
-    code6 = s.split(".")[0]
-    if len(code6) > 6 and code6.isdigit():
-        code6 = code6[-6:]
-    return (s, code6)
+
+    # 抽取 6 位数字优先（更鲁棒）
+    m = re.search(r"(\d{6})", s)
+    code6 = m.group(1) if m else s.split(".")[0]
+
+    # ts_code 保留原样（去首尾空格并 upper）
+    ts = s.strip()
+    return (ts, code6)
+
+
+def _norm_industry_key(x: Any) -> str:
+    """
+    行业/板块名规范化：
+    - 去空白（含全角空格）
+    - 去常见后缀词（行业/板块/概念）
+    - 小写化（中文无影响，英文有用）
+    """
+    s = _safe_str(x)
+    if not s:
+        return ""
+    s2 = re.sub(r"[\s\u3000]+", "", s)  # 空格/制表/全角空格
+    # 去后缀（尽量保守，不要误伤）
+    for suf in ("行业", "板块", "概念"):
+        if s2.endswith(suf) and len(s2) > len(suf):
+            s2 = s2[: -len(suf)]
+    return s2.lower()
 
 
 def _read_csv_guess(path: Path) -> pd.DataFrame:
@@ -221,6 +269,10 @@ class ThemeDebug:
     dragon_hits: int = 0
     theme_boost_nonzero: int = 0
     reason: str = ""
+    # ✅ 新增：更细 debug（不影响原逻辑）
+    matched_industry_exact: int = 0
+    matched_industry_norm: int = 0
+    matched_industry_fuzzy: int = 0
 
 
 def _build_industry_score_map(
@@ -318,6 +370,7 @@ def _apply_industry_and_dragon(
         # 兜底：直接给 0
         out["ThemeBoost"] = 0.0
         out["题材加成"] = 0.0
+        out["板块"] = ""
         return out, dbg
 
     # industry 列：若没有，用 stock_basic 补
@@ -348,24 +401,78 @@ def _apply_industry_and_dragon(
                 if c6:
                     dragon_set6.add(c6)
 
+    # ---------- 行业热度映射：增强匹配 ----------
+    # 原始 map（精确）
+    industry_map_exact = dict(industry_score or {})
+
+    # 规范化 map（去空格/后缀等）
+    industry_map_norm: Dict[str, float] = {}
+    for k, v in industry_map_exact.items():
+        nk = _norm_industry_key(k)
+        if nk:
+            # 同名取更高分
+            if nk not in industry_map_norm or float(v) > float(industry_map_norm[nk]):
+                industry_map_norm[nk] = float(v)
+
+    # 为模糊 contains 做一个 keys 列表（规模<=40，O(n*m)可接受）
+    norm_keys = list(industry_map_norm.keys())
+
     # 计算 industry_boost
     industry_boost = np.zeros(len(out), dtype=float)
     matched = 0
-    if ind_col and industry_score:
-        inds = out[ind_col].astype(str).map(lambda x: _safe_str(x)).tolist()
-        for i, ind in enumerate(inds):
+    matched_exact = 0
+    matched_norm = 0
+    matched_fuzzy = 0
+
+    if ind_col and (industry_map_exact or industry_map_norm):
+        inds_raw = out[ind_col].astype(str).map(lambda x: _safe_str(x)).tolist()
+
+        for i, ind in enumerate(inds_raw):
             if not ind:
                 continue
-            sc = industry_score.get(ind, None)
-            if sc is None:
-                # 轻微容错：去空格/全角空格
-                ind2 = re.sub(r"\s+", "", ind)
-                sc = industry_score.get(ind2, None)
+
+            # 1) 精确匹配
+            sc = industry_map_exact.get(ind, None)
             if sc is not None:
                 industry_boost[i] = float(sc)
                 matched += 1
+                matched_exact += 1
+                continue
+
+            # 2) 规范化匹配（更强的“去空白/后缀”）
+            nk = _norm_industry_key(ind)
+            if nk:
+                sc2 = industry_map_norm.get(nk, None)
+                if sc2 is not None:
+                    industry_boost[i] = float(sc2)
+                    matched += 1
+                    matched_norm += 1
+                    continue
+
+                # 3) 轻量模糊：contains（A包含B或B包含A）
+                #    只在 rank map 比较小的时候启用（<=40 默认）
+                best = None
+                best_key = ""
+                for kk in norm_keys:
+                    if not kk:
+                        continue
+                    if kk in nk or nk in kk:
+                        vv = industry_map_norm.get(kk, None)
+                        if vv is None:
+                            continue
+                        if best is None or float(vv) > float(best):
+                            best = float(vv)
+                            best_key = kk
+                if best is not None:
+                    industry_boost[i] = float(best)
+                    matched += 1
+                    matched_fuzzy += 1
+                    continue
 
     dbg.matched_industry_count = int(matched)
+    dbg.matched_industry_exact = int(matched_exact)
+    dbg.matched_industry_norm = int(matched_norm)
+    dbg.matched_industry_fuzzy = int(matched_fuzzy)
 
     # 龙虎榜加成
     dragon_bonus_arr = np.zeros(len(out), dtype=float)
@@ -473,6 +580,13 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     dbg_all["matched_industry_count"] = int(getattr(dbg_apply, "matched_industry_count", 0))
     dbg_all["dragon_hits"] = int(getattr(dbg_apply, "dragon_hits", 0))
     dbg_all["theme_boost_nonzero"] = int(getattr(dbg_apply, "theme_boost_nonzero", 0))
+
+    # ✅ 新增更细命中统计（不破坏旧字段）
+    dbg_all["matched_industry_detail"] = {
+        "exact": int(getattr(dbg_apply, "matched_industry_exact", 0)),
+        "normalized": int(getattr(dbg_apply, "matched_industry_norm", 0)),
+        "fuzzy_contains": int(getattr(dbg_apply, "matched_industry_fuzzy", 0)),
+    }
 
     # 关键判断：为什么会“全是 0.08”
     if dbg_all["matched_industry_count"] == 0 and dbg_all["dragon_hits"] > 0:
