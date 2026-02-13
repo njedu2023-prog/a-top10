@@ -1,0 +1,79 @@
+# Step Health Report
+
+- trade_date: **20260213**
+- run_id: **21992318902**
+- run_url: https://github.com/njedu2023-prog/a-top10/actions/runs/21992318902
+- sha: **4181a4ca6838484936083f900e9d1778147d04e8**
+- ref: **refs/heads/main**
+
+## 1) 数据仓库快照（warehouse）
+
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260213`
+- snapshot_dir_exists: ✅
+
+### snapshot files
+
+```text
+total 668
+drwxr-xr-x  2 runner runner   4096 Feb 13 23:25 .
+drwxr-xr-x 10 runner runner   4096 Feb 13 23:25 ..
+-rw-r--r--  1 runner runner 374499 Feb 13 23:25 daily.csv
+-rw-r--r--  1 runner runner 277544 Feb 13 23:25 daily_basic.csv
+-rw-r--r--  1 runner runner    289 Feb 13 23:25 hot_boards.csv
+-rw-r--r--  1 runner runner   2280 Feb 13 23:25 limit_list_d.csv
+-rw-r--r--  1 runner runner  11425 Feb 13 23:25 top_list.csv
+```
+
+## 2) 输出目录（outputs）
+
+```text
+total 524
+drwxr-xr-x  4 runner runner  4096 Feb 13 23:25 .
+drwxr-xr-x 11 runner runner  4096 Feb 13 23:25 ..
+drwxr-xr-x  2 runner runner  4096 Feb 13 23:25 debug
+-rw-r--r--  1 runner runner   829 Feb 13 23:24 debug_step4_theme_20260212.json
+-rw-r--r--  1 runner runner   826 Feb 13 23:25 debug_step4_theme_20260213.json
+-rw-r--r--  1 runner runner  5417 Feb 13 23:25 latest.md
+drwxr-xr-x  2 runner runner  4096 Feb 13 23:24 learning
+-rw-r--r--  1 runner runner   357 Feb 13 23:24 predict_top10_20260203.json
+-rw-r--r--  1 runner runner    71 Feb 13 23:24 predict_top10_20260203.md
+-rw-r--r--  1 runner runner 59175 Feb 13 23:24 predict_top10_20260204.json
+-rw-r--r--  1 runner runner  4548 Feb 13 23:24 predict_top10_20260204.md
+-rw-r--r--  1 runner runner 56799 Feb 13 23:24 predict_top10_20260205.json
+-rw-r--r--  1 runner runner  4084 Feb 13 23:24 predict_top10_20260205.md
+-rw-r--r--  1 runner runner 55500 Feb 13 23:24 predict_top10_20260206.json
+-rw-r--r--  1 runner runner  3857 Feb 13 23:24 predict_top10_20260206.md
+-rw-r--r--  1 runner runner 56633 Feb 13 23:24 predict_top10_20260209.json
+-rw-r--r--  1 runner runner  3964 Feb 13 23:24 predict_top10_20260209.md
+-rw-r--r--  1 runner runner 55591 Feb 13 23:24 predict_top10_20260210.json
+-rw-r--r--  1 runner runner  3900 Feb 13 23:24 predict_top10_20260210.md
+-rw-r--r--  1 runner runner 53367 Feb 13 23:24 predict_top10_20260211.json
+-rw-r--r--  1 runner runner  3743 Feb 13 23:24 predict_top10_20260211.md
+-rw-r--r--  1 runner runner 47556 Feb 13 23:24 predict_top10_20260212.json
+-rw-r--r--  1 runner runner  7207 Feb 13 23:24 predict_top10_20260212.md
+-rw-r--r--  1 runner runner 52684 Feb 13 23:25 predict_top10_20260213.json
+-rw-r--r--  1 runner runner  5417 Feb 13 23:25 predict_top10_20260213.md
+```
+
+## 3) 关键产物检查
+
+- ✅ exists: `outputs/predict_top10_20260213.md` (size=5417)
+- ✅ exists: `outputs/predict_top10_20260213.json` (size=52684)
+- ✅ exists: `outputs/latest.md` (size=5417)
+- ✅ exists: `outputs/debug_step4_theme_20260213.json` (size=826)
+
+## 4) Step7 自学习（learning）目录
+
+- outputs/learning: ✅
+```text
+total 16
+drwxr-xr-x 2 runner runner 4096 Feb 13 23:24 .
+drwxr-xr-x 4 runner runner 4096 Feb 13 23:25 ..
+-rw-r--r-- 1 runner runner  238 Feb 13 23:25 step7_hit_rate_history.csv
+-rw-r--r-- 1 runner runner  479 Feb 13 23:25 step7_report_latest.json
+```
+
+## 5) 结论（先看这里）
+
+- 快照目录存在：✅
+- 若仍失败：直接看 **Run Top10 Engine** step 的 traceback

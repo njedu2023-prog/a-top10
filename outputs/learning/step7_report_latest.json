@@ -1,7 +1,7 @@
 {
   "ok": false,
   "lookback": 150,
-  "outputs_files": 8,
+  "outputs_files": 9,
   "evaluate_days": 30,
   "trained_models": {
     "ok": false,
@@ -16,9 +16,9 @@
       "reason": "lightgbm not installed"
     }
   },
-  "hit_rate_last_days": 6,
-  "hit_rate_last": 0.18333333333333335,
-  "hit_cnt_last": 11,
-  "hit_rate_total": 0.18333333333333335,
-  "hit_cnt_total": 11
+  "hit_rate_last_days": 7,
+  "hit_rate_last": 0.17142857142857146,
+  "hit_cnt_last": 12,
+  "hit_rate_total": 0.17142857142857146,
+  "hit_cnt_total": 12
 }

@@ -1,0 +1,17 @@
+{
+  "schema": "a-top10.debug.run_meta.v1",
+  "trade_date": "20260213",
+  "run_id": "21992318902",
+  "run_number": "104",
+  "repo": "njedu2023-prog/a-top10",
+  "workflow": "Run Top10 Engine (Auto Daily)",
+  "job": "run",
+  "ref": "refs/heads/main",
+  "sha": "4181a4ca6838484936083f900e9d1778147d04e8",
+  "actor": "njedu2023-prog",
+  "event": "workflow_dispatch",
+  "run_url": "https://github.com/njedu2023-prog/a-top10/actions/runs/21992318902",
+  "utc_time": "2026-02-13T15:25:14Z",
+  "python": "3.11.14",
+  "platform": "Linux-6.14.0-1017-azure-x86_64-with-glibc2.39"
+}
