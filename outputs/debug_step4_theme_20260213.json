@@ -41,5 +41,10 @@
   "matched_industry_count": 0,
   "dragon_hits": 0,
   "theme_boost_nonzero": 0,
+  "matched_industry_detail": {
+    "exact": 0,
+    "normalized": 0,
+    "fuzzy_contains": 0
+  },
   "diagnosis": "both industry heat and dragon bonus NOT applied -> all 0"
 }
