@@ -167,15 +167,27 @@ jobs:
         if: always()
         shell: bash
         env:
+          # 业务
           TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
+          TD: ${{ steps.resolve_date.outputs.trade_date }}
+
+          # GitHub metadata（一次性合并在同一个 env，避免重复定义 env:）
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUM: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+          WF: ${{ github.workflow }}
+          JOB: ${{ github.job }}
+          ACTOR: ${{ github.actor }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
           mkdir -p outputs/debug
 
-          RUN_ID="${{ github.run_id }}"
-          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          TD="${TRADE_DATE}"
+          TD="${TD}"
           YEAR="${TD:0:4}"
           SNAP_DIR="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${YEAR}/${TD}"
 
@@ -186,7 +198,7 @@ jobs:
           out_dir = pathlib.Path("outputs/debug")
           out_dir.mkdir(parents=True, exist_ok=True)
 
-          run_id = os.environ.get("RUN_ID","")
+          run_id = os.environ.get("RUN_ID", "")
           meta = {
             "schema": "a-top10.debug.run_meta.v1",
             "trade_date": os.environ.get("TD",""),
@@ -222,8 +234,8 @@ jobs:
             echo "- trade_date: **${TD}**"
             echo "- run_id: **${RUN_ID}**"
             echo "- run_url: ${RUN_URL}"
-            echo "- sha: **${{ github.sha }}**"
-            echo "- ref: **${{ github.ref }}**"
+            echo "- sha: **${SHA}**"
+            echo "- ref: **${REF}**"
             echo ""
             echo "## 1) 数据仓库快照（warehouse）"
             echo ""
@@ -285,19 +297,7 @@ jobs:
           cp -f "$HEALTH_UNIQ" "$HEALTH_LATEST"
 
           echo "Wrote:"
-          ls -lh "$HEALTH_UNIQ" "$HEALTH_LATEST" outputs/debug/run_meta.json outputs/debug/run_meta_${RUN_ID}.json || true
-        env:
-          RUN_ID: ${{ github.run_id }}
-          RUN_NUM: ${{ github.run_number }}
-          SHA: ${{ github.sha }}
-          REF: ${{ github.ref }}
-          WF: ${{ github.workflow }}
-          JOB: ${{ github.job }}
-          ACTOR: ${{ github.actor }}
-          EVENT: ${{ github.event_name }}
-          REPO: ${{ github.repository }}
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TD: ${{ steps.resolve_date.outputs.trade_date }}
+          ls -lh "$HEALTH_UNIQ" "$HEALTH_LATEST" outputs/debug/run_meta.json "outputs/debug/run_meta_${RUN_ID}.json" || true
 
       - name: Commit & push outputs (always)
         if: always()
@@ -323,4 +323,3 @@ jobs:
 
           git pull --rebase origin main || true
           git push || true
-          
