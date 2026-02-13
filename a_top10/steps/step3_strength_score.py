@@ -111,6 +111,29 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     out = df.copy()
+    
+    # --- FIX: normalize required identity columns for downstream steps (step4 needs them) ---
+
+   # 1) ts_code
+   if "ts_code" not in out.columns or out["ts_code"].isna().all():
+    for c in ["代码", "code", "symbol", "证券代码"]:
+        if c in out.columns and not out[c].isna().all():
+            out["ts_code"] = out[c].astype(str)
+            break
+
+   # 2) name
+   if "name" not in out.columns or out["name"].isna().all():
+    for c in ["股票", "名称", "stock_name"]:
+        if c in out.columns and not out[c].isna().all():
+            out["name"] = out[c].astype(str)
+            break
+
+   # 3) industry
+   if "industry" not in out.columns or out["industry"].isna().all():
+    for c in ["行业", "板块", "industry_name"]:
+        if c in out.columns and not out[c].isna().all():
+            out["industry"] = out[c].astype(str)
+            break
 
     # ---------- A1: Momentum / pct_change ----------
     pct_col = _first_existing_col(out, ["pct_change", "change_pct", "pct_chg", "涨跌幅"])
