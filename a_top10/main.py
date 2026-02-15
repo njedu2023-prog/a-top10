@@ -94,7 +94,7 @@ def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Any) -> bool:
             "filters.emotion_gate.min_max_lianban",
             "filters.emotion_gate.min_max_lianban_height",
             "filters.emotion_gate.min_lianban_height",
-            "filters.emotion_gate.min_max连板高度",  # 兼容你之前可能写进去的旧 key
+            "filters.emotion_gate.min_max连板高度",
         ],
         default=None,
     )
@@ -156,11 +156,9 @@ def _force_outputs_dir(settings: Any) -> Path:
     out_dir = repo_root / "outputs"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 环境变量兜底（如果你的 writers/其他代码有读取 env 的逻辑）
     os.environ["A_TOP10_OUTPUT_DIR"] = str(out_dir)
     os.environ["TOP10_OUTPUT_DIR"] = str(out_dir)
 
-    # 尝试在 settings 上写入常见字段名（不保证存在，但尽力兼容）
     candidates = [
         "output_dir",
         "outputs_dir",
@@ -179,7 +177,6 @@ def _force_outputs_dir(settings: Any) -> Path:
         except Exception:
             pass
 
-    # 尝试写入嵌套结构：settings.io.output_dir / settings.paths.outputs_dir 等
     nested_paths = [
         "io.output_dir",
         "io.outputs_dir",
@@ -221,6 +218,19 @@ def _force_outputs_dir(settings: Any) -> Path:
             pass
 
     return out_dir
+
+
+def _ensure_step4_debug_compat(ctx: Dict[str, Any]) -> None:
+    """
+    兼容旧字段：很多老代码/日志会打印 ctx.debug.step4
+    但新版 Step4 实际写 ctx.debug.step4_theme
+    这里做一次桥接：step4 不存在时，用 step4_theme 填一份到 step4
+    """
+    dbg = ctx.get("debug")
+    if not isinstance(dbg, dict):
+        return
+    if dbg.get("step4") is None and isinstance(dbg.get("step4_theme"), dict):
+        dbg["step4"] = dbg["step4_theme"]
 
 
 def run_pipeline(
@@ -269,23 +279,28 @@ def run_pipeline(
         # Step4 按主线接口运行，返回更新后的 ctx
         ctx = run_step4(s, ctx)
 
-        # 从 ctx 取出加权后的 df（key 与写入一致）
-        theme_df = ctx.get("strength_df", strength_df)
+        # ✅ 兼容：把 step4_theme 映射到 step4（避免 DEBUG.step4=None）
+        _ensure_step4_debug_compat(ctx)
+
+        # ✅ 优先用 Step4 的输出 theme_df（没有再退回 strength_df）
+        theme_df = ctx.get("theme_df")
+        if not isinstance(theme_df, pd.DataFrame) or theme_df.empty:
+            theme_df = ctx.get("strength_df", strength_df)
 
         prob_df = run_step5(theme_df, s=s)
 
         # Step6 返回 dict = {"topN": df, "full": df_full}
         topn_result = run_step6_final_topn(prob_df, s=s)
     else:
-        # 明确记录：为什么不过
         gate["reason"] = (gate.get("reason", "") + " | pipeline_skipped(step2-6)").strip()
 
     # ---- 写出结果（新版 writers.py 自动识别 dict 结构）----
     # 额外保险：切到 repo_root 再写，避免 writers 使用相对路径写到别处
-    
-    print("DEBUG.step4 =", ctx.get("debug", {}).get("step4"))
-    print("DEBUG.step4_theme =", ctx.get("debug", {}).get("step4_theme"))
-    
+
+    dbg = ctx.get("debug", {}) if isinstance(ctx, dict) else {}
+    print("DEBUG.step4 =", (dbg.get("step4") if isinstance(dbg, dict) else None))
+    print("DEBUG.step4_theme =", (dbg.get("step4_theme") if isinstance(dbg, dict) else None))
+
     if not dry_run:
         with _chdir(out_dir.parent):
             write_outputs(
@@ -293,7 +308,7 @@ def run_pipeline(
                 trade_date=td,
                 ctx=ctx,
                 gate=gate,
-                topn=topn_result,  # ✔ 直接传 dict，writers 自动解析
+                topn=topn_result,
                 learn=train_summary or {"updated": False},
             )
 
@@ -303,8 +318,6 @@ if __name__ == "__main__":
 
     config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
     trade_date = sys.argv[2] if len(sys.argv) > 2 else ""
-
-    # 命令行第三个参数支持 "train"
     train_flag = (len(sys.argv) > 3 and sys.argv[3].lower() == "train")
 
     run_pipeline(config_path, trade_date, train_model=train_flag)
