@@ -94,10 +94,16 @@ def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional
     return None
 
 
+import pandas as pd
+import numpy as np
+
 def _safe_str(x: Any) -> str:
-    if x is None:
+    if x is None or pd.isna(x):
         return ""
-    return str(x).strip()
+    s = str(x).strip()
+    if s.lower() in ("nan", "<na>"):
+        return ""
+    return s
 
 
 def _parse_rank_int(x: Any, default: int = 9999) -> int:
