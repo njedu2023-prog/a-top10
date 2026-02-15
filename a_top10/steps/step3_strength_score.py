@@ -6,15 +6,10 @@ Step3: Strength Score (方案A)
 - 只依赖“现有字段”（来自候选/榜单/快照中常见的列）
 - 输出 StrengthScore（0~100），并保留若干分项得分便于调试
 
-推荐字段（存在则用，不存在则自动降级）：
-- pct_change / change_pct / pct_chg / 涨跌幅
-- turnover_rate / turn_rate / turnover / 换手率
-- amount / 成交额
-- net_amount / 净额
-- net_rate / 净占比
-- l_amount / 龙虎榜成交额
-- amount_rate / 成交额占比
-- float_values / 流通市值
+✅ 本版修复“数据断链”常见原因：
+- Step4 需要的关键身份列（ts_code / name / industry）虽然“列名存在”，但值可能全是空字符串/空白 -> 被当成“无效”
+- 本版会把空字符串/纯空白统一当成缺失，并从候选别名列回填
+- 同时对 ts_code / name / industry 做 strip，减少匹配失败
 """
 
 from __future__ import annotations
@@ -105,36 +100,79 @@ def _normalize_turnover_rate(s: pd.Series) -> pd.Series:
     return s
 
 
+def _as_str_series(df: pd.DataFrame, col: Optional[str]) -> pd.Series:
+    """安全取字符串列，并做 strip；缺失则返回全 NA"""
+    if not col or col not in df.columns:
+        return pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
+    s = df[col].astype("object")
+    # 统一把 None/NaN 变为 <NA>，并 strip 空白
+    s = s.where(~pd.isna(s), pd.NA)
+    s = s.map(lambda x: x.strip() if isinstance(x, str) else x)
+    # 把空字符串也当缺失
+    s = s.map(lambda x: pd.NA if isinstance(x, str) and x == "" else x)
+    return s
+
+
+def _is_effectively_empty(s: pd.Series) -> bool:
+    """判断一列是否“有效值几乎为 0”：全 NA 或全空白字符串"""
+    if s is None or len(s) == 0:
+        return True
+    s2 = s.astype("object")
+    # 将空白字符串视为 NA
+    s2 = s2.map(lambda x: x.strip() if isinstance(x, str) else x)
+    s2 = s2.map(lambda x: pd.NA if isinstance(x, str) and x == "" else x)
+    return s2.isna().all()
+
+
 def _ensure_identity_columns(out: pd.DataFrame) -> pd.DataFrame:
     """
     修复/补齐关键身份列，保证后续 Step4/5 可用：
     - ts_code
     - name
     - industry
+
+    ✅ 修复点：
+    - 如果列存在但值全是 "" / "   "，也视为缺失并回填（避免 Step4 选中“空列”导致 matched_industry_count=0）
     """
     if out is None or len(out) == 0:
         return out
 
+    # 统一先把已存在的关键列做 strip + 空串->NA（避免“列名在但全空”）
+    for key in ["ts_code", "name", "industry"]:
+        if key in out.columns:
+            out[key] = _as_str_series(out, key)
+
     # 1) ts_code
-    if "ts_code" not in out.columns or out["ts_code"].isna().all():
-        for c in ["代码", "code", "symbol", "证券代码"]:
-            if c in out.columns and not out[c].isna().all():
-                out["ts_code"] = out[c].astype(str)
-                break
+    if ("ts_code" not in out.columns) or _is_effectively_empty(out["ts_code"]):
+        for c in ["ts_code", "代码", "code", "symbol", "证券代码", "ticker"]:
+            if c in out.columns:
+                cand = _as_str_series(out, c)
+                if not _is_effectively_empty(cand):
+                    out["ts_code"] = cand
+                    break
 
     # 2) name
-    if "name" not in out.columns or out["name"].isna().all():
-        for c in ["股票", "名称", "stock_name"]:
-            if c in out.columns and not out[c].isna().all():
-                out["name"] = out[c].astype(str)
-                break
+    if ("name" not in out.columns) or _is_effectively_empty(out["name"]):
+        for c in ["name", "股票", "名称", "stock_name", "证券名称"]:
+            if c in out.columns:
+                cand = _as_str_series(out, c)
+                if not _is_effectively_empty(cand):
+                    out["name"] = cand
+                    break
 
     # 3) industry
-    if "industry" not in out.columns or out["industry"].isna().all():
-        for c in ["行业", "板块", "industry_name"]:
-            if c in out.columns and not out[c].isna().all():
-                out["industry"] = out[c].astype(str)
-                break
+    if ("industry" not in out.columns) or _is_effectively_empty(out["industry"]):
+        for c in ["industry", "行业", "板块", "industry_name", "所属行业", "概念", "主题"]:
+            if c in out.columns:
+                cand = _as_str_series(out, c)
+                if not _is_effectively_empty(cand):
+                    out["industry"] = cand
+                    break
+
+    # 最后一遍：保证三列都 strip + 空串->NA（即使是刚回填的）
+    for key in ["ts_code", "name", "industry"]:
+        if key in out.columns:
+            out[key] = _as_str_series(out, key)
 
     return out
 
@@ -158,7 +196,7 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
 
     out = df.copy()
 
-    # ✅ 关键：先补齐身份列（避免 Step4/5 缺主键）
+    # ✅ 关键：先补齐身份列（避免 Step4/5 缺主键 / 缺行业导致“断链”）
     out = _ensure_identity_columns(out)
 
     # ---------- A1: Momentum / pct_change ----------
@@ -223,7 +261,9 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
     amt_rate_col = _first_existing_col(out, ["amount_rate", "成交额占比", "lhb_amount_rate"])
 
     l_amt = _to_float_series(out, l_amt_col, default=0.0).clip(0.0, float("inf"))
-    score_lhb_amt = _robust_minmax(pd.Series(np.log1p(l_amt.to_numpy(dtype="float64")), index=out.index, dtype="float64"))
+    score_lhb_amt = _robust_minmax(
+        pd.Series(np.log1p(l_amt.to_numpy(dtype="float64")), index=out.index, dtype="float64")
+    )
 
     if amt_rate_col:
         ar = _to_float_series(out, amt_rate_col, default=0.0)
