@@ -4,9 +4,9 @@ on:
   schedule:
     - cron: "5 11 * * 1-5"
     - cron: "35 11 * * 1-5"
-  workflow_dispatch: {}
 
-workflow_dispatch:
+  # 手动运行：可指定 trade_date
+  workflow_dispatch:
     inputs:
       trade_date:
         description: "指定交易日 YYYYMMDD（留空=自动寻找最新）"
@@ -71,22 +71,22 @@ jobs:
           # ✅ pandas.DataFrame.to_markdown 依赖 tabulate
           pip install -U tabulate
 
-      - name: Resolve latest snapshot trade_date (auto) - scheme2(raw probe)
+      - name: Resolve trade_date (manual or auto)
         id: resolve_date
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "TZ=$TZ"
-          echo "DATA_GITHUB_USER=$DATA_GITHUB_USER"
-          echo "DATA_REPO=$DATA_REPO"
-          echo "DATA_BRANCH=$DATA_BRANCH"
-          echo "LOOKBACK_DAYS=$LOOKBACK_DAYS"
-          echo "PROBE_FILE=$PROBE_FILE"
+          MANUAL="${{ github.event.inputs.trade_date || '' }}"
+          if [ -n "$MANUAL" ]; then
+            echo "Use manual trade_date=$MANUAL"
+            echo "trade_date=$MANUAL" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Auto resolve latest snapshot trade_date"
 
           today="$(date +%Y%m%d)"
-          echo "today=$today"
-
           base="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}"
 
           found=""
@@ -96,7 +96,7 @@ jobs:
             url="${base}/${y}/${d}/${PROBE_FILE}"
 
             code="$(curl -s -o /dev/null -w "%{http_code}" -I "$url" || true)"
-            echo "[probe] ${d} => ${code} ${url}"
+            echo "[probe] ${d} => ${code}"
 
             if [ "$code" = "200" ]; then
               found="$d"
@@ -105,7 +105,7 @@ jobs:
           done
 
           if [ -z "$found" ]; then
-            echo "ERROR: cannot find any snapshot within last ${LOOKBACK_DAYS} days."
+            echo "ERROR: cannot find any snapshot within last ${LOOKBACK_DAYS} days"
             exit 2
           fi
 
@@ -113,7 +113,6 @@ jobs:
           echo "trade_date=$found" >> "$GITHUB_OUTPUT"
 
       - name: Download snapshot files to warehouse (raw)
-        id: download
         shell: bash
         run: |
           set -euo pipefail
@@ -145,11 +144,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          trade_date="${{ steps.resolve_date.outputs.trade_date }}"
+          year="${trade_date:0:4}"
+
           echo "====== LIST _warehouse (top) ======"
           ls -la _warehouse || true
           echo "====== LIST snapshot dir ======"
-          trade_date="${{ steps.resolve_date.outputs.trade_date }}"
-          year="${trade_date:0:4}"
           ls -la "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}" || true
 
       - name: Run Top10 Engine
@@ -164,147 +165,6 @@ jobs:
           else
             python -m a_top10 && python -m a_top10.steps.step7_self_learning
           fi
-
-      # =====================================================
-      # P1: Debug Reports — ALWAYS run (即使主程序失败也要落盘)
-      # outputs/debug/run_meta.json + run_meta_<run_id>.json
-      # outputs/debug/step_health.md + step_health_<run_id>.md
-      # =====================================================
-      - name: Generate Debug Reports (always)
-        if: always()
-        shell: bash
-        env:
-          # 业务
-          TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
-          TD: ${{ steps.resolve_date.outputs.trade_date }}
-
-          # GitHub metadata（一次性合并在同一个 env，避免重复定义 env:）
-          RUN_ID: ${{ github.run_id }}
-          RUN_NUM: ${{ github.run_number }}
-          SHA: ${{ github.sha }}
-          REF: ${{ github.ref }}
-          WF: ${{ github.workflow }}
-          JOB: ${{ github.job }}
-          ACTOR: ${{ github.actor }}
-          EVENT: ${{ github.event_name }}
-          REPO: ${{ github.repository }}
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-
-          mkdir -p outputs/debug
-
-          TD="${TD}"
-          YEAR="${TD:0:4}"
-          SNAP_DIR="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${YEAR}/${TD}"
-
-          # ---------- machine readable ----------
-          python - << 'PY'
-          import json, os, pathlib, datetime, platform
-
-          out_dir = pathlib.Path("outputs/debug")
-          out_dir.mkdir(parents=True, exist_ok=True)
-
-          run_id = os.environ.get("RUN_ID", "")
-          meta = {
-            "schema": "a-top10.debug.run_meta.v1",
-            "trade_date": os.environ.get("TD",""),
-            "run_id": run_id,
-            "run_number": os.environ.get("RUN_NUM",""),
-            "repo": os.environ.get("REPO",""),
-            "workflow": os.environ.get("WF",""),
-            "job": os.environ.get("JOB",""),
-            "ref": os.environ.get("REF",""),
-            "sha": os.environ.get("SHA",""),
-            "actor": os.environ.get("ACTOR",""),
-            "event": os.environ.get("EVENT",""),
-            "run_url": os.environ.get("RUN_URL",""),
-            "utc_time": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-            "python": platform.python_version(),
-            "platform": platform.platform(),
-          }
-
-          p_unique = out_dir / f"run_meta_{run_id}.json"
-          p_latest = out_dir / "run_meta.json"
-          p_unique.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-          p_latest.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-          print("Wrote:", p_unique, p_latest)
-          PY
-
-          # ---------- human readable ----------
-          HEALTH_UNIQ="outputs/debug/step_health_${RUN_ID}.md"
-          HEALTH_LATEST="outputs/debug/step_health.md"
-
-          {
-            echo "# Step Health Report"
-            echo ""
-            echo "- trade_date: **${TD}**"
-            echo "- run_id: **${RUN_ID}**"
-            echo "- run_url: ${RUN_URL}"
-            echo "- sha: **${SHA}**"
-            echo "- ref: **${REF}**"
-            echo ""
-            echo "## 1) 数据仓库快照（warehouse）"
-            echo ""
-            echo "- snapshot_dir: \`${SNAP_DIR}\`"
-            if [ -d "$SNAP_DIR" ]; then
-              echo "- snapshot_dir_exists: ✅"
-              echo ""
-              echo "### snapshot files"
-              echo ""
-              echo '```text'
-              ls -la "$SNAP_DIR" || true
-              echo '```'
-            else
-              echo "- snapshot_dir_exists: ❌"
-            fi
-            echo ""
-            echo "## 2) 输出目录（outputs）"
-            echo ""
-            echo '```text'
-            ls -la outputs || true
-            echo '```'
-            echo ""
-            echo "## 3) 关键产物检查"
-            echo ""
-            for f in \
-              "outputs/predict_top10_${TD}.md" \
-              "outputs/predict_top10_${TD}.json" \
-              "outputs/latest.md" \
-              "outputs/debug_step4_theme_${TD}.json"
-            do
-              if [ -f "$f" ]; then
-                echo "- ✅ exists: \`$f\` (size=$(wc -c <"$f" 2>/dev/null || echo 0))"
-              else
-                echo "- ❌ missing: \`$f\`"
-              fi
-            done
-            echo ""
-            echo "## 4) Step7 自学习（learning）目录"
-            echo ""
-            if [ -d "outputs/learning" ]; then
-              echo "- outputs/learning: ✅"
-              echo '```text'
-              ls -la outputs/learning || true
-              echo '```'
-            else
-              echo "- outputs/learning: ❌"
-            fi
-            echo ""
-            echo "## 5) 结论（先看这里）"
-            echo ""
-            if [ ! -d "$SNAP_DIR" ]; then
-              echo "- 首要异常：**快照目录不存在/未下载成功**（Download step 可能 404/403）"
-            else
-              echo "- 快照目录存在：✅"
-              echo "- 若仍失败：直接看 **Run Top10 Engine** step 的 traceback"
-            fi
-          } > "$HEALTH_UNIQ"
-
-          cp -f "$HEALTH_UNIQ" "$HEALTH_LATEST"
-
-          echo "Wrote:"
-          ls -lh "$HEALTH_UNIQ" "$HEALTH_LATEST" outputs/debug/run_meta.json "outputs/debug/run_meta_${RUN_ID}.json" || true
 
       - name: Commit & push outputs (always)
         if: always()
@@ -326,6 +186,7 @@ jobs:
 
           td="${{ steps.resolve_date.outputs.trade_date }}"
           rid="${{ github.run_id }}"
+
           git commit -m "auto: run top10 ${td} (run=${rid})" || true
 
           git pull --rebase origin main || true
