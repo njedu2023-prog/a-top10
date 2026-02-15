@@ -673,3 +673,4 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 def run_step4_theme_boost(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     """兼容旧入口名（如果你的 main.py 曾经调用过这个）。"""
     return run_step4(s, ctx)
+
