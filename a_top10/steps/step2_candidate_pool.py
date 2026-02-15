@@ -8,7 +8,7 @@ Step2：Candidate Pool（终版，工程对齐）
   1) ✅ 统一 ts_code 列（兼容 ts_code/code/symbol/证券代码 等）
   2) ✅ 强制补齐 industry（来自 stock_basic.csv）
   3) ✅ 输出旁路 debug：outputs/debug_step2_candidate_YYYYMMDD.json
-  4) 缺字段/缺文件自动降级，不崩溃
+  4) ✅ 返回值类型对齐：必须返回 DataFrame（否则 Step3 会收到 dict 崩溃）
 """
 
 from __future__ import annotations
@@ -100,7 +100,6 @@ def _normalize_id_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any
 
     out = df.copy()
     out["ts_code"] = _to_str_series(out, code_col).map(_normalize_ts_code_value)
-
     dbg["normalized_ratio"] = float((out["ts_code"].astype("string").fillna("") != "").mean())
     return out, dbg
 
@@ -137,9 +136,10 @@ def _ctx_get_df(ctx: Dict[str, Any], keys: List[str]) -> Optional[pd.DataFrame]:
 # Step2 main
 # =========================
 
-def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
+def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
     """
-    输出：
+    ✅ 返回：candidates_df（DataFrame）
+    同时把 candidates_df 写回 ctx，供后续步骤取用：
       ctx["candidates"] = candidates_df
       ctx["step2"] = candidates_df   # 兼容旧链路
     """
@@ -166,7 +166,7 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         "out_csv": str(out_dir / f"step2_candidates_{trade_date}.csv"),
     }
 
-    # 1) 选择 base：优先 limit_list_d / stk_limit（涨停列表）
+    # 1) base：优先涨停列表
     base_df = _ctx_get_df(ctx, ["limit_list_d", "stk_limit", "limit_up", "limit_up_list"])
     if base_df is not None and not base_df.empty:
         debug["base_source"] = "limit_list_d/stk_limit"
@@ -179,7 +179,7 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         ctx["candidates"] = empty
         ctx["step2"] = empty
         _safe_json_dump(debug, Path(debug["debug_file"]))
-        return ctx
+        return empty
 
     base_df = base_df.copy()
     debug["base_rows"] = int(len(base_df))
@@ -188,7 +188,6 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     base_df, code_dbg = _normalize_id_columns(base_df)
     debug["code_norm"] = code_dbg
 
-    # 3) 若没有 ts_code，直接输出（让问题显性暴露）
     if "ts_code" not in base_df.columns:
         candidates_df = base_df
         debug["final_rows"] = int(len(candidates_df))
@@ -197,9 +196,9 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         _safe_json_dump(debug, Path(debug["debug_file"]))
         ctx["candidates"] = candidates_df
         ctx["step2"] = candidates_df
-        return ctx
+        return candidates_df
 
-    # 4) industry 补齐（关键）
+    # 3) 补 industry
     before_ratio = 0.0
     if "industry" in base_df.columns:
         before_ratio = float((base_df["industry"].astype("string").fillna("") != "").mean())
@@ -225,7 +224,6 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             sb2["industry"] = sb2["industry"].astype("string").fillna("").map(lambda x: str(x).strip())
 
             candidates_df = base_df.merge(sb2, on="ts_code", how="left", suffixes=("", "_sb"))
-
             if "industry_sb" in candidates_df.columns:
                 if "industry" in candidates_df.columns:
                     base_ind = candidates_df["industry"].astype("string").fillna("")
@@ -244,11 +242,10 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         after_ratio = float((candidates_df["industry"].astype("string").fillna("") != "").mean())
     debug["industry_merge"]["industry_nonblank_ratio_after"] = after_ratio
 
-    # 5) 基础过滤：ST / 退（可选，缺字段就跳过）
+    # 4) 过滤 ST / 退（可选）
     name_col = _first_existing_col(candidates_df, ["name", "名称", "股票简称", "ts_name"])
     if name_col:
         name_s = _to_str_series(candidates_df, name_col)
-
         mask_st = name_s.str.contains("ST", case=False, regex=False)
         debug["filters"]["drop_st"] = int(mask_st.sum())
         candidates_df = candidates_df.loc[~mask_st].copy()
@@ -258,7 +255,7 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         debug["filters"]["drop_delist"] = int(mask_delist.sum())
         candidates_df = candidates_df.loc[~mask_delist].copy()
 
-    # 6) 去重与列前置
+    # 5) 去重 & 列前置
     candidates_df["ts_code"] = candidates_df["ts_code"].astype("string").fillna("").map(_normalize_ts_code_value)
     candidates_df = candidates_df.loc[candidates_df["ts_code"] != ""].copy()
     candidates_df = candidates_df.drop_duplicates(subset=["ts_code"]).reset_index(drop=True)
@@ -267,15 +264,15 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     rest = [c for c in candidates_df.columns if c not in front]
     candidates_df = candidates_df[front + rest]
 
-    # 7) 落盘 + debug
+    # 6) 落盘 + debug
     debug["final_rows"] = int(len(candidates_df))
     debug["final_cols"] = list(candidates_df.columns)
 
     candidates_df.to_csv(Path(debug["out_csv"]), index=False, encoding="utf-8-sig")
     _safe_json_dump(debug, Path(debug["debug_file"]))
 
-    # 8) 写回 ctx
+    # 7) 写回 ctx（但返回 DataFrame）
     ctx["candidates"] = candidates_df
     ctx["step2"] = candidates_df
 
-    return ctx
+    return candidates_df
