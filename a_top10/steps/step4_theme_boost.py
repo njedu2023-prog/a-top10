@@ -96,9 +96,6 @@ def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional
     return None
 
 
-import pandas as pd
-import numpy as np
-
 def _safe_str(x: Any) -> str:
     if x is None or pd.isna(x):
         return ""
@@ -673,4 +670,3 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 def run_step4_theme_boost(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     """兼容旧入口名（如果你的 main.py 曾经调用过这个）。"""
     return run_step4(s, ctx)
-
