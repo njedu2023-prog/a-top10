@@ -244,7 +244,10 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, pd.DataFrame]:
     else:
         # 退一步：用 name 判定（中文市场常见：ST、*ST）
         name_series = top_df_raw_toggle_empty(out, name_col).astype(str)
-        st_flag = name_series.str.contains(r"(^\*?ST)|(\bST\b)", regex=True).astype("float64")
+
+        # ✅ 修复点：去掉“捕获组”避免 pandas 的 UserWarning；并加 na=False 更稳
+        # 原：r"(^\*?ST)|(\bST\b)"  -> 会产生捕获组警告
+        st_flag = name_series.str.contains(r"^\*?ST|\bST\b", regex=True, na=False).astype("float64")
 
     st_penalty = pd.Series(
         np.where(st_flag.values > 0.5, st_penalty_default, 1.0),
