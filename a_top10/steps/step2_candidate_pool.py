@@ -11,12 +11,60 @@ def _first_existing_col(df: pd.DataFrame, candidates: Iterable[str]) -> Optional
     """返回 df 中第一个命中的列名（大小写不敏感）。"""
     if df is None or df.empty:
         return None
-    lower_map = {c.lower(): c for c in df.columns}
+    cols = [str(c) for c in df.columns]
+    lower_map = {c.lower(): c0 for c, c0 in zip(cols, df.columns)}
     for c in candidates:
-        hit = lower_map.get(c.lower())
+        hit = lower_map.get(str(c).lower())
         if hit:
             return hit
     return None
+
+
+def _normalize_ts_code_one(x: Any) -> str:
+    """
+    ts_code 统一成 000001.SZ / 600000.SH / 830xxx.BJ（大写）
+    兼容输入：
+      - 000001
+      - 000001.SZ / 000001sz / 000001.sz
+      - 600000.SH
+    """
+    s = "" if x is None else str(x).strip()
+    if not s:
+        return ""
+    s = s.replace(" ", "").upper()
+
+    # 已带后缀
+    if "." in s:
+        left, right = s.split(".", 1)
+        left = "".join([c for c in left if c.isdigit()])
+        right = "".join([c for c in right if c.isalpha()])
+        if len(left) == 6 and right in {"SZ", "SH", "BJ"}:
+            return f"{left}.{right}"
+        if len(left) == 6:
+            s6 = left
+            if s6.startswith(("6", "9")):
+                return f"{s6}.SH"
+            if s6.startswith(("8", "4")):
+                return f"{s6}.BJ"
+            return f"{s6}.SZ"
+        return ""
+
+    # 无后缀：提取 6 位数字
+    digits = "".join([c for c in s if c.isdigit()])
+    if len(digits) != 6:
+        return ""
+
+    if digits.startswith(("6", "9")):
+        return f"{digits}.SH"
+    if digits.startswith(("8", "4")):
+        return f"{digits}.BJ"
+    return f"{digits}.SZ"
+
+
+def _normalize_ts_code_series(sr: pd.Series) -> pd.Series:
+    if sr is None:
+        return pd.Series([], dtype=str)
+    return sr.fillna("").astype(str).map(_normalize_ts_code_one)
 
 
 def _ensure_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str]:
@@ -47,25 +95,33 @@ def _ensure_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str]:
         df.rename(columns={name_col: "name"}, inplace=True)
         name_col = "name"
 
+    # ✅ 关键：归一化 ts_code，避免 merge 对不上
+    df["ts_code"] = _normalize_ts_code_series(df["ts_code"])
+
     return df, ts_col, name_col
 
 
 def _ensure_ts_code(df: pd.DataFrame) -> pd.DataFrame:
-    """确保任意表都有 ts_code 列（用于 merge）。"""
+    """确保任意表都有 ts_code 列（用于 merge），并归一化。"""
     if df is None:
         return pd.DataFrame(columns=["ts_code"])
+    df = df.copy()
+
     if df.empty:
         if "ts_code" not in df.columns:
-            df = df.copy()
             df["ts_code"] = ""
+        else:
+            df["ts_code"] = _normalize_ts_code_series(df["ts_code"])
         return df
 
-    df = df.copy()
     ts_col = _first_existing_col(df, ["ts_code", "code", "股票代码", "证券代码", "TS_CODE"])
     if ts_col is None:
         df["ts_code"] = ""
     elif ts_col != "ts_code":
         df.rename(columns={ts_col: "ts_code"}, inplace=True)
+
+    # ✅ 关键：归一化 ts_code
+    df["ts_code"] = _normalize_ts_code_series(df["ts_code"])
     return df
 
 
@@ -197,6 +253,9 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
+    # ✅ 再保险：候选集合 ts_code 也归一化（避免上游未规范）
+    cand["ts_code"] = _normalize_ts_code_series(cand["ts_code"])
+
     # -----------------------------
     # ✅ 关键：补齐 Step3 可能用到的字段
     # -----------------------------
@@ -208,7 +267,14 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
         mapping={
             "pct_change": ["pct_change", "change_pct", "pct_chg", "涨跌幅", "PCT_CHG"],
             "amount": ["amount", "成交额", "turnover_amount", "amt", "AMOUNT"],
-            "turnover_rate": ["turnover_rate", "turn_rate", "换手率", "turnover", "TURNOVER_RATE", "TURN_RATE"],
+            "turnover_rate": [
+                "turnover_rate",
+                "turn_rate",
+                "换手率",
+                "turnover",
+                "TURNOVER_RATE",
+                "TURN_RATE",
+            ],
         },
     )
     cand = _merge_left(cand, daily_sel)
