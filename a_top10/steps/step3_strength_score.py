@@ -3,17 +3,11 @@
 
 """
 Step3: Strength Score (方案A)
-- 只依赖“现有字段”（来自候选/榜单/快照中常见的列）
-- 输出 StrengthScore（0~100），并保留若干分项得分便于调试
-
-✅ 本版修复“数据断链”常见原因：
-- Step4 需要的关键身份列（ts_code / name / industry）虽然“列名存在”，但值可能全是空字符串/空白 -> 被当成“无效”
-- 本版会把空字符串/纯空白统一当成缺失，并从候选别名列回填
-- 同时对 ts_code / name / industry 做 strip，减少匹配失败
 """
 
 from __future__ import annotations
 
+import re
 from typing import Iterable, Optional
 
 import numpy as np
@@ -39,7 +33,6 @@ def _to_float_series(df: pd.DataFrame, col: Optional[str], default: float = 0.0)
 
 
 def _clip01(x) -> pd.Series:
-    """把输入压到 0~1，保持 index（如果有）"""
     if isinstance(x, pd.Series):
         arr = x.to_numpy(dtype="float64", copy=False)
         return pd.Series(np.clip(arr, 0.0, 1.0), index=x.index, dtype="float64")
@@ -48,7 +41,6 @@ def _clip01(x) -> pd.Series:
 
 
 def _winsorize(s: pd.Series, lower_q: float = 0.02, upper_q: float = 0.98) -> pd.Series:
-    """分位截尾，减少极端值影响"""
     if s is None or len(s) == 0:
         return s
     s2 = s.replace([np.inf, -np.inf], np.nan).dropna()
@@ -60,10 +52,6 @@ def _winsorize(s: pd.Series, lower_q: float = 0.02, upper_q: float = 0.98) -> pd
 
 
 def _robust_minmax(s: pd.Series, lower_q: float = 0.05, upper_q: float = 0.95) -> pd.Series:
-    """
-    稳健 MinMax：先按分位截尾，再映射到 0~1
-    - 对长尾更稳健
-    """
     if s is None or len(s) == 0:
         return pd.Series([], dtype="float64")
 
@@ -78,11 +66,6 @@ def _robust_minmax(s: pd.Series, lower_q: float = 0.05, upper_q: float = 0.95) -
 
 
 def _logistic01(s: pd.Series, center: float, scale: float) -> pd.Series:
-    """
-    logistic 映射到 0~1：
-    - center: 中心点
-    - scale: 越小越陡（需要 >0）
-    """
     scale = max(float(scale), 1e-9)
     x = (s.astype("float64") - float(center)) / scale
     x = x.replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(-60, 60)
@@ -90,57 +73,57 @@ def _logistic01(s: pd.Series, center: float, scale: float) -> pd.Series:
 
 
 def _normalize_turnover_rate(s: pd.Series) -> pd.Series:
-    """
-    将换手率转为百分比口径（如果本来是 0~1 小数则 *100）
-    """
     s = s.astype("float64").replace([np.inf, -np.inf], np.nan).fillna(0.0).copy()
     med = float(s.median()) if len(s) else np.nan
-    if np.isfinite(med) and med <= 1.5:  # 常见：0.03 表示 3%
+    if np.isfinite(med) and med <= 1.5:
         s = s * 100.0
     return s
 
 
 def _as_str_series(df: pd.DataFrame, col: Optional[str]) -> pd.Series:
-    """安全取字符串列，并做 strip；缺失则返回全 NA"""
     if not col or col not in df.columns:
         return pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
     s = df[col].astype("object")
-    # 统一把 None/NaN 变为 <NA>，并 strip 空白
     s = s.where(~pd.isna(s), pd.NA)
     s = s.map(lambda x: x.strip() if isinstance(x, str) else x)
-    # 把空字符串也当缺失
     s = s.map(lambda x: pd.NA if isinstance(x, str) and x == "" else x)
     return s
 
 
 def _is_effectively_empty(s: pd.Series) -> bool:
-    """判断一列是否“有效值几乎为 0”：全 NA 或全空白字符串"""
     if s is None or len(s) == 0:
         return True
     s2 = s.astype("object")
-    # 将空白字符串视为 NA
     s2 = s2.map(lambda x: x.strip() if isinstance(x, str) else x)
     s2 = s2.map(lambda x: pd.NA if isinstance(x, str) and x == "" else x)
     return s2.isna().all()
 
 
-def _ensure_identity_columns(out: pd.DataFrame) -> pd.DataFrame:
-    """
-    修复/补齐关键身份列，保证后续 Step4/5 可用：
-    - ts_code
-    - name
-    - industry
+_TS_LIKE_RE = re.compile(r"\d{6}")
 
-    ✅ 修复点：
-    - 如果列存在但值全是 "" / "   "，也视为缺失并回填（避免 Step4 选中“空列”导致 matched_industry_count=0）
-    """
+
+def _looks_like_ts_code_series(sr: pd.Series) -> bool:
+    if sr is None or len(sr) == 0:
+        return False
+    ss = sr.astype(str).map(lambda x: x.strip())
+    # 认为“至少有一半”看起来像代码
+    return bool((ss.str.contains(_TS_LIKE_RE)).mean() >= 0.5)
+
+
+def _ensure_identity_columns(out: pd.DataFrame) -> pd.DataFrame:
     if out is None or len(out) == 0:
         return out
 
-    # 统一先把已存在的关键列做 strip + 空串->NA（避免“列名在但全空”）
     for key in ["ts_code", "name", "industry"]:
         if key in out.columns:
             out[key] = _as_str_series(out, key)
+
+    # 0) 兜底：若 ts_code 列为空/不存在，但 index 像代码，把 index 提取出来
+    if ("ts_code" not in out.columns) or _is_effectively_empty(out["ts_code"]):
+        idx_s = pd.Series(out.index, index=out.index, dtype="object")
+        idx_s = idx_s.where(~pd.isna(idx_s), pd.NA)
+        if _looks_like_ts_code_series(idx_s.astype(str)):
+            out["ts_code"] = idx_s.astype(str).map(lambda x: x.strip() if isinstance(x, str) else x)
 
     # 1) ts_code
     if ("ts_code" not in out.columns) or _is_effectively_empty(out["ts_code"]):
@@ -169,7 +152,6 @@ def _ensure_identity_columns(out: pd.DataFrame) -> pd.DataFrame:
                     out["industry"] = cand
                     break
 
-    # 最后一遍：保证三列都 strip + 空串->NA（即使是刚回填的）
     for key in ["ts_code", "name", "industry"]:
         if key in out.columns:
             out[key] = _as_str_series(out, key)
@@ -182,45 +164,27 @@ def _ensure_identity_columns(out: pd.DataFrame) -> pd.DataFrame:
 # -------------------------
 
 def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    核心思想（科学/合理的启发式）：
-    1) “动量/强势”：涨跌幅越强越好（尤其是强阳线/涨停附近）
-    2) “成交/关注度”：成交额越大越好（但做对数+稳健归一化）
-    3) “资金净流”：净额/净占比越正越好（稳健映射）
-    4) “换手结构”：过低=没流动性，过高=可能分歧大；偏好中高但不过热（用分段方式）
-    5) “龙虎榜强度”：若有 l_amount / amount_rate 等，作为强化项
-    6) “规模惩罚（轻微）”：流通市值过大通常弹性小（可选、权重小）
-    """
     if df is None or len(df) == 0:
         return df
 
     out = df.copy()
-
-    # ✅ 关键：先补齐身份列（避免 Step4/5 缺主键 / 缺行业导致“断链”）
     out = _ensure_identity_columns(out)
 
-    # ---------- A1: Momentum / pct_change ----------
     pct_col = _first_existing_col(out, ["pct_change", "change_pct", "pct_chg", "涨跌幅"])
     pct = _to_float_series(out, pct_col, default=0.0)
-
     score_momo = _logistic01(pct, center=3.0, scale=3.0)
     out["pct_change"] = pct
     out["score_momentum"] = score_momo
 
-    # ---------- A2: Liquidity / amount ----------
     amt_col = _first_existing_col(out, ["amount", "成交额", "turnover_amount", "amt"])
     amount = _to_float_series(out, amt_col, default=0.0).clip(0.0, float("inf"))
-
     log_amt = pd.Series(np.log1p(amount.to_numpy(dtype="float64")), index=out.index, dtype="float64")
     score_amt = _robust_minmax(log_amt)
-
     out["amount"] = amount
     out["score_amount"] = score_amt
 
-    # ---------- A3: Net flow / net_amount or net_rate ----------
     net_amt_col = _first_existing_col(out, ["net_amount", "net_amt", "净额", "净买入额"])
     net_rate_col = _first_existing_col(out, ["net_rate", "净占比", "net_ratio"])
-
     net_amt = _to_float_series(out, net_amt_col, default=0.0)
     net_rate = _to_float_series(out, net_rate_col, default=np.nan)
 
@@ -235,35 +199,25 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
 
     out["score_netflow"] = score_net
 
-    # ---------- A4: Turnover structure / turnover_rate ----------
     tr_col = _first_existing_col(out, ["turnover_rate", "turn_rate", "换手率", "turnover"])
     tr = _to_float_series(out, tr_col, default=5.0)
     tr = _normalize_turnover_rate(tr).clip(0.0, 100.0)
-
     out["turnover_rate"] = tr
 
     score_turn = pd.Series(0.0, index=out.index, dtype="float64")
     t = tr
-
     m1 = (t > 2.0) & (t <= 10.0)
     score_turn.loc[m1] = (t.loc[m1] - 2.0) / (10.0 - 2.0)
-
     m2 = (t > 10.0) & (t <= 25.0)
     score_turn.loc[m2] = 1.0 - 0.6 * ((t.loc[m2] - 10.0) / (25.0 - 10.0))
-
     m3 = t > 25.0
     score_turn.loc[m3] = 0.4 * (1.0 - ((t.loc[m3] - 25.0) / (60.0 - 25.0))).clip(0.0, 1.0)
-
     out["score_turnover"] = _clip01(score_turn)
 
-    # ---------- A5: LHB strength (optional) ----------
     l_amt_col = _first_existing_col(out, ["l_amount", "龙虎榜成交额", "lhb_amount"])
     amt_rate_col = _first_existing_col(out, ["amount_rate", "成交额占比", "lhb_amount_rate"])
-
     l_amt = _to_float_series(out, l_amt_col, default=0.0).clip(0.0, float("inf"))
-    score_lhb_amt = _robust_minmax(
-        pd.Series(np.log1p(l_amt.to_numpy(dtype="float64")), index=out.index, dtype="float64")
-    )
+    score_lhb_amt = _robust_minmax(pd.Series(np.log1p(l_amt.to_numpy(dtype="float64")), index=out.index, dtype="float64"))
 
     if amt_rate_col:
         ar = _to_float_series(out, amt_rate_col, default=0.0)
@@ -278,20 +232,17 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
     out["l_amount"] = l_amt
     out["score_lhb"] = _clip01(0.6 * score_lhb_amt + 0.4 * score_lhb_rate)
 
-    # ---------- A6: Size penalty (optional, small weight) ----------
     fv_col = _first_existing_col(out, ["float_values", "流通市值", "float_mv"])
     fv = _to_float_series(out, fv_col, default=np.nan).clip(0.0, float("inf"))
-
     if fv_col:
         log_fv = pd.Series(np.log1p(fv.fillna(0.0).to_numpy(dtype="float64")), index=out.index, dtype="float64")
-        size01 = _robust_minmax(log_fv)      # 大市值 -> 1
-        score_size = 1.0 - size01            # 大市值 -> 0
+        size01 = _robust_minmax(log_fv)
+        score_size = 1.0 - size01
         out["float_values"] = fv
         out["score_size"] = _clip01(score_size)
     else:
         out["score_size"] = 0.5
 
-    # ---------- Final aggregation ----------
     out["StrengthScore"] = (
         0.30 * out["score_momentum"]
         + 0.22 * out["score_amount"]
@@ -310,9 +261,6 @@ def calc_strength_score(df: pd.DataFrame) -> pd.DataFrame:
 # -------------------------
 
 def run_step3(candidates_df: pd.DataFrame, top_k: int = 50) -> pd.DataFrame:
-    """
-    返回 StrengthScore TopK 股票进入下一层
-    """
     scored = calc_strength_score(candidates_df)
     top_k = int(top_k or 50)
     top_k = max(1, top_k)
@@ -322,7 +270,6 @@ def run_step3(candidates_df: pd.DataFrame, top_k: int = 50) -> pd.DataFrame:
 
 
 def run(df: pd.DataFrame, s=None, top_k: int = 50) -> pd.DataFrame:
-    """Backward-compatible alias"""
     return run_step3(df, top_k=top_k)
 
 
