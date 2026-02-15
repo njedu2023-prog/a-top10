@@ -2,364 +2,577 @@
 # -*- coding: utf-8 -*-
 
 """
-Step3: Strength Score (方案A)
-- 只依赖“现有字段”（来自候选/榜单/快照中常见的列）
-- 输出 StrengthScore（0~100），并保留若干分项得分便于调试
+Step3: Strength Score — Engine V2 (基于可用数据的真实量化版)
 
-✅ 修复点（本次核心）：
-- 上游有时把 candidates 以 dict 形式传入（而非 DataFrame），导致 df.empty 报错
-- 本版支持 dict 入参：自动从 dict 中提取第一个 DataFrame（或常见键名），否则给出清晰错误信息
+目标：
+1) 读取 Step2 候选池（或上游传入 DataFrame/dict）
+2) 自动定位数据仓库快照目录，读取可用 CSV（daily / daily_basic / top_list / moneyflow_hsgt / limit_list_d / limit_break_d）
+3) 用 ts_code(+trade_date) join 补齐字段
+4) 计算 StrengthScore（0~100），并输出调试分项，保证 Step6 能识别 StrengthScore
 
-✅ 本版也包含“身份列修复”：
-- ts_code / name / industry 即使列名存在，但值全是空字符串/空白 -> 视为缺失并回填
+输出：
+- 返回：带 StrengthScore 的 DataFrame（默认 TopK=50）
+- 旁路落盘（不影响主流程）：
+  outputs/debug_step3_report.md
+  outputs/step3_strength_YYYYMMDD.csv
+
+注意：
+- 不依赖任何“高阶权限字段”（封板时间/封单金额等）
+- 所有字段缺失时也不会崩溃，但会在 debug 报告里明确提示缺失率
 """
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Any, Mapping
+import os
+import json
+from pathlib import Path
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
 
-# -------------------------
-# Input normalize / guard
-# -------------------------
+# =========================================================
+# Basic utils
+# =========================================================
 
 def _coerce_df(obj: Any) -> pd.DataFrame:
-    """
-    统一把输入转换成 DataFrame：
-    - DataFrame: 原样返回
-    - dict: 尝试从常见键名取 DataFrame；否则遍历 values 找第一个 DataFrame
-    - 其他类型：抛 TypeError
-    """
+    """统一把输入转换成 DataFrame：兼容 DataFrame / dict(内含 DataFrame) / None"""
     if obj is None:
         return pd.DataFrame()
-
     if isinstance(obj, pd.DataFrame):
         return obj
-
-    # 有些上游会传 dict（例如 {"candidates": df, ...} 或 {"df": df}）
     if isinstance(obj, Mapping):
-        # 1) 常见键名优先
-        for k in ("candidates", "candidate", "df", "data", "result", "pool"):
+        for k in ("candidates", "candidate", "df", "data", "result", "pool", "step2", "step2_candidates"):
             v = obj.get(k, None)
             if isinstance(v, pd.DataFrame):
                 return v
-
-        # 2) 遍历找第一个 DataFrame
         for v in obj.values():
             if isinstance(v, pd.DataFrame):
                 return v
-
-        raise TypeError(
-            f"Step3 calc_strength_score() 收到 dict，但在其常见键/values 中找不到 DataFrame。keys={list(obj.keys())}"
-        )
-
-    raise TypeError(
-        f"Step3 calc_strength_score() 期望 DataFrame 或 dict(内含 DataFrame)，但收到类型：{type(obj)}"
-    )
+        return pd.DataFrame()
+    return pd.DataFrame()
 
 
-# -------------------------
-# Utils
-# -------------------------
-
-def _first_existing_col(df: pd.DataFrame, names: Iterable[str]) -> Optional[str]:
-    for n in names:
-        if n in df.columns:
-            return n
+def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
+    if df is None or df.empty:
+        return None
+    cols = list(df.columns)
+    lower_map = {str(c).lower(): c for c in cols}
+    for name in candidates:
+        key = str(name).lower()
+        if key in lower_map:
+            return lower_map[key]
     return None
 
 
 def _to_float_series(df: pd.DataFrame, col: Optional[str], default: float = 0.0) -> pd.Series:
-    if not col or col not in df.columns:
+    if (col is None) or (col not in df.columns):
         return pd.Series([default] * len(df), index=df.index, dtype="float64")
     s = pd.to_numeric(df[col], errors="coerce").astype("float64")
-    return s.fillna(default)
-
-
-def _clip01(x) -> pd.Series:
-    """把输入压到 0~1，保持 index（如果有）"""
-    if isinstance(x, pd.Series):
-        arr = x.to_numpy(dtype="float64", copy=False)
-        return pd.Series(np.clip(arr, 0.0, 1.0), index=x.index, dtype="float64")
-    arr = np.asarray(x, dtype="float64")
-    return pd.Series(np.clip(arr, 0.0, 1.0), dtype="float64")
-
-
-def _winsorize(s: pd.Series, lower_q: float = 0.02, upper_q: float = 0.98) -> pd.Series:
-    """分位截尾，减少极端值影响"""
-    if s is None or len(s) == 0:
-        return s
-    s2 = s.replace([np.inf, -np.inf], np.nan).dropna()
-    if len(s2) == 0:
-        return s.fillna(0.0)
-    lo = float(s2.quantile(lower_q))
-    hi = float(s2.quantile(upper_q))
-    return s.clip(lo, hi)
-
-
-def _robust_minmax(s: pd.Series, lower_q: float = 0.05, upper_q: float = 0.95) -> pd.Series:
-    """
-    稳健 MinMax：先按分位截尾，再映射到 0~1
-    - 对长尾更稳健
-    """
-    if s is None or len(s) == 0:
-        return pd.Series([], dtype="float64")
-
-    s = s.astype("float64").replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    s2 = _winsorize(s, lower_q, upper_q)
-
-    lo = float(s2.min())
-    hi = float(s2.max())
-    if (not np.isfinite(lo)) or (not np.isfinite(hi)) or hi <= lo:
-        return pd.Series([0.0] * len(s2), index=s2.index, dtype="float64")
-    return (s2 - lo) / (hi - lo)
-
-
-def _logistic01(s: pd.Series, center: float, scale: float) -> pd.Series:
-    """
-    logistic 映射到 0~1：
-    - center: 中心点
-    - scale: 越小越陡（需要 >0）
-    """
-    scale = max(float(scale), 1e-9)
-    x = (s.astype("float64") - float(center)) / scale
-    x = x.replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(-60, 60)
-    return pd.Series(
-        1.0 / (1.0 + np.exp(-x.to_numpy(dtype="float64"))),
-        index=s.index,
-        dtype="float64",
-    )
-
-
-def _normalize_turnover_rate(s: pd.Series) -> pd.Series:
-    """
-    将换手率转为百分比口径（如果本来是 0~1 小数则 *100）
-    """
-    s = s.astype("float64").replace([np.inf, -np.inf], np.nan).fillna(0.0).copy()
-    med = float(s.median()) if len(s) else np.nan
-    if np.isfinite(med) and med <= 1.5:  # 常见：0.03 表示 3%
-        s = s * 100.0
+    s = s.replace([np.inf, -np.inf], np.nan).fillna(default)
     return s
 
 
 def _as_str_series(df: pd.DataFrame, col: Optional[str]) -> pd.Series:
-    """安全取字符串列，并做 strip；缺失则返回全 NA"""
     if not col or col not in df.columns:
         return pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
     s = df[col].astype("object")
-    s = s.where(~pd.isna(s), pd.NA)
     s = s.map(lambda x: x.strip() if isinstance(x, str) else x)
     s = s.map(lambda x: pd.NA if isinstance(x, str) and x == "" else x)
     return s
 
 
-def _is_effectively_empty(s: pd.Series) -> bool:
-    """判断一列是否“有效值几乎为 0”：全 NA 或全空白字符串"""
-    if s is None or len(s) == 0:
-        return True
-    s2 = s.astype("object")
-    s2 = s2.map(lambda x: x.strip() if isinstance(x, str) else x)
-    s2 = s2.map(lambda x: pd.NA if isinstance(x, str) and x == "" else x)
-    return s2.isna().all()
+def _clip01(s: pd.Series) -> pd.Series:
+    s = pd.to_numeric(s, errors="coerce").astype("float64")
+    s = s.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return s.clip(0.0, 1.0)
 
 
-def _ensure_identity_columns(out: pd.DataFrame) -> pd.DataFrame:
+def _robust_rank01(s: pd.Series, ascending: bool = False) -> pd.Series:
     """
-    修复/补齐关键身份列，保证后续 Step4/5 可用：
-    - ts_code
-    - name
-    - industry
-
-    ✅ 修复点：
-    - 如果列存在但值全是 "" / "   "，也视为缺失并回填
+    稳健归一（0~1）：用 rank(pct=True) 抗尺度/长尾。
+    ascending=False 表示值越大越强
     """
-    if out is None or len(out) == 0:
+    s = pd.to_numeric(s, errors="coerce").astype("float64")
+    s = s.replace([np.inf, -np.inf], np.nan)
+    if s.notna().sum() == 0:
+        return pd.Series([0.0] * len(s), index=s.index, dtype="float64")
+    return s.rank(pct=True, method="average", ascending=ascending).fillna(0.0).astype("float64")
+
+
+def _log1p_safe(s: pd.Series) -> pd.Series:
+    s = pd.to_numeric(s, errors="coerce").astype("float64")
+    s = s.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    s = s.clip(0.0, float("inf"))
+    return pd.Series(np.log1p(s.to_numpy(dtype="float64")), index=s.index, dtype="float64")
+
+
+def _resolve_trade_date(s=None) -> str:
+    # 1) ENV 优先
+    td = os.getenv("TRADE_DATE", "").strip()
+    if td:
+        return td
+    # 2) settings 其次
+    if s is not None:
+        for k in ("trade_date", "TRADE_DATE"):
+            if hasattr(s, k):
+                v = str(getattr(s, k) or "").strip()
+                if v:
+                    return v
+    # 3) 兜底：当天
+    from datetime import datetime
+    return datetime.now().strftime("%Y%m%d")
+
+
+# =========================================================
+# Snapshot locating (不写死，自动探测)
+# =========================================================
+
+def _candidate_snapshot_dirs(trade_date: str) -> Sequence[Path]:
+    """
+    兼容多种仓库结构：
+    - _warehouse/a-share-top3-data/data/raw/YYYY/YYYYMMDD/
+    - _warehouse/a-share-top3-data/data/raw/YYYYMMDD/
+    - data_repo/snapshots/YYYYMMDD/ （旧结构兜底）
+    - snapshots/YYYYMMDD/
+    """
+    y = trade_date[:4]
+    return [
+        Path("_warehouse") / "a-share-top3-data" / "data" / "raw" / y / trade_date,
+        Path("_warehouse") / "a-share-top3-data" / "data" / "raw" / trade_date,
+        Path("data_repo") / "snapshots" / trade_date,
+        Path("snapshots") / trade_date,
+    ]
+
+
+def _locate_snapshot_dir(trade_date: str, s=None, ctx: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+    # 1) ctx 提供的 snapshot_dir
+    if ctx and isinstance(ctx, dict):
+        p = ctx.get("snapshot_dir", None)
+        if p:
+            pp = Path(str(p))
+            if pp.exists():
+                return pp
+
+    # 2) settings 提供的 snapshot_dir(trade_date)
+    if s is not None and hasattr(s, "snapshot_dir"):
+        try:
+            pp = s.snapshot_dir(trade_date)
+            pp = Path(str(pp))
+            if pp.exists():
+                return pp
+        except Exception:
+            pass
+
+    # 3) 常见路径探测
+    for p in _candidate_snapshot_dirs(trade_date):
+        if p.exists():
+            return p
+
+    return None
+
+
+def _read_csv(p: Path) -> pd.DataFrame:
+    if not p or (not p.exists()):
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(p)
+    except Exception:
+        # 兜底：强制 utf-8
+        try:
+            return pd.read_csv(p, encoding="utf-8")
+        except Exception:
+            return pd.DataFrame()
+
+
+# =========================================================
+# Candidate pool loading
+# =========================================================
+
+def _load_candidates_fallback(trade_date: str) -> pd.DataFrame:
+    """
+    如果上游没传 candidates_df，就从 outputs/step2_candidates_YYYYMMDD.csv 读。
+    """
+    p = Path("outputs") / f"step2_candidates_{trade_date}.csv"
+    if p.exists():
+        df = _read_csv(p)
+        return df
+    return pd.DataFrame()
+
+
+def _ensure_identity(out: pd.DataFrame) -> pd.DataFrame:
+    if out is None or out.empty:
         return out
 
-    for key in ["ts_code", "name", "industry"]:
-        if key in out.columns:
-            out[key] = _as_str_series(out, key)
+    ts_col = _first_existing_col(out, ["ts_code", "TS_CODE", "code", "symbol", "ticker", "证券代码", "代码"]) or "ts_code"
+    if ts_col != "ts_code":
+        out["ts_code"] = _as_str_series(out, ts_col)
+    else:
+        out["ts_code"] = _as_str_series(out, "ts_code")
 
-    # 1) ts_code
-    if ("ts_code" not in out.columns) or _is_effectively_empty(out["ts_code"]):
-        for c in ["ts_code", "代码", "code", "symbol", "证券代码", "ticker"]:
-            if c in out.columns:
-                cand = _as_str_series(out, c)
-                if not _is_effectively_empty(cand):
-                    out["ts_code"] = cand
-                    break
+    name_col = _first_existing_col(out, ["name", "NAME", "stock_name", "名称", "股票", "证券名称"])
+    if name_col:
+        out["name"] = _as_str_series(out, name_col)
+    elif "name" not in out.columns:
+        out["name"] = ""
 
-    # 2) name
-    if ("name" not in out.columns) or _is_effectively_empty(out["name"]):
-        for c in ["name", "股票", "名称", "stock_name", "证券名称"]:
-            if c in out.columns:
-                cand = _as_str_series(out, c)
-                if not _is_effectively_empty(cand):
-                    out["name"] = cand
-                    break
+    ind_col = _first_existing_col(out, ["industry", "行业", "板块", "industry_name", "所属行业"])
+    if ind_col:
+        out["industry"] = _as_str_series(out, ind_col)
+    elif "industry" not in out.columns:
+        out["industry"] = ""
 
-    # 3) industry
-    if ("industry" not in out.columns) or _is_effectively_empty(out["industry"]):
-        for c in ["industry", "行业", "板块", "industry_name", "所属行业", "概念", "主题"]:
-            if c in out.columns:
-                cand = _as_str_series(out, c)
-                if not _is_effectively_empty(cand):
-                    out["industry"] = cand
-                    break
-
-    for key in ["ts_code", "name", "industry"]:
-        if key in out.columns:
-            out[key] = _as_str_series(out, key)
+    # trade_date
+    td_col = _first_existing_col(out, ["trade_date", "TRADE_DATE", "日期"])
+    if td_col:
+        out["trade_date"] = out[td_col].astype(str)
+    elif "trade_date" not in out.columns:
+        out["trade_date"] = ""
 
     return out
 
 
-# -------------------------
-# Core scoring
-# -------------------------
+# =========================================================
+# Feature join from snapshots
+# =========================================================
 
-def calc_strength_score(df: Any) -> pd.DataFrame:
+def _normalize_ts_code(df: pd.DataFrame, col: str = "ts_code") -> pd.DataFrame:
+    if df is None or df.empty or col not in df.columns:
+        return df
+    df[col] = df[col].astype(str).str.strip()
+    return df
+
+
+def _pick_col(df: pd.DataFrame, names: Sequence[str]) -> Optional[str]:
+    return _first_existing_col(df, names)
+
+
+def _join_snap_features(cand: pd.DataFrame, snap_dir: Path) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    计算 StrengthScore（0~100）
+    从快照目录读取多个 csv，并按 ts_code+trade_date 合并到候选池。
     """
-    df = _coerce_df(df)
-    if len(df) == 0:
+    debug = {"snapshot_dir": str(snap_dir), "files": {}}
+
+    # 读文件
+    daily = _read_csv(snap_dir / "daily.csv")
+    daily_basic = _read_csv(snap_dir / "daily_basic.csv")
+    top_list = _read_csv(snap_dir / "top_list.csv")
+    hsgt = _read_csv(snap_dir / "moneyflow_hsgt.csv")
+    limit_list = _read_csv(snap_dir / "limit_list_d.csv")
+    limit_break = _read_csv(snap_dir / "limit_break_d.csv")
+
+    debug["files"]["daily.csv"] = int(len(daily))
+    debug["files"]["daily_basic.csv"] = int(len(daily_basic))
+    debug["files"]["top_list.csv"] = int(len(top_list))
+    debug["files"]["moneyflow_hsgt.csv"] = int(len(hsgt))
+    debug["files"]["limit_list_d.csv"] = int(len(limit_list))
+    debug["files"]["limit_break_d.csv"] = int(len(limit_break))
+
+    # 规范主键
+    cand = cand.copy()
+    cand = _normalize_ts_code(cand, "ts_code")
+
+    for df in (daily, daily_basic, top_list, hsgt, limit_list, limit_break):
+        if not df.empty and "ts_code" in df.columns:
+            _normalize_ts_code(df, "ts_code")
+
+    # trade_date 列名兼容
+    def norm_td(df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return df
+        td_col = _pick_col(df, ["trade_date", "TRADE_DATE", "日期"])
+        if td_col and td_col != "trade_date":
+            df = df.rename(columns={td_col: "trade_date"})
+        if "trade_date" in df.columns:
+            df["trade_date"] = df["trade_date"].astype(str)
         return df
 
-    out = df.copy()
+    daily = norm_td(daily)
+    daily_basic = norm_td(daily_basic)
+    top_list = norm_td(top_list)
+    hsgt = norm_td(hsgt)
+    limit_list = norm_td(limit_list)
+    limit_break = norm_td(limit_break)
 
-    # ✅ 关键：先补齐身份列（避免 Step4/5 缺主键 / 缺行业导致“断链”）
-    out = _ensure_identity_columns(out)
+    # 合并 daily
+    if not daily.empty and ("ts_code" in daily.columns) and ("trade_date" in daily.columns):
+        pct_col = _pick_col(daily, ["pct_chg", "pct_change", "change_pct", "涨跌幅"])
+        amt_col = _pick_col(daily, ["amount", "成交额", "turnover_amount", "amt"])
+        vol_col = _pick_col(daily, ["vol", "成交量", "volume"])
+        keep = ["ts_code", "trade_date"] + [c for c in [pct_col, amt_col, vol_col] if c]
+        d = daily[keep].copy()
+        if pct_col and pct_col != "pct_chg":
+            d = d.rename(columns={pct_col: "pct_chg"})
+        if amt_col and amt_col != "amount":
+            d = d.rename(columns={amt_col: "amount"})
+        if vol_col and vol_col != "vol":
+            d = d.rename(columns={vol_col: "vol"})
+        cand = cand.merge(d, on=["ts_code", "trade_date"], how="left")
 
-    # ---------- A1: Momentum / pct_change ----------
-    pct_col = _first_existing_col(out, ["pct_change", "change_pct", "pct_chg", "涨跌幅"])
-    pct = _to_float_series(out, pct_col, default=0.0)
+    # 合并 daily_basic
+    if not daily_basic.empty and ("ts_code" in daily_basic.columns) and ("trade_date" in daily_basic.columns):
+        trf_col = _pick_col(daily_basic, ["turnover_rate_f", "turnover_rate_f", "turnover_f"])
+        tr_col = _pick_col(daily_basic, ["turnover_rate", "turn_rate", "换手率"])
+        cmv_col = _pick_col(daily_basic, ["circ_mv", "float_mv", "流通市值"])
+        tmv_col = _pick_col(daily_basic, ["total_mv", "总市值"])
+        vr_col = _pick_col(daily_basic, ["volume_ratio", "量比"])
+        keep = ["ts_code", "trade_date"] + [c for c in [trf_col, tr_col, cmv_col, tmv_col, vr_col] if c]
+        db = daily_basic[keep].copy()
+        if trf_col and trf_col != "turnover_rate_f":
+            db = db.rename(columns={trf_col: "turnover_rate_f"})
+        if tr_col and tr_col != "turnover_rate":
+            db = db.rename(columns={tr_col: "turnover_rate"})
+        if cmv_col and cmv_col != "circ_mv":
+            db = db.rename(columns={cmv_col: "circ_mv"})
+        if tmv_col and tmv_col != "total_mv":
+            db = db.rename(columns={tmv_col: "total_mv"})
+        if vr_col and vr_col != "volume_ratio":
+            db = db.rename(columns={vr_col: "volume_ratio"})
+        cand = cand.merge(db, on=["ts_code", "trade_date"], how="left")
 
-    score_momo = _logistic01(pct, center=3.0, scale=3.0)
-    out["pct_change"] = pct
-    out["score_momentum"] = score_momo
+    # 龙虎榜资金净额（top_list）
+    def extract_net_amount(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
+        if df is None or df.empty or ("ts_code" not in df.columns) or ("trade_date" not in df.columns):
+            return pd.DataFrame()
+        # 尽量找 net_amount / net_buy / net 之类
+        cand_cols = [c for c in df.columns if "net" in str(c).lower()]
+        net_col = _pick_col(df, ["net_amount", "net_amt", "net_buy", "net"]) or (cand_cols[0] if cand_cols else None)
+        if not net_col:
+            return pd.DataFrame()
+        x = df[["ts_code", "trade_date", net_col]].copy()
+        x = x.rename(columns={net_col: f"{prefix}_net_amount"})
+        x[f"{prefix}_net_amount"] = pd.to_numeric(x[f"{prefix}_net_amount"], errors="coerce")
+        # 同一 ts_code 可能多行：聚合求和
+        x = x.groupby(["ts_code", "trade_date"], as_index=False)[f"{prefix}_net_amount"].sum()
+        return x
 
-    # ---------- A2: Liquidity / amount ----------
-    amt_col = _first_existing_col(out, ["amount", "成交额", "turnover_amount", "amt"])
-    amount = _to_float_series(out, amt_col, default=0.0).clip(0.0, float("inf"))
+    tl = extract_net_amount(top_list, "lhb")
+    if not tl.empty:
+        cand = cand.merge(tl, on=["ts_code", "trade_date"], how="left")
 
-    log_amt = pd.Series(np.log1p(amount.to_numpy(dtype="float64")), index=out.index, dtype="float64")
-    score_amt = _robust_minmax(log_amt)
+    hs = extract_net_amount(hsgt, "hsgt")
+    if not hs.empty:
+        cand = cand.merge(hs, on=["ts_code", "trade_date"], how="left")
 
-    out["amount"] = amount
-    out["score_amount"] = score_amt
+    # 涨停/炸板标记
+    if not limit_list.empty and ("ts_code" in limit_list.columns) and ("trade_date" in limit_list.columns):
+        ll = limit_list[["ts_code", "trade_date"]].drop_duplicates().copy()
+        ll["limit_up_flag"] = 1
+        cand = cand.merge(ll, on=["ts_code", "trade_date"], how="left")
 
-    # ---------- A3: Net flow / net_amount or net_rate ----------
-    net_amt_col = _first_existing_col(out, ["net_amount", "net_amt", "净额", "净买入额"])
-    net_rate_col = _first_existing_col(out, ["net_rate", "净占比", "net_ratio"])
+    if not limit_break.empty and ("ts_code" in limit_break.columns) and ("trade_date" in limit_break.columns):
+        lb = limit_break[["ts_code", "trade_date"]].drop_duplicates().copy()
+        lb["limit_break_flag"] = 1
+        cand = cand.merge(lb, on=["ts_code", "trade_date"], how="left")
 
-    net_amt = _to_float_series(out, net_amt_col, default=0.0)
-    net_rate = _to_float_series(out, net_rate_col, default=np.nan)
+    return cand, debug
 
-    if net_rate_col:
-        score_net = _logistic01(net_rate.fillna(0.0), center=0.0, scale=5.0)
-        out["net_rate"] = net_rate
-    else:
-        signed = np.sign(net_amt.to_numpy(dtype="float64")) * np.log1p(np.abs(net_amt.to_numpy(dtype="float64")))
-        signed_s = pd.Series(signed, index=out.index, dtype="float64")
-        score_net = _logistic01(signed_s, center=0.0, scale=2.0)
-        out["net_amount"] = net_amt
 
-    out["score_netflow"] = score_net
+# =========================================================
+# Core scoring (真实量化：基于可用数据)
+# =========================================================
 
-    # ---------- A4: Turnover structure / turnover_rate ----------
-    tr_col = _first_existing_col(out, ["turnover_rate", "turn_rate", "换手率", "turnover"])
-    tr = _to_float_series(out, tr_col, default=5.0)
-    tr = _normalize_turnover_rate(tr).clip(0.0, 100.0)
+def calc_strength_score(df: Any, trade_date: str, s=None, ctx: Optional[Dict[str, Any]] = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    返回：(scored_df, debug_info)
+    scored_df 至少包含：ts_code / name / industry / trade_date / StrengthScore
+    """
+    debug: Dict[str, Any] = {"trade_date": trade_date}
 
-    out["turnover_rate"] = tr
+    cand = _coerce_df(df)
+    if cand.empty:
+        cand = _load_candidates_fallback(trade_date)
 
-    score_turn = pd.Series(0.0, index=out.index, dtype="float64")
-    t = tr
+    cand = _ensure_identity(cand)
 
-    m1 = (t > 2.0) & (t <= 10.0)
-    score_turn.loc[m1] = (t.loc[m1] - 2.0) / (10.0 - 2.0)
+    # trade_date 兜底填充
+    if "trade_date" not in cand.columns:
+        cand["trade_date"] = trade_date
+    cand["trade_date"] = cand["trade_date"].astype(str)
+    cand.loc[cand["trade_date"].isin(["", "nan", "None"]), "trade_date"] = trade_date
 
-    m2 = (t > 10.0) & (t <= 25.0)
-    score_turn.loc[m2] = 1.0 - 0.6 * ((t.loc[m2] - 10.0) / (25.0 - 10.0))
+    # 主键必须有
+    if "ts_code" not in cand.columns:
+        return cand, {"error": "Step3: candidates 缺少 ts_code，无法计算。"}
 
-    m3 = t > 25.0
-    score_turn.loc[m3] = 0.4 * (1.0 - ((t.loc[m3] - 25.0) / (60.0 - 25.0))).clip(0.0, 1.0)
+    # 快照目录
+    snap_dir = _locate_snapshot_dir(trade_date, s=s, ctx=ctx)
+    if snap_dir is None:
+        # 没快照也不崩：给一个可解释的弱评分（避免全 0 但会提示缺快照）
+        out = cand.copy()
+        out["StrengthScore"] = 0.0
+        debug["snapshot_dir"] = None
+        debug["snapshot_missing"] = True
+        return out, debug
 
-    out["score_turnover"] = _clip01(score_turn)
+    # join 快照特征
+    out, join_dbg = _join_snap_features(cand, snap_dir)
+    debug.update(join_dbg)
 
-    # ---------- A5: LHB strength (optional) ----------
-    l_amt_col = _first_existing_col(out, ["l_amount", "龙虎榜成交额", "lhb_amount"])
-    amt_rate_col = _first_existing_col(out, ["amount_rate", "成交额占比", "lhb_amount_rate"])
+    # 统一数值列
+    pct = _to_float_series(out, _first_existing_col(out, ["pct_chg", "pct_change", "change_pct", "涨跌幅"]), 0.0)
+    amount = _to_float_series(out, _first_existing_col(out, ["amount", "成交额"]), 0.0)
+    vol = _to_float_series(out, _first_existing_col(out, ["vol", "成交量"]), 0.0)
 
-    l_amt = _to_float_series(out, l_amt_col, default=0.0).clip(0.0, float("inf"))
-    score_lhb_amt = _robust_minmax(
-        pd.Series(np.log1p(l_amt.to_numpy(dtype="float64")), index=out.index, dtype="float64")
+    trf = _to_float_series(out, _first_existing_col(out, ["turnover_rate_f"]), np.nan)
+    tr = _to_float_series(out, _first_existing_col(out, ["turnover_rate", "turn_rate", "换手率"]), np.nan)
+    turnover = trf.where(trf.notna() & (trf > 0), tr).fillna(0.0)
+
+    circ_mv = _to_float_series(out, _first_existing_col(out, ["circ_mv", "float_mv", "流通市值"]), np.nan).fillna(0.0)
+    volume_ratio = _to_float_series(out, _first_existing_col(out, ["volume_ratio", "量比"]), np.nan).fillna(0.0)
+
+    lhb_net = _to_float_series(out, _first_existing_col(out, ["lhb_net_amount"]), 0.0)
+    hsgt_net = _to_float_series(out, _first_existing_col(out, ["hsgt_net_amount"]), 0.0)
+
+    limit_up_flag = _to_float_series(out, _first_existing_col(out, ["limit_up_flag"]), 0.0)
+    limit_break_flag = _to_float_series(out, _first_existing_col(out, ["limit_break_flag"]), 0.0)
+
+    # 构造稳健因子（全部 0~1）
+    # 1) 动量：pct 越大越强
+    f_momo = _robust_rank01(pct, ascending=False)
+
+    # 2) 成交额强度：log(amount) 越大越强
+    f_amt = _robust_rank01(_log1p_safe(amount), ascending=False)
+
+    # 3) 换手：turnover 越大越强（但极端高换手不做惩罚，先用 rank 稳健）
+    f_turn = _robust_rank01(turnover, ascending=False)
+
+    # 4) 量比：volume_ratio 越大越强（如果没有就全 0）
+    f_vr = _robust_rank01(volume_ratio, ascending=False) if volume_ratio.notna().any() else pd.Series([0.0] * len(out), index=out.index)
+
+    # 5) 资金强度：龙虎榜+北向，按流通市值归一再 rank
+    denom = circ_mv.replace(0.0, np.nan)
+    cap_raw = (lhb_net.fillna(0.0) + hsgt_net.fillna(0.0)) / denom
+    cap_raw = cap_raw.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    f_cap = _robust_rank01(cap_raw, ascending=False)
+
+    # 6) 低流通市值偏好：市值越小越强（可弱权重）
+    mv_raw = circ_mv.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    f_small = _robust_rank01(mv_raw, ascending=True)  # 小市值=更强
+
+    # 奖惩：涨停小加分，炸板扣分
+    bonus = 0.05 * (limit_up_flag > 0.5).astype("float64")
+    penalty = 0.07 * (limit_break_flag > 0.5).astype("float64")
+
+    # 合成权重（可解释、可调）
+    # 这些权重保证：即使某些文件缺失，也不会让 StrengthScore 全部归零
+    w_momo = 0.18
+    w_amt = 0.26
+    w_turn = 0.20
+    w_vr = 0.08
+    w_cap = 0.18
+    w_small = 0.10
+
+    score01 = (
+        w_momo * f_momo
+        + w_amt * f_amt
+        + w_turn * f_turn
+        + w_vr * f_vr
+        + w_cap * f_cap
+        + w_small * f_small
+        + bonus
+        - penalty
     )
 
-    if amt_rate_col:
-        ar = _to_float_series(out, amt_rate_col, default=0.0)
-        med_ar = float(ar.replace([np.inf, -np.inf], np.nan).dropna().median()) if len(ar) else np.nan
-        if np.isfinite(med_ar) and med_ar <= 1.5:
-            ar = ar * 100.0
-        score_lhb_rate = _logistic01(ar.fillna(0.0), center=10.0, scale=10.0)
-        out["amount_rate"] = ar
-    else:
-        score_lhb_rate = pd.Series(0.0, index=out.index, dtype="float64")
+    score01 = _clip01(score01)
 
-    out["l_amount"] = l_amt
-    out["score_lhb"] = _clip01(0.6 * score_lhb_amt + 0.4 * score_lhb_rate)
+    # 写回
+    out["_f_momo"] = f_momo
+    out["_f_amt"] = f_amt
+    out["_f_turn"] = f_turn
+    out["_f_vr"] = f_vr
+    out["_f_cap"] = f_cap
+    out["_f_small"] = f_small
+    out["_bonus"] = bonus
+    out["_penalty"] = penalty
 
-    # ---------- A6: Size penalty (optional, small weight) ----------
-    fv_col = _first_existing_col(out, ["float_values", "流通市值", "float_mv"])
-    fv = _to_float_series(out, fv_col, default=np.nan).clip(0.0, float("inf"))
+    out["StrengthScore"] = (score01 * 100.0).round(6)
 
-    if fv_col:
-        log_fv = pd.Series(np.log1p(fv.fillna(0.0).to_numpy(dtype="float64")), index=out.index, dtype="float64")
-        size01 = _robust_minmax(log_fv)      # 大市值 -> 1
-        score_size = 1.0 - size01            # 大市值 -> 0
-        out["float_values"] = fv
-        out["score_size"] = _clip01(score_size)
-    else:
-        out["score_size"] = 0.5
+    # Debug：缺失率
+    def miss_rate(x: pd.Series) -> float:
+        x = pd.to_numeric(x, errors="coerce")
+        return float(1.0 - x.notna().mean()) if len(x) else 1.0
 
-    # ---------- Final aggregation ----------
-    out["StrengthScore"] = (
-        0.30 * out["score_momentum"]
-        + 0.22 * out["score_amount"]
-        + 0.18 * out["score_netflow"]
-        + 0.16 * out["score_turnover"]
-        + 0.10 * out["score_lhb"]
-        + 0.04 * out["score_size"]
-    ) * 100.0
+    debug["missing_rate"] = {
+        "pct_chg": miss_rate(pct),
+        "amount": miss_rate(amount),
+        "turnover": miss_rate(turnover),
+        "circ_mv": miss_rate(circ_mv),
+        "volume_ratio": miss_rate(volume_ratio),
+        "lhb_net_amount": miss_rate(lhb_net),
+        "hsgt_net_amount": miss_rate(hsgt_net),
+        "limit_up_flag": miss_rate(limit_up_flag),
+        "limit_break_flag": miss_rate(limit_break_flag),
+    }
 
-    out = out.sort_values("StrengthScore", ascending=False)
-    return out
+    # 排序
+    out = out.sort_values("StrengthScore", ascending=False).reset_index(drop=True)
+
+    return out, debug
 
 
-# -------------------------
-# Runner
-# -------------------------
+def _write_debug_outputs(trade_date: str, scored: pd.DataFrame, debug: Dict[str, Any]) -> None:
+    out_dir = Path("outputs")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-def run_step3(candidates_df: Any, top_k: int = 50) -> pd.DataFrame:
-    """
-    返回 StrengthScore TopK 股票进入下一层
-    """
-    scored = calc_strength_score(candidates_df)
+    # CSV
+    (out_dir / f"step3_strength_{trade_date}.csv").write_text(
+        scored.to_csv(index=False), encoding="utf-8"
+    )
+
+    # Markdown report
+    lines = []
+    lines.append("# Step3 Debug Report")
+    lines.append("")
+    lines.append(f"- trade_date: `{trade_date}`")
+    lines.append(f"- rows: {len(scored)}")
+    lines.append(f"- snapshot_dir: `{debug.get('snapshot_dir')}`")
+    lines.append(f"- snapshot_missing: `{debug.get('snapshot_missing', False)}`")
+    lines.append("")
+    lines.append("## Files rows")
+    files = debug.get("files", {}) or {}
+    for k, v in files.items():
+        lines.append(f"- {k}: {v}")
+    lines.append("")
+    lines.append("## Missing rate")
+    mr = debug.get("missing_rate", {}) or {}
+    for k, v in mr.items():
+        lines.append(f"- {k}: {v:.4f}")
+    lines.append("")
+    lines.append("```json")
+    lines.append(json.dumps(debug, ensure_ascii=False, indent=2))
+    lines.append("```")
+
+    (out_dir / "debug_step3_report.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+# =========================================================
+# Public runner (与原系统对接)
+# =========================================================
+
+def run_step3(candidates_df: Any, s=None, ctx: Optional[Dict[str, Any]] = None, top_k: int = 50) -> pd.DataFrame:
+    trade_date = _resolve_trade_date(s=s)
+    scored, debug = calc_strength_score(candidates_df, trade_date=trade_date, s=s, ctx=ctx)
+
+    # 旁路落盘（不影响主线）
+    try:
+        _write_debug_outputs(trade_date, scored, debug)
+    except Exception:
+        pass
+
     top_k = int(top_k or 50)
     top_k = max(1, top_k)
     if len(scored) > top_k:
-        scored = scored.head(top_k)
+        scored = scored.head(top_k).copy()
+
     return scored
 
 
-def run(df: Any, s=None, top_k: int = 50) -> pd.DataFrame:
-    """Backward-compatible alias"""
-    return run_step3(df, top_k=top_k)
+def run(df: Any, s=None, ctx: Optional[Dict[str, Any]] = None, top_k: int = 50) -> pd.DataFrame:
+    """向后兼容入口"""
+    return run_step3(df, s=s, ctx=ctx, top_k=top_k)
 
 
 if __name__ == "__main__":
-    print("Step3 (StrengthScore scheme A) module loaded successfully.")
+    print("Step3 StrengthScore V2 ready.")
