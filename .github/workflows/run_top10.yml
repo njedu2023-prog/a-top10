@@ -6,6 +6,13 @@ on:
     - cron: "35 11 * * 1-5"
   workflow_dispatch: {}
 
+workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "指定交易日 YYYYMMDD（留空=自动寻找最新）"
+        required: false
+        type: string
+
 permissions:
   contents: write
 
