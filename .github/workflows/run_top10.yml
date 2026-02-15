@@ -40,8 +40,31 @@ jobs:
       WAREHOUSE_ROOT: _warehouse
       RAW_DIR: data/raw
 
-      # ---- 需要下载的文件清单（按 data/raw/YYYY/YYYYMMDD/ 内实际文件名）----
-      FILES: "daily.csv daily_basic.csv limit_list_d.csv hot_boards.csv top_list.csv"
+      # ---- ✅ 全量快照文件清单（按 data/raw/YYYY/YYYYMMDD/ 内实际文件名）----
+      # 你数据仓库里真实存在的标准快照（你截图里那一套）
+      FILES: >-
+        _meta.json
+        daily.csv
+        daily_basic.csv
+        hot_boards.csv
+        limit_break_d.csv
+        limit_list_d.csv
+        limit_up_tags.csv
+        moneyflow_hsgt.csv
+        namechange.csv
+        stk_limit.csv
+        stock_basic.csv
+        top_list.csv
+
+      # ---- ✅ 必须存在的关键文件（缺任何一个都直接失败）----
+      # 其中 limit_up_tags.csv 是“题材加成/板块”的数据根源
+      REQUIRED_FILES: >-
+        daily.csv
+        daily_basic.csv
+        limit_list_d.csv
+        hot_boards.csv
+        top_list.csv
+        limit_up_tags.csv
 
       # ---- 自动回溯天数（找最近一个有数据的交易日目录）----
       LOOKBACK_DAYS: "20"
@@ -112,7 +135,7 @@ jobs:
           echo "Resolved trade_date=$found"
           echo "trade_date=$found" >> "$GITHUB_OUTPUT"
 
-      - name: Download snapshot files to warehouse (raw)
+      - name: Download snapshot files to warehouse (raw, full)
         shell: bash
         run: |
           set -euo pipefail
@@ -127,18 +150,41 @@ jobs:
 
           echo "Downloading to: $dest"
           echo "Base URL: $base"
-          echo "Files: $FILES"
+          echo "FILES: $FILES"
+          echo "REQUIRED_FILES: $REQUIRED_FILES"
 
+          missing_required=""
+
+          # 先拉全量（能拉到的都拉到）
           for f in $FILES; do
             url="${base}/${f}"
             out="${dest}/${f}"
 
             echo "[get] $url"
-            curl -fL --retry 3 --retry-delay 1 -o "$out" "$url"
-            ls -lh "$out"
+            if curl -fL --retry 3 --retry-delay 1 -o "$out" "$url"; then
+              ls -lh "$out" || true
+            else
+              echo "WARN: missing or cannot download: $f"
+              rm -f "$out" || true
+            fi
           done
 
-          echo "OK: downloaded snapshots for ${trade_date}"
+          # 再强校验关键文件必须存在且非空（防止“假跑成功”）
+          for rf in $REQUIRED_FILES; do
+            p="${dest}/${rf}"
+            if [ ! -s "$p" ]; then
+              echo "ERROR: required snapshot file missing/empty: $rf"
+              missing_required="${missing_required} ${rf}"
+            fi
+          done
+
+          if [ -n "$missing_required" ]; then
+            echo "ERROR: required snapshot files missing:${missing_required}"
+            echo "HINT: 如果数据仓库当天确实存在这些文件，说明 raw URL 或路径配置有误。"
+            exit 3
+          fi
+
+          echo "OK: downloaded FULL snapshots for ${trade_date}"
 
       - name: Debug warehouse (list)
         shell: bash
@@ -150,8 +196,12 @@ jobs:
 
           echo "====== LIST _warehouse (top) ======"
           ls -la _warehouse || true
+
           echo "====== LIST snapshot dir ======"
           ls -la "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}" || true
+
+          echo "====== CHECK key files (size) ======"
+          du -h "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"/* || true
 
       - name: Run Top10 Engine
         shell: bash
