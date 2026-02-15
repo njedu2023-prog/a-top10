@@ -10,7 +10,7 @@ Step3: Strength Score (方案A)
 - 上游有时把 candidates 以 dict 形式传入（而非 DataFrame），导致 df.empty 报错
 - 本版支持 dict 入参：自动从 dict 中提取第一个 DataFrame（或常见键名），否则给出清晰错误信息
 
-✅ 本版也包含你之前写的“身份列修复”：
+✅ 本版也包含“身份列修复”：
 - ts_code / name / industry 即使列名存在，但值全是空字符串/空白 -> 视为缺失并回填
 """
 
@@ -56,7 +56,9 @@ def _coerce_df(obj: Any) -> pd.DataFrame:
             f"Step3 calc_strength_score() 收到 dict，但在其常见键/values 中找不到 DataFrame。keys={list(obj.keys())}"
         )
 
-    raise TypeError(f"Step3 calc_strength_score() 期望 DataFrame 或 dict(内含 DataFrame)，但收到类型：{type(obj)}")
+    raise TypeError(
+        f"Step3 calc_strength_score() 期望 DataFrame 或 dict(内含 DataFrame)，但收到类型：{type(obj)}"
+    )
 
 
 # -------------------------
@@ -125,7 +127,11 @@ def _logistic01(s: pd.Series, center: float, scale: float) -> pd.Series:
     scale = max(float(scale), 1e-9)
     x = (s.astype("float64") - float(center)) / scale
     x = x.replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(-60, 60)
-    return pd.Series(1.0 / (1.0 + np.exp(-x.to_numpy(dtype="float64"))), index=s.index, dtype="float64")
+    return pd.Series(
+        1.0 / (1.0 + np.exp(-x.to_numpy(dtype="float64"))),
+        index=s.index,
+        dtype="float64",
+    )
 
 
 def _normalize_turnover_rate(s: pd.Series) -> pd.Series:
