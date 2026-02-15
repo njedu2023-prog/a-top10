@@ -40,7 +40,7 @@ INDUSTRY_COL_CANDIDATES = [
     "板块名称",
 ]
 
-# ✅ 修复点：兼容更多常见“代码列”命名（尤其是 tushare stock_basic 的 symbol）
+# 兼容更多常见“代码列”命名（尤其是 tushare stock_basic 的 symbol）
 CODE_COL_CANDIDATES = [
     "ts_code",
     "code",
@@ -58,7 +58,6 @@ HOT_BOARDS_INDUSTRY_COLS = ["industry", "industry_name", "行业", "板块", "�
 HOT_BOARDS_RANK_COLS = ["rank", "Rank", "排名", "hot_rank", "热度排名"]
 
 # 龙虎榜：若 ctx 有 top_list（或 snap/top_list.csv），命中则加分
-# ✅ 同样增强代码列候选
 DRAGON_CODE_COLS = [
     "ts_code",
     "code",
@@ -71,20 +70,18 @@ DRAGON_CODE_COLS = [
     "sec_code",
 ]
 
-# 默认龙虎榜加成（你现在看到的 0.08 就是它）
 DEFAULT_DRAGON_BONUS = 0.08
-
-# 行业热度衰减参数：rank 越小分越高
-# score = exp(-k*(rank-1))
 DEFAULT_RANK_DECAY_K = 0.18
-
-# 只取热榜前 N 个行业参与（避免长尾噪声）
 DEFAULT_TOPK_INDUSTRY = 40
 
 
 # -------------------------
 # Helpers
 # -------------------------
+_RE_FIRST_INT = re.compile(r"(\d+)")
+_RE_CODE6 = re.compile(r"(\d{6})")
+
+
 def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
     if df is None or df.empty:
         return None
@@ -103,21 +100,6 @@ def _safe_str(x: Any) -> str:
     return str(x).strip()
 
 
-def _clip01(x: float) -> float:
-    return max(0.0, min(1.0, x))
-
-
-def _to_float(x: Any, default: float = 0.0) -> float:
-    try:
-        if x is None:
-            return default
-        if isinstance(x, str) and x.strip() == "":
-            return default
-        return float(x)
-    except Exception:
-        return default
-
-
 def _parse_rank_int(x: Any, default: int = 9999) -> int:
     """
     强韧 rank 解析：
@@ -127,25 +109,24 @@ def _parse_rank_int(x: Any, default: int = 9999) -> int:
     if x is None:
         return default
     if isinstance(x, (int, np.integer)):
-        return int(x)
+        v = int(x)
+        return v if v > 0 else default
     if isinstance(x, (float, np.floating)):
         if np.isnan(x):
             return default
-        return int(x)
+        v = int(x)
+        return v if v > 0 else default
 
     s = str(x).strip()
     if not s:
         return default
 
-    # 常见形式：1/10 -> 1
-    m = re.search(r"(\d+)", s)
+    m = _RE_FIRST_INT.search(s)
     if not m:
         return default
     try:
         v = int(m.group(1))
-        if v <= 0:
-            return default
-        return v
+        return v if v > 0 else default
     except Exception:
         return default
 
@@ -163,13 +144,9 @@ def _norm_code(code: Any) -> Tuple[str, str]:
     if not s:
         return ("", "")
 
-    # 抽取 6 位数字优先（更鲁棒）
-    m = re.search(r"(\d{6})", s)
+    m = _RE_CODE6.search(s)
     code6 = m.group(1) if m else s.split(".")[0]
-
-    # ts_code 保留原样（去首尾空格并 upper）
-    ts = s.strip()
-    return (ts, code6)
+    return (s, code6)
 
 
 def _norm_industry_key(x: Any) -> str:
@@ -177,13 +154,12 @@ def _norm_industry_key(x: Any) -> str:
     行业/板块名规范化：
     - 去空白（含全角空格）
     - 去常见后缀词（行业/板块/概念）
-    - 小写化（中文无影响，英文有用）
+    - 小写化
     """
     s = _safe_str(x)
     if not s:
         return ""
     s2 = re.sub(r"[\s\u3000]+", "", s)  # 空格/制表/全角空格
-    # 去后缀（尽量保守，不要误伤）
     for suf in ("行业", "板块", "概念"):
         if s2.endswith(suf) and len(s2) > len(suf):
             s2 = s2[: -len(suf)]
@@ -222,12 +198,11 @@ def _ctx_get_path(ctx: Dict[str, Any], keys: Sequence[str]) -> Optional[Path]:
 
 
 def _ensure_outputs_dir(ctx: Dict[str, Any], s: Optional[Settings]) -> Path:
-    # 优先 ctx 里 outputs_dir
     p = _ctx_get_path(ctx, ["outputs_dir", "output_dir", "out_dir"])
     if p is not None:
         p.mkdir(parents=True, exist_ok=True)
         return p
-    # 再尝试 settings
+
     if s is not None:
         try:
             od = getattr(s, "output", None)
@@ -237,20 +212,37 @@ def _ensure_outputs_dir(ctx: Dict[str, Any], s: Optional[Settings]) -> Path:
                 return p2
         except Exception:
             pass
-    # 兜底
+
     p3 = Path("outputs")
     p3.mkdir(parents=True, exist_ok=True)
     return p3
 
 
 def _resolve_trade_date(ctx: Dict[str, Any]) -> str:
-    # 多个可能字段
     for k in ("trade_date", "TRADE_DATE", "date", "run_date"):
         v = ctx.get(k)
         if isinstance(v, str) and v.strip():
             return v.strip()
-    # 兜底：unknown
     return "unknown"
+
+
+def _get_rank_decay_k(s: Optional[Settings], default: float = DEFAULT_RANK_DECAY_K) -> float:
+    """
+    兼容 Settings.weights 既可能是对象也可能是 dict 的情况。
+    """
+    if s is None:
+        return float(default)
+    w = getattr(s, "weights", None)
+    if w is None:
+        return float(default)
+    try:
+        if isinstance(w, dict):
+            v = w.get("rank_decay_k", default)
+            return float(v)
+        v2 = getattr(w, "rank_decay_k", default)
+        return float(v2)
+    except Exception:
+        return float(default)
 
 
 # -------------------------
@@ -265,11 +257,18 @@ class ThemeDebug:
     industry_score_map_size: int = 0
     industry_score_min: float = 0.0
     industry_score_max: float = 0.0
+
+    candidate_code_col: str = ""
+    candidate_industry_col_before: str = ""
+    candidate_industry_col_final: str = ""
+    candidate_industry_nonblank_ratio_before: float = 0.0
+    candidate_industry_nonblank_ratio_final: float = 0.0
+
     matched_industry_count: int = 0
     dragon_hits: int = 0
     theme_boost_nonzero: int = 0
     reason: str = ""
-    # ✅ 新增：更细 debug（不影响原逻辑）
+
     matched_industry_exact: int = 0
     matched_industry_norm: int = 0
     matched_industry_fuzzy: int = 0
@@ -300,32 +299,25 @@ def _build_industry_score_map(
         return {}, dbg
 
     df = hot_boards[[ind_col, rank_col]].copy()
-    df[ind_col] = df[ind_col].astype(str).map(lambda x: _safe_str(x))
+    df[ind_col] = df[ind_col].astype(str).map(_safe_str)
     df[rank_col] = df[rank_col].map(lambda x: _parse_rank_int(x, default=9999))
 
-    # 过滤无效
     df = df[(df[ind_col] != "") & (df[rank_col] < 9999)]
     if df.empty:
         dbg["ok"] = False
         dbg["reason"] = "hot_boards rank parse all invalid"
         return {}, dbg
 
-    # 去重：同一行业取最好（rank最小）
-    df = df.sort_values(rank_col, ascending=True)
-    df = df.drop_duplicates(subset=[ind_col], keep="first")
-
-    # 取 topk
+    df = df.sort_values(rank_col, ascending=True).drop_duplicates(subset=[ind_col], keep="first")
     if topk and topk > 0:
         df = df.head(int(topk))
 
-    # score
-    ranks = df[rank_col].astype(int).values
-    scores = np.exp(-k * (ranks - 1.0))
-    # 归一化到 0..1（防止全部接近 1 或接近 0）
-    # 如果 max==min，就保持原值但 clip
+    ranks = df[rank_col].astype(int).to_numpy()
+    scores = np.exp(-float(k) * (ranks - 1.0))
+
     s_min = float(np.min(scores))
     s_max = float(np.max(scores))
-    if abs(s_max - s_min) > 1e-9:
+    if abs(s_max - s_min) > 1e-12:
         scores = (scores - s_min) / (s_max - s_min)
     scores = np.clip(scores, 0.0, 1.0)
 
@@ -342,6 +334,59 @@ def _build_industry_score_map(
     return mp, dbg
 
 
+def _series_nonblank_ratio(sr: Optional[pd.Series]) -> float:
+    if sr is None or len(sr) == 0:
+        return 0.0
+    vals = sr.astype(str).map(_safe_str)
+    return float((vals != "").mean())
+
+
+def _enrich_industry_from_stock_basic(
+    out: pd.DataFrame,
+    code_col: str,
+    ind_col: Optional[str],
+    stock_basic: pd.DataFrame,
+) -> Tuple[pd.DataFrame, str, float, float]:
+    """
+    若 ind_col 缺失或“几乎全空”，从 stock_basic 按 code6 补齐一个最终行业列 _industry_final。
+    只在必要时做，避免覆盖已有有效行业信息。
+    """
+    before_ratio = _series_nonblank_ratio(out[ind_col]) if ind_col and ind_col in out.columns else 0.0
+    need_enrich = (not ind_col) or (before_ratio < 0.1)
+
+    if not need_enrich:
+        return out, ind_col or "", before_ratio, before_ratio
+
+    if stock_basic is None or stock_basic.empty:
+        return out, ind_col or "", before_ratio, before_ratio
+
+    sb_code_col = _first_existing_col(stock_basic, CODE_COL_CANDIDATES)
+    sb_ind_col = _first_existing_col(stock_basic, INDUSTRY_COL_CANDIDATES)
+    if not sb_code_col or not sb_ind_col:
+        return out, ind_col or "", before_ratio, before_ratio
+
+    tmp = stock_basic[[sb_code_col, sb_ind_col]].copy()
+    tmp["_code6"] = tmp[sb_code_col].map(lambda x: _norm_code(x)[1])
+    tmp = tmp[tmp["_code6"].astype(str).map(_safe_str) != ""]
+    tmp = tmp.drop_duplicates(subset=["_code6"], keep="first")
+
+    out2 = out.copy()
+    out2["_code6"] = out2[code_col].map(lambda x: _norm_code(x)[1])
+
+    out2 = out2.merge(tmp[["_code6", sb_ind_col]], on="_code6", how="left")
+
+    # 组装最终行业列：优先候选原行业，其次 stock_basic 行业
+    out2["_industry_final"] = ""
+    if ind_col and ind_col in out2.columns:
+        out2["_industry_final"] = out2[ind_col].astype(str).map(_safe_str)
+
+    out2["_industry_from_sb"] = out2[sb_ind_col].astype(str).map(_safe_str)
+    out2["_industry_final"] = out2["_industry_final"].where(out2["_industry_final"] != "", out2["_industry_from_sb"])
+
+    after_ratio = _series_nonblank_ratio(out2["_industry_final"])
+    return out2, "_industry_final", before_ratio, after_ratio
+
+
 def _apply_industry_and_dragon(
     cand_df: pd.DataFrame,
     stock_basic: pd.DataFrame,
@@ -354,7 +399,7 @@ def _apply_industry_and_dragon(
     - industry_boost：按行业热度映射
     - dragon_bonus：命中龙虎榜则加固定值（默认0.08）
     """
-    dbg = ThemeDebug(hot_boards_cols=[],)
+    dbg = ThemeDebug(hot_boards_cols=[])
 
     if cand_df is None or cand_df.empty:
         dbg.reason = "candidate df empty"
@@ -365,136 +410,137 @@ def _apply_industry_and_dragon(
 
     # code 列
     code_col = _first_existing_col(out, CODE_COL_CANDIDATES)
+    dbg.candidate_code_col = code_col or ""
     if not code_col:
         dbg.reason = "candidate missing code col"
-        # 兜底：直接给 0
         out["ThemeBoost"] = 0.0
         out["题材加成"] = 0.0
         out["板块"] = ""
         return out, dbg
 
-    #  # industry 列：若没有，或“几乎全空”，用 stock_basic 补     ind_col = _first_existing_col(out, INDUSTRY_COL_CANDIDATES)      def _is_blank_series(sr: pd.Series) -> bool:         if sr is None:             return True         vals = sr.astype(str).map(lambda x: _safe_str(x))         non_blank_ratio = (vals != "").mean() if len(vals) else 0.0         return non_blank_ratio < 0.1      need_enrich = (not ind_col) or (ind_col in out.columns and _is_blank_series(out[ind_col]))      if need_enrich and stock_basic is not None and not stock_basic.empty:         sb_code_col = _first_existing_col(stock_basic, CODE_COL_CANDIDATES)         sb_ind_col = _first_existing_col(stock_basic, INDUSTRY_COL_CANDIDATES)         if sb_code_col and sb_ind_col:             tmp = stock_basic[[sb_code_col, sb_ind_col]].copy()             tmp["_code6"] = tmp[sb_code_col].map(lambda x: _norm_code(x)[1])             tmp = tmp.dropna(subset=["_code6"]).drop_duplicates(subset=["_code6"], keep="first")              out["_code6"] = out[code_col].map(lambda x: _norm_code(x)[1])              sb_ind_col_out = sb_ind_col             if sb_ind_col_out in out.columns:                 sb_ind_col_out = f"{sb_ind_col_out}_sb"              out = out.merge(tmp[["_code6", sb_ind_col]], on="_code6", how="left", suffixes=("", "_sb"))              out["_industry_final"] = ""             if ind_col and ind_col in out.columns:                 out["_industry_final"] = out[ind_col].astype(str).map(_safe_str)             if sb_ind_col_out in out.columns:                 out["_industry_final_sb"] = out[sb_ind_col_out].astype(str).map(_safe_str)                 out["_industry_final"] = out["_industry_final"].where(out["_industry_final"] != "", out["_industry_final_sb"])              ind_col = "_industry_final"      # ---------- 行业热度映射：增强匹配 ----------
-    ind_col = _first_existing_col(out, INDUSTRY_COL_CANDIDATES)
-    if not ind_col and stock_basic is not None and not stock_basic.empty:
-        sb_code_col = _first_existing_col(stock_basic, CODE_COL_CANDIDATES)
-        sb_ind_col = _first_existing_col(stock_basic, INDUSTRY_COL_CANDIDATES)
-        if sb_code_col and sb_ind_col:
-            tmp = stock_basic[[sb_code_col, sb_ind_col]].copy()
-            tmp["_code6"] = tmp[sb_code_col].map(lambda x: _norm_code(x)[1])
-            tmp = tmp.dropna(subset=["_code6"]).drop_duplicates(subset=["_code6"], keep="first")
+    # industry 列（先看候选有没有）
+    ind_col_before = _first_existing_col(out, INDUSTRY_COL_CANDIDATES)
+    dbg.candidate_industry_col_before = ind_col_before or ""
 
-            out["_code6"] = out[code_col].map(lambda x: _norm_code(x)[1])
-            out = out.merge(tmp[["_code6", sb_ind_col]], on="_code6", how="left")
-            ind_col = sb_ind_col  # merge 后列名保持 sb_ind_col
-        # 否则只能没有行业
+    # 必要时用 stock_basic 补齐行业（不覆盖已有有效行业）
+    out, ind_col_final, ratio_before, ratio_after = _enrich_industry_from_stock_basic(
+        out=out, code_col=code_col, ind_col=ind_col_before, stock_basic=stock_basic
+    )
+    dbg.candidate_industry_col_final = ind_col_final or ""
+    dbg.candidate_industry_nonblank_ratio_before = float(ratio_before)
+    dbg.candidate_industry_nonblank_ratio_final = float(ratio_after)
 
-    # 龙虎榜命中集合
-    dragon_set6 = set()
-    dragon_set_ts = set()
+    ind_col = ind_col_final if ind_col_final else None
+
+    # 龙虎榜命中集合（向量化：ts_code / code6）
+    dragon_ts = pd.Series(dtype=str)
+    dragon_c6 = pd.Series(dtype=str)
     if top_list is not None and not top_list.empty:
         tl_code_col = _first_existing_col(top_list, DRAGON_CODE_COLS)
         if tl_code_col:
-            for v in top_list[tl_code_col].tolist():
-                ts, c6 = _norm_code(v)
-                if ts:
-                    dragon_set_ts.add(ts)
-                if c6:
-                    dragon_set6.add(c6)
+            tl = top_list[tl_code_col].astype(str).map(_safe_str)
+            dragon_ts = tl.map(lambda x: _norm_code(x)[0])
+            dragon_c6 = tl.map(lambda x: _norm_code(x)[1])
+            dragon_ts = dragon_ts[dragon_ts != ""].drop_duplicates()
+            dragon_c6 = dragon_c6[dragon_c6 != ""].drop_duplicates()
 
-    # ---------- 行业热度映射：增强匹配 ----------
-    # 原始 map（精确）
+    # 行业热度映射：精确 + 规范化
     industry_map_exact = dict(industry_score or {})
 
-    # 规范化 map（去空格/后缀等）
     industry_map_norm: Dict[str, float] = {}
     for k, v in industry_map_exact.items():
         nk = _norm_industry_key(k)
         if nk:
-            # 同名取更高分
-            if nk not in industry_map_norm or float(v) > float(industry_map_norm[nk]):
-                industry_map_norm[nk] = float(v)
+            fv = float(v)
+            if nk not in industry_map_norm or fv > float(industry_map_norm[nk]):
+                industry_map_norm[nk] = fv
 
-    # 为模糊 contains 做一个 keys 列表（规模<=40，O(n*m)可接受）
     norm_keys = list(industry_map_norm.keys())
 
-    # 计算 industry_boost
-    industry_boost = np.zeros(len(out), dtype=float)
+    n = len(out)
+    industry_boost = np.zeros(n, dtype=float)
+
     matched = 0
     matched_exact = 0
     matched_norm = 0
     matched_fuzzy = 0
 
-    if ind_col and (industry_map_exact or industry_map_norm):
-        inds_raw = out[ind_col].astype(str).map(lambda x: _safe_str(x)).tolist()
+    if ind_col and (industry_map_exact or industry_map_norm) and ind_col in out.columns:
+        inds_raw = out[ind_col].astype(str).map(_safe_str)
+        inds_norm = inds_raw.map(_norm_industry_key)
 
-        for i, ind in enumerate(inds_raw):
-            if not ind:
-                continue
+        # 1) 精确匹配（原文）
+        exact_sc = inds_raw.map(industry_map_exact)
+        m_exact = exact_sc.notna()
+        if m_exact.any():
+            industry_boost[m_exact.to_numpy()] = exact_sc[m_exact].astype(float).to_numpy()
+            c = int(m_exact.sum())
+            matched += c
+            matched_exact += c
 
-            # 1) 精确匹配
-            sc = industry_map_exact.get(ind, None)
-            if sc is not None:
-                industry_boost[i] = float(sc)
-                matched += 1
-                matched_exact += 1
-                continue
+        # 2) 规范化匹配（只对未命中者）
+        remain = ~m_exact
+        if remain.any():
+            norm_sc = inds_norm[remain].map(industry_map_norm)
+            m_norm = norm_sc.notna()
+            if m_norm.any():
+                idx = norm_sc[m_norm].index
+                industry_boost[out.index.get_indexer(idx)] = norm_sc[m_norm].astype(float).to_numpy()
+                c = int(m_norm.sum())
+                matched += c
+                matched_norm += c
 
-            # 2) 规范化匹配（更强的“去空白/后缀”）
-            nk = _norm_industry_key(ind)
-            if nk:
-                sc2 = industry_map_norm.get(nk, None)
-                if sc2 is not None:
-                    industry_boost[i] = float(sc2)
-                    matched += 1
-                    matched_norm += 1
+        # 3) fuzzy contains（只对仍未命中的少量行做逐行，topK<=40 性能可控）
+        #    条件：nk 包含 kk 或 kk 包含 nk，取分最高的 kk
+        remain2_mask = (industry_boost == 0.0) & (inds_norm != "")
+        if remain2_mask.any() and norm_keys:
+            remain2_idx = out.index[remain2_mask]
+            for ridx in remain2_idx:
+                nk = inds_norm.loc[ridx]
+                if not nk:
                     continue
-
-                # 3) 轻量模糊：contains（A包含B或B包含A）
-                #    只在 rank map 比较小的时候启用（<=40 默认）
                 best = None
-                best_key = ""
                 for kk in norm_keys:
                     if not kk:
                         continue
-                    if kk in nk or nk in kk:
-                        vv = industry_map_norm.get(kk, None)
+                    if (kk in nk) or (nk in kk):
+                        vv = industry_map_norm.get(kk)
                         if vv is None:
                             continue
                         if best is None or float(vv) > float(best):
                             best = float(vv)
-                            best_key = kk
                 if best is not None:
-                    industry_boost[i] = float(best)
+                    industry_boost[out.index.get_loc(ridx)] = float(best)
                     matched += 1
                     matched_fuzzy += 1
-                    continue
 
     dbg.matched_industry_count = int(matched)
     dbg.matched_industry_exact = int(matched_exact)
     dbg.matched_industry_norm = int(matched_norm)
     dbg.matched_industry_fuzzy = int(matched_fuzzy)
 
-    # 龙虎榜加成
-    dragon_bonus_arr = np.zeros(len(out), dtype=float)
-    dh = 0
-    codes = out[code_col].tolist()
-    for i, v in enumerate(codes):
-        ts, c6 = _norm_code(v)
-        hit = (ts in dragon_set_ts) or (c6 in dragon_set6)
-        if hit:
-            dragon_bonus_arr[i] = float(dragon_bonus)
-            dh += 1
-    dbg.dragon_hits = int(dh)
+    # 龙虎榜加成（向量化）
+    codes = out[code_col].astype(str).map(_safe_str)
+    codes_ts = codes.map(lambda x: _norm_code(x)[0])
+    codes_c6 = codes.map(lambda x: _norm_code(x)[1])
 
-    theme = industry_boost + dragon_bonus_arr
-    theme = np.clip(theme, 0.0, 1.0)
+    hit_ts = codes_ts.isin(set(dragon_ts.tolist())) if len(dragon_ts) else pd.Series([False] * n, index=out.index)
+    hit_c6 = codes_c6.isin(set(dragon_c6.tolist())) if len(dragon_c6) else pd.Series([False] * n, index=out.index)
+    hit = (hit_ts | hit_c6).to_numpy()
+
+    dragon_bonus_arr = np.zeros(n, dtype=float)
+    if hit.any():
+        dragon_bonus_arr[hit] = float(dragon_bonus)
+    dbg.dragon_hits = int(hit.sum())
+
+    theme = np.clip(industry_boost + dragon_bonus_arr, 0.0, 1.0)
 
     out["ThemeBoost"] = theme.astype("float64")
     out["题材加成"] = out["ThemeBoost"]
 
-    # 方便报告展示：输出板块/行业字段
+    # 报告展示：输出板块/行业字段（最终行业列）
     if ind_col and ind_col in out.columns:
-        out["板块"] = out[ind_col].astype(str).map(lambda x: _safe_str(x))
+        out["板块"] = out[ind_col].astype(str).map(_safe_str)
     else:
         out["板块"] = ""
 
@@ -521,7 +567,6 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     # 1) 取候选df（尽量兼容）
     cand_df = _ctx_get_df(ctx, ["step3_df", "candidates", "candidate_df", "df"])
     if cand_df is None or cand_df.empty:
-        # 兜底：若 ctx 里有 step3 的结构
         v = ctx.get("step3", None)
         if isinstance(v, dict):
             cand_df = v.get("df", pd.DataFrame())
@@ -541,14 +586,12 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         if stock_basic.empty:
             stock_basic = _read_csv_guess(Path(snapshot_dir) / "stock_basic.csv")
         if top_list.empty:
-            # 你仓库里有 top_list.csv（历史快照字段列表也包含 top_list.csv）
             top_list = _read_csv_guess(Path(snapshot_dir) / "top_list.csv")
 
     # 3) build industry score map
     industry_map, dbg_map = _build_industry_score_map(
-        hot_boards,
-        k=float(getattr(getattr(s, "weights", {}), "rank_decay_k", DEFAULT_RANK_DECAY_K))
-        if s is not None else DEFAULT_RANK_DECAY_K,
+        hot_boards=hot_boards,
+        k=_get_rank_decay_k(s, DEFAULT_RANK_DECAY_K),
         topk=DEFAULT_TOPK_INDUSTRY,
     )
 
@@ -566,6 +609,7 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     dbg_all["trade_date"] = td
     dbg_all["hot_boards_rows"] = int(len(hot_boards)) if isinstance(hot_boards, pd.DataFrame) else 0
     dbg_all["hot_boards_cols"] = list(hot_boards.columns) if isinstance(hot_boards, pd.DataFrame) else []
+
     dbg_all["industry_score_map"] = {
         "ok": bool(dbg_map.get("ok")),
         "reason": dbg_map.get("reason", ""),
@@ -577,11 +621,18 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         "top5": dbg_map.get("top5", []),
     }
 
+    dbg_all["candidate"] = {
+        "code_col": getattr(dbg_apply, "candidate_code_col", ""),
+        "industry_col_before": getattr(dbg_apply, "candidate_industry_col_before", ""),
+        "industry_col_final": getattr(dbg_apply, "candidate_industry_col_final", ""),
+        "industry_nonblank_ratio_before": float(getattr(dbg_apply, "candidate_industry_nonblank_ratio_before", 0.0)),
+        "industry_nonblank_ratio_final": float(getattr(dbg_apply, "candidate_industry_nonblank_ratio_final", 0.0)),
+    }
+
     dbg_all["matched_industry_count"] = int(getattr(dbg_apply, "matched_industry_count", 0))
     dbg_all["dragon_hits"] = int(getattr(dbg_apply, "dragon_hits", 0))
     dbg_all["theme_boost_nonzero"] = int(getattr(dbg_apply, "theme_boost_nonzero", 0))
 
-    # ✅ 新增更细命中统计（不破坏旧字段）
     dbg_all["matched_industry_detail"] = {
         "exact": int(getattr(dbg_apply, "matched_industry_exact", 0)),
         "normalized": int(getattr(dbg_apply, "matched_industry_norm", 0)),
@@ -606,7 +657,6 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         p.write_text(json.dumps(dbg_all, ensure_ascii=False, indent=2), encoding="utf-8")
         ctx["debug"]["step4_theme"]["debug_file"] = str(p)
     except Exception:
-        # 不影响主链路
         pass
 
     return ctx
