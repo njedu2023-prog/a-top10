@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Step6: Final Selector (TopN + Full Ranking) — Quant/Production Edition
+Step6: Final Selector (TopN + Full Ranking) — Quant/Production Edition (Enhanced)
 
-设计目标（专业版）：
+设计目标（专业版增强）：
 1) 工业级容错：字段名不一致、缺失列、空白列、脏数据（NaN/inf/字符串数字）都能稳住
 2) 可解释：输出包含分项、惩罚项、归一化项、以及诊断 meta/warnings
 3) 可配置：settings(s) 支持 dict/对象属性，两套 key（大小写、别名）都可
@@ -45,6 +45,10 @@ Step6: Final Selector (TopN + Full Ranking) — Quant/Production Edition
 - strength_floor / STRENGTH_FLOOR: float，默认 1e-9
 - theme_floor / THEME_FLOOR: float，默认 1e-9
 
+# 【增强：缺失默认值（避免 mul/geo 被 0 杀死，同时可解释）】
+- strength_default / STRENGTH_DEFAULT: float，默认 0.0
+- theme_default / THEME_DEFAULT: float，默认 1.0
+
 # winsor（可选，默认不启用）
 - winsor_prob / WINSOR_PROB: tuple(low_q, high_q) or None
 - winsor_strength / WINSOR_STRENGTH: tuple(low_q, high_q) or None
@@ -64,17 +68,15 @@ Step6: Final Selector (TopN + Full Ranking) — Quant/Production Edition
 - ts_code: ["ts_code","code","symbol","ticker","证券代码","代码",...]
 - name: ["name","stock_name","名称","证券名称",...]
 - board: ["board","industry","concept","theme","板块","行业","题材",...]
-- prob: ["Probability","probability","prob","_prob","proba","p",...]
-- strength: ["StrengthScore","strength","_strength",...]
-- theme: ["ThemeBoost","theme","theme_boost","_theme",...]
-
+- prob: ["Probability","probability","prob","_prob","proba","p","预测概率",...]
+- strength: ["StrengthScore","strength","_strength","强度得分","强度","强势度",...]
+- theme: ["ThemeBoost","theme","theme_boost","_theme","题材加成","行业热度",...]
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, List, Union
-import math
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, List
 import hashlib
 
 import numpy as np
@@ -94,8 +96,8 @@ def _get_setting(s: Any, names: Sequence[str], default: Any) -> Any:
     if s is None:
         return default
 
-    # dict / Mapping
     if _is_mapping(s):
+        # 先原 key，再 lower key
         for k in names:
             if k in s:
                 return s.get(k, default)
@@ -104,7 +106,6 @@ def _get_setting(s: Any, names: Sequence[str], default: Any) -> Any:
                 return s.get(lk, default)
         return default
 
-    # object attributes
     for k in names:
         if hasattr(s, k):
             try:
@@ -179,12 +180,34 @@ def _is_effectively_empty(s: pd.Series) -> bool:
     return s2.isna().all()
 
 
-def _to_float_series(df: pd.DataFrame, col: Optional[str], default: float) -> pd.Series:
+def _to_float_series(df: pd.DataFrame, col: Optional[str], default: float) -> Tuple[pd.Series, Dict[str, Any]]:
+    """
+    安全数值化，并返回诊断：
+      - non_numeric_ratio: 原列中无法转成数值的占比（粗略）
+      - used_default_ratio: 最终用 default 填充的占比
+    """
+    diag = {"col": col, "non_numeric_ratio": None, "used_default_ratio": None}
     if (col is None) or (col not in df.columns):
-        return pd.Series([default] * len(df), index=df.index, dtype="float64")
-    s = pd.to_numeric(df[col], errors="coerce").astype("float64")
-    s = s.replace([np.inf, -np.inf], np.nan).fillna(default)
-    return s
+        s = pd.Series([default] * len(df), index=df.index, dtype="float64")
+        diag["non_numeric_ratio"] = None
+        diag["used_default_ratio"] = 1.0 if len(df) > 0 else 0.0
+        return s, diag
+
+    raw = df[col]
+    # 先尝试 to_numeric
+    num = pd.to_numeric(raw, errors="coerce")
+    non_numeric = num.isna() & (~pd.isna(raw))
+    if len(df) > 0:
+        diag["non_numeric_ratio"] = float(non_numeric.mean())
+    num = num.astype("float64")
+    num = num.replace([np.inf, -np.inf], np.nan)
+
+    used_default = num.isna()
+    if len(df) > 0:
+        diag["used_default_ratio"] = float(used_default.mean())
+    num = num.fillna(default)
+
+    return num, diag
 
 
 def _clip01(x: pd.Series) -> pd.Series:
@@ -204,12 +227,10 @@ def _winsorize(s: pd.Series, q_low: float, q_high: float) -> pd.Series:
     return s.clip(lo, hi)
 
 
-def _stable_hash(*parts: str) -> int:
+def _stable_hash_text(text: str) -> int:
     """稳定 hash（跨进程/跨平台）用于排序最后 tie-break。"""
-    text = "||".join([p if p is not None else "" for p in parts])
     h = hashlib.md5(text.encode("utf-8")).hexdigest()
-    # 取 8 bytes
-    return int(h[:16], 16)
+    return int(h[:16], 16)  # 8 bytes
 
 
 def _toggle_empty(df: pd.DataFrame, col: str) -> pd.Series:
@@ -248,6 +269,10 @@ class Step6Config:
     prob_floor: float = 1e-9
     strength_floor: float = 1e-9
     theme_floor: float = 1e-9
+
+    # enhanced defaults
+    strength_default: float = 0.0
+    theme_default: float = 1.0
 
     winsor_prob: Optional[Tuple[float, float]] = None
     winsor_strength: Optional[Tuple[float, float]] = None
@@ -299,6 +324,9 @@ def _load_config(s: Any) -> Step6Config:
     cfg.strength_floor = max(1e-12, cfg.strength_floor)
     cfg.theme_floor = max(1e-12, cfg.theme_floor)
 
+    cfg.strength_default = float(_get_setting(s, ["strength_default", "STRENGTH_DEFAULT"], cfg.strength_default))
+    cfg.theme_default = float(_get_setting(s, ["theme_default", "THEME_DEFAULT"], cfg.theme_default))
+
     cfg.dedup_by_ts_code = bool(_get_setting(s, ["dedup_by_ts_code", "DEDUP_BY_TS_CODE"], cfg.dedup_by_ts_code))
     cfg.dedup_keep = str(_get_setting(s, ["dedup_keep", "DEDUP_KEEP"], cfg.dedup_keep) or cfg.dedup_keep).lower()
     if cfg.dedup_keep not in ("best", "first"):
@@ -348,9 +376,15 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     out = df.copy()
 
     # -------- 1) Column identification --------
-    ts_col = _first_existing_col(out, ["ts_code", "TS_CODE", "code", "symbol", "ticker", "证券代码", "代码"]) or "ts_code"
-    name_col = _first_existing_col(out, ["name", "NAME", "stock_name", "名称", "证券名称", "股票简称"]) or "name"
-    board_col = _first_existing_col(out, ["board", "BOARD", "industry", "INDUSTRY", "板块", "行业", "concept", "theme", "题材"]) or "board"
+    ts_col = _first_existing_col(out, [
+        "ts_code", "TS_CODE", "code", "symbol", "ticker", "证券代码", "代码", "股票代码"
+    ]) or "ts_code"
+    name_col = _first_existing_col(out, [
+        "name", "NAME", "stock_name", "名称", "证券名称", "股票简称", "股票"
+    ]) or "name"
+    board_col = _first_existing_col(out, [
+        "board", "BOARD", "industry", "INDUSTRY", "板块", "行业", "concept", "theme", "题材", "所属行业"
+    ]) or "board"
 
     if ts_col not in out.columns:
         out[ts_col] = pd.NA
@@ -369,32 +403,47 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
 
     # fallback if identity columns are effectively empty
     if _is_effectively_empty(out[ts_col]):
-        for c in ["ts_code", "TS_CODE", "证券代码", "代码", "code", "symbol", "ticker"]:
+        for c in ["ts_code", "TS_CODE", "证券代码", "代码", "股票代码", "code", "symbol", "ticker"]:
             if c in out.columns and not _is_effectively_empty(_as_str_series(out, c)):
                 out[ts_col] = _as_str_series(out, c)
                 warnings.append(f"ts_code fallback used from column '{c}'")
                 break
 
     if _is_effectively_empty(out[name_col]):
-        for c in ["name", "NAME", "名称", "证券名称", "stock_name", "股票简称"]:
+        for c in ["name", "NAME", "名称", "证券名称", "stock_name", "股票简称", "股票"]:
             if c in out.columns and not _is_effectively_empty(_as_str_series(out, c)):
                 out[name_col] = _as_str_series(out, c)
                 warnings.append(f"name fallback used from column '{c}'")
                 break
 
-    # -------- 2) Read numeric factors --------
-    prob_col = _first_existing_col(out, ["Probability", "probability", "prob", "_prob", "proba", "p", "预测概率"])
-    str_col = _first_existing_col(out, ["StrengthScore", "strengthscore", "strength", "_strength", "强度", "强势度"])
-    thm_col = _first_existing_col(out, ["ThemeBoost", "themeboost", "theme_boost", "theme", "_theme", "题材加成", "行业热度"])
+    if _is_effectively_empty(out[board_col]):
+        for c in ["board", "BOARD", "industry", "INDUSTRY", "板块", "行业", "concept", "theme", "题材", "所属行业"]:
+            if c in out.columns and not _is_effectively_empty(_as_str_series(out, c)):
+                out[board_col] = _as_str_series(out, c)
+                warnings.append(f"board fallback used from column '{c}'")
+                break
 
-    prob = _to_float_series(out, prob_col, 0.0)
-    strength = _to_float_series(out, str_col, 0.0)
-    theme = _to_float_series(out, thm_col, 1.0)
+    # -------- 2) Read numeric factors --------
+    prob_col = _first_existing_col(out, [
+        "Probability", "probability", "prob", "_prob", "proba", "p", "预测概率", "概率"
+    ])
+    str_col = _first_existing_col(out, [
+        "StrengthScore", "strengthscore", "strength", "_strength",
+        "强度得分", "强度", "强势度", "强度分", "强度评分"
+    ])
+    thm_col = _first_existing_col(out, [
+        "ThemeBoost", "themeboost", "theme_boost", "theme", "_theme",
+        "题材加成", "行业热度", "题材", "热度"
+    ])
+
+    prob, prob_diag = _to_float_series(out, prob_col, 0.0)
+    strength, str_diag = _to_float_series(out, str_col, float(cfg.strength_default))
+    theme, thm_diag = _to_float_series(out, thm_col, float(cfg.theme_default))
 
     # clean/clip to reasonable ranges
     prob = prob.clip(0.0, 1.0)
-    strength = strength.clip(0.0, 1e9)  # 不预设上限，后续归一化 & winsor/scale
-    theme = theme.clip(0.0, 1e9)
+    strength = strength.clip(0.0, 1e12)
+    theme = theme.clip(0.0, 1e12)
 
     # optional winsorization (quant-style)
     if cfg.winsor_prob is not None:
@@ -408,15 +457,47 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     out["_strength"] = strength.astype("float64")
     out["_theme"] = theme.astype("float64")
 
+    # diagnostics for factors
+    def _nonzero_ratio(x: pd.Series) -> float:
+        if len(x) == 0:
+            return 0.0
+        return float((x.astype("float64") != 0).mean())
+
+    strength_nonzero_ratio = _nonzero_ratio(out["_strength"])
+    theme_nonzero_ratio = _nonzero_ratio(out["_theme"])
+
+    if str_col is None:
+        warnings.append(f"strength column not found; used strength_default={cfg.strength_default}")
+    else:
+        if strength_nonzero_ratio == 0.0:
+            warnings.append(f"strength column '{str_col}' exists but all zeros after parsing (or default filled).")
+        if str_diag.get("non_numeric_ratio") is not None and str_diag["non_numeric_ratio"] > 0.2:
+            warnings.append(f"strength column '{str_col}' has high non-numeric ratio: {str_diag['non_numeric_ratio']:.2%}")
+
+    if thm_col is None:
+        warnings.append(f"theme column not found; used theme_default={cfg.theme_default}")
+    else:
+        if theme_nonzero_ratio == 0.0:
+            warnings.append(f"theme column '{thm_col}' exists but all zeros after parsing (or default filled).")
+        if thm_diag.get("non_numeric_ratio") is not None and thm_diag["non_numeric_ratio"] > 0.2:
+            warnings.append(f"theme column '{thm_col}' has high non-numeric ratio: {thm_diag['non_numeric_ratio']:.2%}")
+
+    if prob_col is None:
+        warnings.append("probability column not found; used default 0.0 (this will likely flatten ranking).")
+
     # -------- 3) ST detection & penalty --------
-    st_col = _first_existing_col(out, ["is_st", "isST", "st", "st_flag", "ST", "风险ST"])
+    st_col = _first_existing_col(out, ["is_st", "isST", "st", "st_flag", "ST", "风险ST", "是否ST"])
     if st_col is not None:
-        st_series = _to_float_series(out, st_col, 0.0)
+        st_series, _ = _to_float_series(out, st_col, 0.0)
         st_flag = (st_series > 0.5).astype("float64")
     else:
-        # 用 name 判定：*ST / ST（不使用捕获组，避免 pandas 警告）
+        # 用 name 判定：*ST / ST / 退市（谨慎：避免误伤英文包含 ST 的普通词）
         name_series = out[name_col].astype("object").fillna("").astype(str)
-        st_flag = name_series.str.contains(r"^\*?ST|\bST\b", regex=True, na=False).astype("float64")
+        # ^\*?ST 最常见；“退市”也算高风险
+        st_flag = (
+            name_series.str.contains(r"^\*?ST", regex=True, na=False)
+            | name_series.str.contains("退市", na=False)
+        ).astype("float64")
 
     st_penalty = pd.Series(
         np.where(st_flag.values > 0.5, cfg.st_penalty, 1.0),
@@ -457,6 +538,15 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     out["_w_prob"] = w_prob
     out["_w_strength"] = w_strength
     out["_w_theme"] = w_theme
+
+    # warn for “mul/geo + strength/theme mostly zeros”
+    if cfg.score_mode in ("mul", "geo"):
+        if w_strength > 0 and float((strength01 <= 0).mean()) > 0.9:
+            warnings.append("strength01 is mostly 0 while w_strength>0; geo/mul may collapse scores. "
+                            "Consider strength_default=1.0 or fix upstream strength.")
+        if w_theme > 0 and float((theme01 <= 0).mean()) > 0.9:
+            warnings.append("theme01 is mostly 0 while w_theme>0; geo/mul may collapse scores. "
+                            "Consider theme_default=1.0 or fix upstream theme.")
 
     # -------- 7) Score computation --------
     if cfg.score_mode == "add":
@@ -503,11 +593,11 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
                 warnings.append(f"dedup_by_ts_code keep=first: {before}->{after}")
         else:
             before = len(out)
-            # 先按分数/分项排序，再 drop_duplicates 保留最优
             out.sort_values(
                 ["_score", "_prob", "_strength", "_theme"],
                 ascending=False,
-                inplace=True
+                inplace=True,
+                kind="mergesort",
             )
             out = out.drop_duplicates(subset=[ts_col], keep="first").copy()
             after = len(out)
@@ -516,13 +606,13 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
 
     # -------- 9) Stable tie-break --------
     if cfg.stable_hash_tiebreak:
-        # 用 ts_code/name/board 生成稳定 hash 作为最终 tie-break
         ts_s = out[ts_col].astype("object").fillna("").astype(str)
         nm_s = out[name_col].astype("object").fillna("").astype(str)
         bd_s = out[board_col].astype("object").fillna("").astype(str)
-        out["_tiebreak_hash"] = [
-            _stable_hash(ts_s.iat[i], nm_s.iat[i], bd_s.iat[i]) for i in range(len(out))
-        ]
+
+        # 向量化：zip -> join -> md5
+        joined = (ts_s + "||" + nm_s + "||" + bd_s).tolist()
+        out["_tiebreak_hash"] = [ _stable_hash_text(x) for x in joined ]
     else:
         out["_tiebreak_hash"] = 0
 
@@ -530,7 +620,7 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     full_sorted = out.sort_values(
         ["_score", "_prob", "_strength", "_theme", "_tiebreak_hash"],
         ascending=[False, False, False, False, True],
-        kind="mergesort",  # 稳定排序
+        kind="mergesort",
     ).copy()
     full_sorted.reset_index(drop=True, inplace=True)
     full_sorted["rank"] = full_sorted.index + 1
@@ -551,10 +641,10 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "prob": top_df_raw["_prob"].round(6),
         "prob01": top_df_raw["_prob01"].round(6),
 
-        "StrengthScore": top_df_raw["_strength"].round(3),
+        "StrengthScore": top_df_raw["_strength"].round(6),
         "strength01": top_df_raw["_strength01"].round(6),
 
-        "ThemeBoost": top_df_raw["_theme"].round(3),
+        "ThemeBoost": top_df_raw["_theme"].round(6),
         "theme01": top_df_raw["_theme01"].round(6),
 
         # 解释字段
@@ -572,13 +662,17 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "filters": {"min_prob": cfg.min_prob, "min_score": cfg.min_score},
         "penalties": {"st_penalty": cfg.st_penalty, "emotion_factor": cfg.emotion_factor},
         "normalization": {"strength_scale": cfg.strength_scale, "theme_cap": cfg.theme_cap},
-        "winsor": {
-            "prob": cfg.winsor_prob, "strength": cfg.winsor_strength, "theme": cfg.winsor_theme
-        },
+        "floors": {"prob_floor": cfg.prob_floor, "strength_floor": cfg.strength_floor, "theme_floor": cfg.theme_floor},
+        "defaults": {"strength_default": cfg.strength_default, "theme_default": cfg.theme_default},
+        "winsor": {"prob": cfg.winsor_prob, "strength": cfg.winsor_strength, "theme": cfg.winsor_theme},
         "dedup": {"enabled": cfg.dedup_by_ts_code, "keep": cfg.dedup_keep},
         "tiebreak": {"stable_hash_tiebreak": cfg.stable_hash_tiebreak},
-        "columns_used": {"ts_col": ts_col, "name_col": name_col, "board_col": board_col,
-                         "prob_col": prob_col, "strength_col": str_col, "theme_col": thm_col},
+        "columns_used": {
+            "ts_col": ts_col, "name_col": name_col, "board_col": board_col,
+            "prob_col": prob_col, "strength_col": str_col, "theme_col": thm_col
+        },
+        "parse_diag": {"prob": prob_diag, "strength": str_diag, "theme": thm_diag},
+        "nonzero_ratio": {"strength": strength_nonzero_ratio, "theme": theme_nonzero_ratio},
     }
 
     return {
@@ -595,4 +689,4 @@ def run(df: Any, s=None) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    print("Step6 FinalTopN Quant/Production Edition ready.")
+    print("Step6 FinalTopN Quant/Production Edition (Enhanced) ready.")
