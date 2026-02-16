@@ -627,14 +627,16 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
 
     X = out[FEATURES].astype(float).values
 
-    mm_lgbm = load_lgbm(s=s)
-out["Probability_LGBM"] = np.nan
-if m_lgbm is not None:
-    try:
-        proba_side = m_lgbm.predict_proba(X)[:, 1]
-        out["Probability_LGBM"] = np.clip(proba_side, 0.0, 1.0)
-    except Exception:
-        out["Probability_LGBM"] = np.nan
+    m_lgbm = load_lgbm(s=s)
+    if m_lgbm is not None:
+        try:
+            proba = m_lgbm.predict_proba(X)[:, 1]
+            out["Probability"] = np.clip(proba, 0.0, 1.0)
+            out["_prob_src"] = "lgbm"
+            return out.sort_values("Probability", ascending=False)
+        except Exception:
+            # 若模型损坏/不兼容，继续降级
+            pass
 
     m_lr = load_lr(s=s)
     if m_lr is not None:
@@ -676,4 +678,3 @@ def run(df: pd.DataFrame, s=None) -> pd.DataFrame:
 
 if __name__ == "__main__":
     print("Step5 Probability model loaded.")
-        
