@@ -38,13 +38,20 @@
       ]
     ]
   },
-  "matched_industry_count": 0,
-  "dragon_hits": 0,
-  "theme_boost_nonzero": 0,
-  "matched_industry_detail": {
-    "exact": 0,
-    "normalized": 0,
-    "fuzzy_contains": 0
+  "candidate": {
+    "code_col": "ts_code",
+    "industry_col_before": "industry",
+    "industry_col_final": "industry",
+    "industry_nonblank_ratio_before": 1.0,
+    "industry_nonblank_ratio_final": 1.0
   },
-  "diagnosis": "both industry heat and dragon bonus NOT applied -> all 0"
+  "matched_industry_count": 41,
+  "dragon_hits": 29,
+  "theme_boost_nonzero": 51,
+  "matched_industry_detail": {
+    "exact": 39,
+    "normalized": 0,
+    "fuzzy_contains": 2
+  },
+  "diagnosis": "industry heat applied (ok)"
 }
