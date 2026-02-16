@@ -4,73 +4,17 @@
 """
 Step6: Final Selector (TopN + Full Ranking) — Quant/Production Edition (Enhanced)
 
-设计目标（专业版增强）：
-1) 工业级容错：字段名不一致、缺失列、空白列、脏数据（NaN/inf/字符串数字）都能稳住
-2) 可解释：输出包含分项、惩罚项、归一化项、以及诊断 meta/warnings
-3) 可配置：settings(s) 支持 dict/对象属性，两套 key（大小写、别名）都可
-4) 可复现：排序 tie-break 固化；可选稳定 hash-breaker
-5) 量化常见做法：winsor/clip、min_prob 过滤、ST 惩罚、去重保留最优、score 模式（geo/add/mul）
-6) 行业通用：不绑定某个数据源；字段识别尽量广泛
-
-返回:
-{
-  "topN": DataFrame(精简 TopN)   # 推荐主 key
-  "topn": DataFrame(精简 TopN)   # 向后兼容
-  "full": DataFrame(完整排序全集)
-  "meta": dict                  # 诊断信息（新增，不影响旧逻辑）
-  "warnings": list[str]         # 告警（新增，不影响旧逻辑）
-}
-
-可选 settings(s) 参数（均可缺省）:
-- topn / TOPN: int，默认 10
-- score_mode: "geo" | "add" | "mul" （默认 "geo"）
-
-# 核心权重：会自动归一化
-- w_prob / W_PROB: float，默认 1.0
-- w_strength / W_STRENGTH: float，默认 0.0
-- w_theme / W_THEME: float，默认 0.0
-
-# 过滤
-- min_prob / MIN_PROB: float，默认 0.0  （低于该概率过滤）
-- min_score / MIN_SCORE: float，默认 None（低于该最终分过滤）
-
-# 惩罚 / 乘子
-- st_penalty / ST_PENALTY: float，默认 0.85
-- emotion_factor / EMOTION_FACTOR: float，默认 1.0
-
-# 归一化/截断
-- strength_scale / STRENGTH_SCALE: float，默认 100.0  （strength->0~1 的缩放分母）
-- theme_cap / THEME_CAP: float，默认 1.3            （theme->0~1 的缩放分母）
-- prob_floor / PROB_FLOOR: float，默认 1e-9          （geo 模式 log 的 floor）
-- strength_floor / STRENGTH_FLOOR: float，默认 1e-9
-- theme_floor / THEME_FLOOR: float，默认 1e-9
-
-# 【增强：缺失默认值（避免 mul/geo 被 0 杀死，同时可解释）】
-- strength_default / STRENGTH_DEFAULT: float，默认 0.0
-- theme_default / THEME_DEFAULT: float，默认 1.0
-
-# winsor（可选，默认不启用）
-- winsor_prob / WINSOR_PROB: tuple(low_q, high_q) or None
-- winsor_strength / WINSOR_STRENGTH: tuple(low_q, high_q) or None
-- winsor_theme / WINSOR_THEME: tuple(low_q, high_q) or None
-
-# 去重
-- dedup_by_ts_code / DEDUP_BY_TS_CODE: bool，默认 True
-- dedup_keep / DEDUP_KEEP: "best"|"first" 默认 "best"
-  - best: 按最终分最高保留
-  - first: 按现有顺序保留
-
-# 稳定 tie-break（可选）
-- stable_hash_tiebreak / STABLE_HASH_TIEBREAK: bool 默认 True
-  用 ts_code/name/board 生成稳定 hash，作为最后排序字段，保证完全可复现
-
-字段自动识别（尽量兼容）：
-- ts_code: ["ts_code","code","symbol","ticker","证券代码","代码",...]
-- name: ["name","stock_name","名称","证券名称",...]
-- board: ["board","industry","concept","theme","板块","行业","题材",...]
-- prob: ["Probability","probability","prob","_prob","proba","p","预测概率",...]
-- strength: ["StrengthScore","strength","_strength","强度得分","强度","强势度",...]
-- theme: ["ThemeBoost","theme","theme_boost","_theme","题材加成","行业热度",...]
+【本版本新增兜底修复】
+- 若 Step6 输入 df 没带 Step3 的 StrengthScore（导致最终“强度得分=0”），将自动尝试从本地输出文件合并：
+  outputs/step3_strength_{trade_date}.csv  或 outputs/step3_strength.csv（以及同目录备选）
+- 触发条件：
+  1) strength 列找不到；或
+  2) strength 解析后非零占比很低（默认 < 1%）；或
+  3) settings 显式指定强制合并
+- 合并逻辑：
+  - 以 ts_code 为 key 左连接
+  - 回填策略默认：仅对当前 _strength==0 的行，用外部 StrengthScore 覆盖（避免误覆盖上游已计算值）
+  - 可通过 settings 调整（见 Step6Config.enrich_*）
 """
 
 from __future__ import annotations
@@ -78,6 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, List
 import hashlib
+import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -97,7 +43,6 @@ def _get_setting(s: Any, names: Sequence[str], default: Any) -> Any:
         return default
 
     if _is_mapping(s):
-        # 先原 key，再 lower key
         for k in names:
             if k in s:
                 return s.get(k, default)
@@ -189,12 +134,10 @@ def _to_float_series(df: pd.DataFrame, col: Optional[str], default: float) -> Tu
     diag = {"col": col, "non_numeric_ratio": None, "used_default_ratio": None}
     if (col is None) or (col not in df.columns):
         s = pd.Series([default] * len(df), index=df.index, dtype="float64")
-        diag["non_numeric_ratio"] = None
         diag["used_default_ratio"] = 1.0 if len(df) > 0 else 0.0
         return s, diag
 
     raw = df[col]
-    # 先尝试 to_numeric
     num = pd.to_numeric(raw, errors="coerce")
     non_numeric = num.isna() & (~pd.isna(raw))
     if len(df) > 0:
@@ -215,7 +158,6 @@ def _clip01(x: pd.Series) -> pd.Series:
 
 
 def _winsorize(s: pd.Series, q_low: float, q_high: float) -> pd.Series:
-    """winsorize（分位数截断），用于抗极端值；q_low/q_high in [0,1] 且 q_low < q_high"""
     if s is None or s.empty:
         return s
     q_low = float(q_low)
@@ -228,13 +170,11 @@ def _winsorize(s: pd.Series, q_low: float, q_high: float) -> pd.Series:
 
 
 def _stable_hash_text(text: str) -> int:
-    """稳定 hash（跨进程/跨平台）用于排序最后 tie-break。"""
     h = hashlib.md5(text.encode("utf-8")).hexdigest()
-    return int(h[:16], 16)  # 8 bytes
+    return int(h[:16], 16)
 
 
 def _toggle_empty(df: pd.DataFrame, col: str) -> pd.Series:
-    """输出 TopN 时用：把 NA/None/'nan' 变成 ''，避免 markdown/csv 里难看。"""
     if col not in df.columns:
         return pd.Series([""] * len(df), index=df.index, dtype="object")
     s = df[col].astype("object")
@@ -242,6 +182,178 @@ def _toggle_empty(df: pd.DataFrame, col: str) -> pd.Series:
     s = s.map(lambda x: x.strip() if isinstance(x, str) else x)
     s = s.map(lambda x: "" if (x is None) or (isinstance(x, str) and x.lower() == "nan") else x)
     return s.astype("object")
+
+
+def _nonzero_ratio(x: pd.Series) -> float:
+    if x is None or len(x) == 0:
+        return 0.0
+    return float((x.astype("float64") != 0).mean())
+
+
+def _detect_trade_date(df: pd.DataFrame, s: Any) -> Optional[str]:
+    td = _get_setting(s, ["trade_date", "TRADE_DATE", "date", "DATE"], None)
+    if td is not None:
+        td = str(td).strip()
+        if td:
+            return td
+
+    td_col = _first_existing_col(df, ["trade_date", "TRADE_DATE", "TradeDate", "date", "日期"])
+    if td_col and td_col in df.columns:
+        # 取出现最多的那个（更稳）
+        vals = df[td_col].astype("object").dropna().astype(str).str.strip()
+        vals = vals[vals != ""]
+        if len(vals) > 0:
+            return vals.value_counts().index[0]
+    return None
+
+
+def _try_enrich_strength_from_step3(
+    out: pd.DataFrame,
+    ts_col: str,
+    s: Any,
+    strength_present: bool,
+    strength_nonzero_ratio: float,
+    warnings: List[str],
+) -> Dict[str, Any]:
+    """
+    如果 Step6 输入 df 没带强度列（或几乎全 0），自动从 outputs/step3_strength_{trade_date}.csv 合并回填。
+    回填策略默认：仅对 out["_strength"]==0 的行，用外部 StrengthScore 覆盖。
+    """
+    meta = {
+        "attempted": False,
+        "used": False,
+        "reason": "",
+        "trade_date": None,
+        "path": None,
+        "rows_loaded": 0,
+        "filled_count": 0,
+        "mode": None,
+    }
+
+    force = bool(_get_setting(s, ["enrich_strength_force", "ENRICH_STRENGTH_FORCE"], False))
+    threshold = float(_get_setting(s, ["enrich_strength_nonzero_threshold", "ENRICH_STRENGTH_NONZERO_THRESHOLD"], 0.01))
+    fill_mode = str(_get_setting(s, ["enrich_strength_fill_mode", "ENRICH_STRENGTH_FILL_MODE"], "fill_zero")).lower()
+    # fill_zero: 仅填充 _strength==0
+    # overwrite: 直接用外部覆盖（只要外部非空）
+    if fill_mode not in ("fill_zero", "overwrite"):
+        fill_mode = "fill_zero"
+    meta["mode"] = fill_mode
+
+    should = force or (not strength_present) or (strength_nonzero_ratio < threshold)
+    if not should:
+        meta["reason"] = "skip: strength seems present and nonzero"
+        return meta
+
+    meta["attempted"] = True
+    meta["reason"] = "force" if force else ("missing_strength" if not strength_present else f"nonzero_ratio<{threshold}")
+
+    trade_date = _detect_trade_date(out, s)
+    meta["trade_date"] = trade_date
+
+    # 用户可指定 outputs 目录（默认 ./outputs）
+    outputs_dir = _get_setting(s, ["outputs_dir", "OUTPUTS_DIR"], "outputs")
+    outputs_dir = str(outputs_dir) if outputs_dir is not None else "outputs"
+
+    candidates: List[Path] = []
+    if trade_date:
+        candidates.append(Path(outputs_dir) / f"step3_strength_{trade_date}.csv")
+        candidates.append(Path("outputs") / f"step3_strength_{trade_date}.csv")
+        candidates.append(Path(f"step3_strength_{trade_date}.csv"))
+
+    candidates.append(Path(outputs_dir) / "step3_strength.csv")
+    candidates.append(Path("outputs") / "step3_strength.csv")
+    candidates.append(Path("step3_strength.csv"))
+
+    target = None
+    for p in candidates:
+        try:
+            if p.exists() and p.is_file():
+                target = p
+                break
+        except Exception:
+            continue
+
+    if target is None:
+        warnings.append("strength enrich: could not find step3_strength csv locally (outputs/step3_strength_*.csv).")
+        meta["used"] = False
+        return meta
+
+    meta["path"] = str(target)
+
+    try:
+        # dtype 保持 ts_code 为字符串，防止 002xxx 被读成数字
+        strength_df = pd.read_csv(target, dtype={"ts_code": "string"}, encoding="utf-8")
+    except UnicodeDecodeError:
+        strength_df = pd.read_csv(target, dtype={"ts_code": "string"}, encoding="utf-8-sig")
+    except Exception as e:
+        warnings.append(f"strength enrich: failed to read {target}: {e}")
+        meta["used"] = False
+        return meta
+
+    meta["rows_loaded"] = int(len(strength_df))
+
+    if strength_df.empty:
+        warnings.append(f"strength enrich: {target} is empty.")
+        meta["used"] = False
+        return meta
+
+    # 识别 key / strength 列
+    key_col = _first_existing_col(strength_df, ["ts_code", "TS_CODE", "code", "symbol", "ticker", "证券代码", "代码"])
+    if key_col is None:
+        warnings.append(f"strength enrich: {target} has no ts_code-like column.")
+        meta["used"] = False
+        return meta
+
+    strength_col = _first_existing_col(strength_df, [
+        "StrengthScore", "strengthscore", "_strength", "strength", "强度得分", "强度", "强势度"
+    ])
+    if strength_col is None:
+        warnings.append(f"strength enrich: {target} has no StrengthScore-like column.")
+        meta["used"] = False
+        return meta
+
+    tmp = strength_df[[key_col, strength_col]].copy()
+    tmp.rename(columns={key_col: "__ts_code__", strength_col: "__strength_ext__"}, inplace=True)
+
+    tmp["__ts_code__"] = tmp["__ts_code__"].astype("object").fillna("").astype(str).str.strip()
+    tmp["__strength_ext__"] = pd.to_numeric(tmp["__strength_ext__"], errors="coerce").astype("float64")
+    tmp["__strength_ext__"] = tmp["__strength_ext__"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    # 合并（left）
+    out_key = out[ts_col].astype("object").fillna("").astype(str).str.strip()
+    merged = out.copy()
+    merged["__ts_code__"] = out_key
+
+    merged = merged.merge(tmp, on="__ts_code__", how="left")
+
+    ext = merged["__strength_ext__"].fillna(0.0).astype("float64")
+
+    # 回填策略
+    if "_strength" not in merged.columns:
+        merged["_strength"] = 0.0
+
+    cur = merged["_strength"].fillna(0.0).astype("float64")
+    if fill_mode == "overwrite":
+        new_strength = np.where(ext > 0, ext, cur)
+    else:
+        # fill_zero：只对当前为 0 的行，用 ext 覆盖
+        new_strength = np.where((cur <= 0) & (ext > 0), ext, cur)
+
+    filled = int(np.sum((cur != new_strength)))
+    merged["_strength"] = pd.Series(new_strength, index=merged.index, dtype="float64")
+
+    # 清理临时列
+    merged.drop(columns=["__ts_code__", "__strength_ext__"], inplace=True, errors="ignore")
+
+    meta["used"] = True
+    meta["filled_count"] = filled
+
+    if filled > 0:
+        warnings.append(f"strength enrich: merged from {target}, filled {filled} rows.")
+    else:
+        warnings.append(f"strength enrich: merged from {target}, but nothing was filled (maybe already present).")
+
+    return merged, meta
 
 
 # =========================
@@ -270,7 +382,6 @@ class Step6Config:
     strength_floor: float = 1e-9
     theme_floor: float = 1e-9
 
-    # enhanced defaults
     strength_default: float = 0.0
     theme_default: float = 1.0
 
@@ -282,6 +393,12 @@ class Step6Config:
     dedup_keep: str = "best"  # best | first
 
     stable_hash_tiebreak: bool = True
+
+    # enrich options (new)
+    enrich_strength_force: bool = False
+    enrich_strength_nonzero_threshold: float = 0.01
+    enrich_strength_fill_mode: str = "fill_zero"  # fill_zero | overwrite
+    outputs_dir: str = "outputs"
 
 
 def _load_config(s: Any) -> Step6Config:
@@ -335,6 +452,19 @@ def _load_config(s: Any) -> Step6Config:
     cfg.stable_hash_tiebreak = bool(_get_setting(
         s, ["stable_hash_tiebreak", "STABLE_HASH_TIEBREAK"], cfg.stable_hash_tiebreak
     ))
+
+    # enrich options
+    cfg.enrich_strength_force = bool(_get_setting(s, ["enrich_strength_force", "ENRICH_STRENGTH_FORCE"], cfg.enrich_strength_force))
+    cfg.enrich_strength_nonzero_threshold = float(_get_setting(
+        s, ["enrich_strength_nonzero_threshold", "ENRICH_STRENGTH_NONZERO_THRESHOLD"], cfg.enrich_strength_nonzero_threshold
+    ))
+    cfg.enrich_strength_fill_mode = str(_get_setting(
+        s, ["enrich_strength_fill_mode", "ENRICH_STRENGTH_FILL_MODE"], cfg.enrich_strength_fill_mode
+    ) or cfg.enrich_strength_fill_mode).lower()
+    if cfg.enrich_strength_fill_mode not in ("fill_zero", "overwrite"):
+        cfg.enrich_strength_fill_mode = "fill_zero"
+
+    cfg.outputs_dir = str(_get_setting(s, ["outputs_dir", "OUTPUTS_DIR"], cfg.outputs_dir) or cfg.outputs_dir)
 
     # winsor tuples
     wp = _get_setting(s, ["winsor_prob", "WINSOR_PROB"], None)
@@ -396,7 +526,6 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         out[board_col] = pd.NA
         warnings.append(f"missing board/industry column; created '{board_col}' as NA")
 
-    # normalize identity strings
     out[ts_col] = _as_str_series(out, ts_col)
     out[name_col] = _as_str_series(out, name_col)
     out[board_col] = _as_str_series(out, board_col)
@@ -440,12 +569,10 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     strength, str_diag = _to_float_series(out, str_col, float(cfg.strength_default))
     theme, thm_diag = _to_float_series(out, thm_col, float(cfg.theme_default))
 
-    # clean/clip to reasonable ranges
     prob = prob.clip(0.0, 1.0)
     strength = strength.clip(0.0, 1e12)
     theme = theme.clip(0.0, 1e12)
 
-    # optional winsorization (quant-style)
     if cfg.winsor_prob is not None:
         prob = _winsorize(prob, cfg.winsor_prob[0], cfg.winsor_prob[1])
     if cfg.winsor_strength is not None:
@@ -457,17 +584,53 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     out["_strength"] = strength.astype("float64")
     out["_theme"] = theme.astype("float64")
 
-    # diagnostics for factors
-    def _nonzero_ratio(x: pd.Series) -> float:
-        if len(x) == 0:
-            return 0.0
-        return float((x.astype("float64") != 0).mean())
-
     strength_nonzero_ratio = _nonzero_ratio(out["_strength"])
     theme_nonzero_ratio = _nonzero_ratio(out["_theme"])
+    strength_present = (str_col is not None)
 
+    # -------- 2.5) NEW: Enrich strength from Step3 outputs if missing/mostly zero --------
+    enrich_meta: Dict[str, Any] = {"attempted": False, "used": False}
+    # 把 cfg 的 enrich 设置同步回 settings（便于 _try_enrich_strength_from_step3 读取）
+    # （不强制依赖 cfg，但保证用户用 cfg 也能生效）
+    if s is None:
+        s2 = {
+            "enrich_strength_force": cfg.enrich_strength_force,
+            "enrich_strength_nonzero_threshold": cfg.enrich_strength_nonzero_threshold,
+            "enrich_strength_fill_mode": cfg.enrich_strength_fill_mode,
+            "outputs_dir": cfg.outputs_dir,
+        }
+    else:
+        # 允许用户 settings 覆盖 cfg
+        s2 = s
+
+    enriched = None
+    # 触发条件：缺失或几乎全 0 或强制
+    force = bool(_get_setting(s2, ["enrich_strength_force", "ENRICH_STRENGTH_FORCE"], cfg.enrich_strength_force))
+    threshold = float(_get_setting(
+        s2, ["enrich_strength_nonzero_threshold", "ENRICH_STRENGTH_NONZERO_THRESHOLD"], cfg.enrich_strength_nonzero_threshold
+    ))
+    should_enrich = force or (not strength_present) or (strength_nonzero_ratio < threshold)
+
+    if should_enrich:
+        result = _try_enrich_strength_from_step3(
+            out=out,
+            ts_col=ts_col,
+            s=s2,
+            strength_present=strength_present,
+            strength_nonzero_ratio=strength_nonzero_ratio,
+            warnings=warnings,
+        )
+        # result 可能是 meta 或 (merged, meta)
+        if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], pd.DataFrame):
+            out, enrich_meta = result[0], result[1]
+            # enrich 后重新计算 strength 非零占比（用于 meta）
+            strength_nonzero_ratio = _nonzero_ratio(out["_strength"])
+        elif isinstance(result, dict):
+            enrich_meta = result
+
+    # -------- 2.x) factor diagnostics & warnings --------
     if str_col is None:
-        warnings.append(f"strength column not found; used strength_default={cfg.strength_default}")
+        warnings.append(f"strength column not found in input df; used strength_default={cfg.strength_default} (may be enriched).")
     else:
         if strength_nonzero_ratio == 0.0:
             warnings.append(f"strength column '{str_col}' exists but all zeros after parsing (or default filled).")
@@ -491,9 +654,7 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         st_series, _ = _to_float_series(out, st_col, 0.0)
         st_flag = (st_series > 0.5).astype("float64")
     else:
-        # 用 name 判定：*ST / ST / 退市（谨慎：避免误伤英文包含 ST 的普通词）
         name_series = out[name_col].astype("object").fillna("").astype(str)
-        # ^\*?ST 最常见；“退市”也算高风险
         st_flag = (
             name_series.str.contains(r"^\*?ST", regex=True, na=False)
             | name_series.str.contains("退市", na=False)
@@ -539,11 +700,10 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     out["_w_strength"] = w_strength
     out["_w_theme"] = w_theme
 
-    # warn for “mul/geo + strength/theme mostly zeros”
     if cfg.score_mode in ("mul", "geo"):
         if w_strength > 0 and float((strength01 <= 0).mean()) > 0.9:
             warnings.append("strength01 is mostly 0 while w_strength>0; geo/mul may collapse scores. "
-                            "Consider strength_default=1.0 or fix upstream strength.")
+                            "Consider strength_default=1.0 or fix upstream strength / enrich.")
         if w_theme > 0 and float((theme01 <= 0).mean()) > 0.9:
             warnings.append("theme01 is mostly 0 while w_theme>0; geo/mul may collapse scores. "
                             "Consider theme_default=1.0 or fix upstream theme.")
@@ -554,7 +714,6 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     elif cfg.score_mode == "mul":
         base_score = (prob01 * strength01 * theme01)
     else:
-        # geo mean in log space (robust)
         p = (prob01 + cfg.prob_floor)
         s01 = (strength01 + cfg.strength_floor)
         t01 = (theme01 + cfg.theme_floor)
@@ -571,7 +730,6 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     out["_score"] = pd.Series(final_score, index=out.index, dtype="float64")
     out["_emotion_factor"] = float(cfg.emotion_factor)
 
-    # optional min_score filter
     if cfg.min_score is not None:
         before = len(out)
         out = out[out["_score"] >= float(cfg.min_score)].copy()
@@ -609,14 +767,12 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         ts_s = out[ts_col].astype("object").fillna("").astype(str)
         nm_s = out[name_col].astype("object").fillna("").astype(str)
         bd_s = out[board_col].astype("object").fillna("").astype(str)
-
-        # 向量化：zip -> join -> md5
         joined = (ts_s + "||" + nm_s + "||" + bd_s).tolist()
-        out["_tiebreak_hash"] = [ _stable_hash_text(x) for x in joined ]
+        out["_tiebreak_hash"] = [_stable_hash_text(x) for x in joined]
     else:
         out["_tiebreak_hash"] = 0
 
-    # -------- 10) Full ranking sort (deterministic) --------
+    # -------- 10) Full ranking sort --------
     full_sorted = out.sort_values(
         ["_score", "_prob", "_strength", "_theme", "_tiebreak_hash"],
         ascending=[False, False, False, False, True],
@@ -634,7 +790,6 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "name": _toggle_empty(top_df_raw, name_col),
         "board": _toggle_empty(top_df_raw, board_col),
 
-        # 最终分 + 分项
         "score": top_df_raw["_score"].round(6),
         "base_score": top_df_raw["_base_score"].round(6),
 
@@ -647,7 +802,6 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "ThemeBoost": top_df_raw["_theme"].round(6),
         "theme01": top_df_raw["_theme01"].round(6),
 
-        # 解释字段
         "st_flag": top_df_raw["_st_flag"].round(0).astype(int),
         "st_penalty": top_df_raw["_st_penalty"].round(3),
         "emotion_factor": top_df_raw["_emotion_factor"].round(6),
@@ -672,12 +826,13 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
             "prob_col": prob_col, "strength_col": str_col, "theme_col": thm_col
         },
         "parse_diag": {"prob": prob_diag, "strength": str_diag, "theme": thm_diag},
-        "nonzero_ratio": {"strength": strength_nonzero_ratio, "theme": theme_nonzero_ratio},
+        "nonzero_ratio": {"strength": float(_nonzero_ratio(full_sorted["_strength"])), "theme": float(_nonzero_ratio(full_sorted["_theme"]))},
+        "enrich_strength": enrich_meta,
     }
 
     return {
         "topN": top_df,
-        "topn": top_df,   # backward compatible
+        "topn": top_df,
         "full": full_sorted,
         "meta": meta,
         "warnings": warnings,
@@ -689,4 +844,4 @@ def run(df: Any, s=None) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    print("Step6 FinalTopN Quant/Production Edition (Enhanced) ready.")
+    print("Step6 FinalTopN Quant/Production Edition (Enhanced + Strength Enrich) ready.")
