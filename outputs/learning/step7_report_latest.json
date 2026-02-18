@@ -1,24 +1,27 @@
 {
-  "ok": false,
-  "lookback": 150,
-  "outputs_files": 9,
-  "evaluate_days": 30,
-  "trained_models": {
-    "ok": false,
-    "lr": {
-      "ok": false,
-      "model": "lr",
-      "reason": "not enough snapshots"
-    },
-    "lgbm": {
-      "ok": false,
-      "model": "lgbm",
-      "reason": "lightgbm not installed"
-    }
+  "ts": "2026-02-19 00:25:33",
+  "topn": 10,
+  "lookback_days": 150,
+  "latest_hit": {
+    "trade_date": "20260212",
+    "next_trade_date": "20260213",
+    "topn": 10,
+    "hit": 1,
+    "hit_rate": 0.1,
+    "note": ""
   },
-  "hit_rate_last_days": 7,
-  "hit_rate_last": 0.17142857142857146,
-  "hit_cnt_last": 12,
-  "hit_rate_total": 0.17142857142857146,
-  "hit_cnt_total": 12
+  "train_meta": {
+    "train_rows": 0,
+    "pos": 0,
+    "neg": 0,
+    "feature_history_file": ""
+  },
+  "train_result": {
+    "trained": false,
+    "detail": {}
+  },
+  "warnings": [
+    "no feature history file found in outputs/, training skipped.",
+    "train_df empty, skip train_step5_models."
+  ]
 }
