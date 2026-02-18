@@ -8,6 +8,7 @@ Step7：自学习闭环更新模型权重（命中率滚动提升）
 - 回收 outputs/predict_top10_*.md 的 TopN 预测
 - 用 “下一交易日”的 limit_list_d.csv 打标（命中统计）
 - 构建训练样本（优先使用历史 step4_theme.csv / step4_history.csv 之类的“特征历史落盘”）
+- 若没有特征历史：自动从 outputs/ 里“按日落盘的 step4_theme_YYYYMMDD.csv”聚合生成 feature_history
 - 调用 Step5 训练（LR + LightGBM）并落盘 models/
 - 输出命中率历史与最新报告到 outputs/learning
 
@@ -197,17 +198,209 @@ def _infer_next_trade_date(predict_dates: List[str], cur_date: str) -> Optional[
 
 
 # ============================================================
+# Feature history auto build (NEW)
+# ============================================================
+
+def _extract_date_from_filename(name: str) -> Optional[str]:
+    m = re.search(r"(\d{8})", name)
+    return m.group(1) if m else None
+
+
+def _safe_read_csv(path: Path, warnings: List[str]) -> pd.DataFrame:
+    try:
+        return pd.read_csv(path, dtype=str, encoding="utf-8", engine="python")
+    except Exception:
+        # 有些文件可能是 utf-8-sig
+        try:
+            return pd.read_csv(path, dtype=str, encoding="utf-8-sig", engine="python")
+        except Exception as e2:
+            warnings.append(f"read csv failed: {path} ({e2})")
+            return pd.DataFrame()
+
+
+def _normalize_trade_date_col(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[str]]:
+    """
+    把日期列统一成 trade_date（YYYYMMDD）并返回列名
+    """
+    if df is None or df.empty:
+        return df, None
+
+    date_col = None
+    for c in ["trade_date", "TRADE_DATE", "日期", "交易日期"]:
+        if c in df.columns:
+            date_col = c
+            break
+
+    if date_col is None:
+        return df, None
+
+    # 统一成 trade_date
+    df[date_col] = df[date_col].astype(str).str.replace("-", "").str.strip()
+    if date_col != "trade_date":
+        df.rename(columns={date_col: "trade_date"}, inplace=True)
+    return df, "trade_date"
+
+
+def _ensure_trade_date_from_filename(df: pd.DataFrame, f: Path) -> pd.DataFrame:
+    """
+    如果文件没带 trade_date 列，则从文件名里猜一个补上（例如 step4_theme_20260213.csv）
+    """
+    if df is None or df.empty:
+        return df
+    if "trade_date" in df.columns:
+        return df
+    d = _extract_date_from_filename(f.name)
+    if d and re.match(r"^\d{8}$", d):
+        df["trade_date"] = d
+    return df
+
+
+def _ensure_ts_code_col(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[str]]:
+    """
+    尝试把 code/ts_code/证券代码 等统一成 ts_code
+    """
+    if df is None or df.empty:
+        return df, None
+
+    df = _normalize_id_columns(df)
+    ts_col = _get_ts_code_col(df)
+    if ts_col is None:
+        # 再兜底一些常见列
+        for c in ["ts_code", "TS_CODE", "code", "CODE", "证券代码", "股票代码"]:
+            if c in df.columns:
+                ts_col = c
+                break
+    if ts_col is None:
+        return df, None
+    if ts_col != "ts_code":
+        df.rename(columns={ts_col: "ts_code"}, inplace=True)
+    df["ts_code"] = df["ts_code"].astype(str).str.strip()
+    return df, "ts_code"
+
+
+def _pick_feature_files(outputs_dir: Path) -> List[Path]:
+    """
+    搜索“按日落盘”的特征文件：
+    - step4_theme_YYYYMMDD.csv（优先）
+    - 其次 step4_theme.csv / step4_history.csv / step4_theme_history.csv 等
+    """
+    files: List[Path] = []
+    if not outputs_dir.exists():
+        return files
+
+    # 1) 强优先：按日文件
+    daily = sorted(outputs_dir.glob("step4_theme_*.csv"))
+    daily = [p for p in daily if p.is_file() and _extract_date_from_filename(p.name)]
+    files.extend(daily)
+
+    # 2) 再兜底：单文件
+    for name in [
+        "step4_theme.csv",
+        "step4_history.csv",
+        "step4_theme_all.csv",
+    ]:
+        p = outputs_dir / name
+        if p.exists() and p.is_file():
+            files.append(p)
+
+    # 去重
+    uniq: List[Path] = []
+    seen = set()
+    for p in files:
+        if str(p) not in seen:
+            uniq.append(p)
+            seen.add(str(p))
+    return uniq
+
+
+def _auto_build_feature_history(
+    outputs_dir: Path,
+    warnings: List[str],
+    out_name: str = "step4_theme_history.csv",
+    max_files: int = 400,
+) -> Optional[Path]:
+    """
+    从 outputs 内若干 step4_theme_YYYYMMDD.csv 聚合成一个 feature_history 文件。
+    - 成功返回生成的文件路径
+    - 失败返回 None（只写 warnings）
+    """
+    try:
+        out_path = outputs_dir / out_name
+        files = _pick_feature_files(outputs_dir)
+        if not files:
+            warnings.append("no step4 feature files found to build feature_history.")
+            return None
+
+        # 控制规模（避免 repo 太大 / 读取太慢）
+        if len(files) > max_files:
+            files = files[-max_files:]
+
+        dfs: List[pd.DataFrame] = []
+        for f in files:
+            df = _safe_read_csv(f, warnings)
+            if df is None or df.empty:
+                continue
+
+            df, _ = _normalize_trade_date_col(df)
+            df = _ensure_trade_date_from_filename(df, f)
+            df, ts = _ensure_ts_code_col(df)
+            if "trade_date" not in df.columns:
+                warnings.append(f"skip {f.name}: no trade_date column and cannot infer from filename.")
+                continue
+            if ts is None or "ts_code" not in df.columns:
+                warnings.append(f"skip {f.name}: no ts_code column.")
+                continue
+
+            # 清理日期格式
+            df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str.strip()
+            # 只保留有效日期
+            df = df[df["trade_date"].astype(str).str.match(r"^\d{8}$", na=False)]
+            if df.empty:
+                continue
+
+            dfs.append(df)
+
+        if not dfs:
+            warnings.append("feature_history auto build produced empty dfs.")
+            return None
+
+        big = pd.concat(dfs, ignore_index=True, sort=False)
+
+        # 去重：同日同票取最后一条（通常是最新生成）
+        if "trade_date" in big.columns and "ts_code" in big.columns:
+            big["_k_td"] = big["trade_date"].astype(str)
+            big["_k_code"] = big["ts_code"].astype(str)
+            big.drop_duplicates(subset=["_k_td", "_k_code"], keep="last", inplace=True)
+            big.drop(columns=["_k_td", "_k_code"], inplace=True, errors="ignore")
+
+        # 按日期排序
+        try:
+            big.sort_values(["trade_date", "ts_code"], inplace=True)
+        except Exception:
+            pass
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        big.to_csv(out_path, index=False, encoding="utf-8-sig")
+        return out_path
+
+    except Exception as e:
+        warnings.append(f"auto build feature_history failed: {e}")
+        return None
+
+
+# ============================================================
 # Training dataset builder
 # ============================================================
 
 def _find_feature_history_file(outputs_dir: Path) -> Optional[Path]:
     """
     寻找“可训练的特征历史文件”：
-    优先级：step4_theme.csv / step4_theme_history.csv / step4_history.csv / theme_history.csv
+    优先级：step4_theme_history.csv -> step4_theme.csv / step4_history.csv / theme_history.csv ...
     """
     candidates = [
+        outputs_dir / "step4_theme_history.csv",  # NEW: auto build target
         outputs_dir / "step4_theme.csv",
-        outputs_dir / "step4_theme_history.csv",
+        outputs_dir / "step4_theme_history_old.csv",
         outputs_dir / "step4_history.csv",
         outputs_dir / "theme_history.csv",
         outputs_dir / "step4_theme_all.csv",
@@ -240,9 +433,12 @@ def _build_train_df_from_history(
 
     try:
         df = pd.read_csv(hist_path, dtype=str, encoding="utf-8", engine="python")
-    except Exception as e:
-        warnings.append(f"read feature history failed: {e}, training skipped.")
-        return pd.DataFrame()
+    except Exception:
+        try:
+            df = pd.read_csv(hist_path, dtype=str, encoding="utf-8-sig", engine="python")
+        except Exception as e:
+            warnings.append(f"read feature history failed: {e}, training skipped.")
+            return pd.DataFrame()
 
     if df is None or df.empty:
         warnings.append("feature history is empty, training skipped.")
@@ -263,8 +459,12 @@ def _build_train_df_from_history(
     # ts_code
     ts_col = _get_ts_code_col(df)
     if ts_col is None or ts_col not in df.columns:
-        warnings.append("feature history has no ts_code column, training skipped.")
-        return pd.DataFrame()
+        # 兜底
+        if "ts_code" in df.columns:
+            ts_col = "ts_code"
+        else:
+            warnings.append("feature history has no ts_code column, training skipped.")
+            return pd.DataFrame()
 
     # 标准化日期格式 YYYYMMDD
     df[date_col] = df[date_col].astype(str).str.replace("-", "").str.strip()
@@ -409,6 +609,19 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 
     topn = int(_get_attr(s, ["topn", "TOPN"], 10) or 10)
     lookback_days = int(_get_attr(s, ["step7_lookback_days", "lookback_days"], 150) or 150)
+
+    # ---------------------------
+    # 0) Feature history 自动生成（最后一步：闭环必需）
+    # ---------------------------
+    # 若没有 feature_history，就尝试自动从 outputs 的 step4_theme_YYYYMMDD.csv 聚合生成
+    hist_before = _find_feature_history_file(outputs_dir)
+    if hist_before is None:
+        built = _auto_build_feature_history(outputs_dir=outputs_dir, warnings=warnings)
+        if built:
+            warnings.append(f"feature_history auto generated: {built}")
+    else:
+        # 可选：如果你希望每次都增量更新，也可以改成“总是 build 覆盖”
+        pass
 
     # ---------------------------
     # 1) 命中率统计（基于历史 predict_top10）
