@@ -41,7 +41,6 @@ jobs:
       RAW_DIR: data/raw
 
       # ---- ✅ 全量快照文件清单（按 data/raw/YYYY/YYYYMMDD/ 内实际文件名）----
-      # 你数据仓库里真实存在的标准快照（你截图里那一套）
       FILES: >-
         _meta.json
         daily.csv
@@ -57,7 +56,6 @@ jobs:
         top_list.csv
 
       # ---- ✅ 必须存在的关键文件（缺任何一个都直接失败）----
-      # 其中 limit_up_tags.csv 是“题材加成/板块”的数据根源
       REQUIRED_FILES: >-
         daily.csv
         daily_basic.csv
@@ -91,7 +89,6 @@ jobs:
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
-          # ✅ pandas.DataFrame.to_markdown 依赖 tabulate
           pip install -U tabulate
 
       - name: Resolve trade_date (manual or auto)
@@ -108,7 +105,6 @@ jobs:
           fi
 
           echo "Auto resolve latest snapshot trade_date"
-
           today="$(date +%Y%m%d)"
           base="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}"
 
@@ -155,11 +151,9 @@ jobs:
 
           missing_required=""
 
-          # 先拉全量（能拉到的都拉到）
           for f in $FILES; do
             url="${base}/${f}"
             out="${dest}/${f}"
-
             echo "[get] $url"
             if curl -fL --retry 3 --retry-delay 1 -o "$out" "$url"; then
               ls -lh "$out" || true
@@ -169,7 +163,6 @@ jobs:
             fi
           done
 
-          # 再强校验关键文件必须存在且非空（防止“假跑成功”）
           for rf in $REQUIRED_FILES; do
             p="${dest}/${rf}"
             if [ ! -s "$p" ]; then
@@ -203,18 +196,44 @@ jobs:
           echo "====== CHECK key files (size) ======"
           du -h "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"/* || true
 
-      - name: Run Top10 Engine
+      - name: Run Top10 Engine + Step7
         shell: bash
         env:
           TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
         run: |
           set -euo pipefail
           echo "Running engine with TRADE_DATE=$TRADE_DATE"
+
           if [ -f "run.py" ]; then
-            python run.py && python -m a_top10.steps.step7_self_learning
+            python run.py
           else
-            python -m a_top10 && python -m a_top10.steps.step7_self_learning
+            python -m a_top10
           fi
+
+          # ✅ Step7：自学习闭环
+          python -m a_top10.steps.step7_self_learning
+
+      - name: Step7 artifacts check + stamp (always)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          td="${{ steps.resolve_date.outputs.trade_date }}"
+          rid="${{ github.run_id }}"
+
+          echo "====== LIST outputs (top) ======"
+          ls -la outputs || true
+
+          echo "====== LIST outputs/learning ======"
+          ls -la outputs/learning || true
+
+          echo "====== LIST outputs/models ======"
+          ls -la outputs/models || true
+
+          # ✅ 关键：写一个每次必变的哨兵文件，保证你在仓库“看得见 Step7 跑过”
+          mkdir -p outputs/learning
+          echo "run_id=${rid} trade_date=${td} utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "outputs/learning/_last_run_${td}_${rid}.txt"
+          echo "STAMP written: outputs/learning/_last_run_${td}_${rid}.txt"
 
       - name: Commit & push outputs (always)
         if: always()
@@ -222,6 +241,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # ✅ 只提交 outputs（避免把 _warehouse 等目录误提交）
+          git add -A outputs
+
+          echo "====== git status (after add outputs) ======"
           git status --porcelain
 
           if [ -z "$(git status --porcelain)" ]; then
@@ -229,15 +255,9 @@ jobs:
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add -A
-
           td="${{ steps.resolve_date.outputs.trade_date }}"
           rid="${{ github.run_id }}"
 
           git commit -m "auto: run top10 ${td} (run=${rid})" || true
-
           git pull --rebase origin main || true
           git push || true
