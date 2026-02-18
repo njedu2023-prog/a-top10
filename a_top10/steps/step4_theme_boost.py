@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple, List
 
@@ -75,6 +75,9 @@ DRAGON_CODE_COLS = [
 DEFAULT_DRAGON_BONUS = 0.08
 DEFAULT_RANK_DECAY_K = 0.18
 DEFAULT_TOPK_INDUSTRY = 40
+
+# fuzzy contains 只对少量行做逐行匹配，避免极端情况下 O(n*k) 太慢
+DEFAULT_FUZZY_MAX_ROWS = 300
 
 
 # -------------------------
@@ -231,23 +234,49 @@ def _resolve_trade_date(ctx: Dict[str, Any]) -> str:
     return "unknown"
 
 
-def _get_rank_decay_k(s: Optional[Settings], default: float = DEFAULT_RANK_DECAY_K) -> float:
+def _get_weights_value(s: Optional[Settings], key: str, default: Any) -> Any:
     """
     兼容 Settings.weights 既可能是对象也可能是 dict 的情况。
     """
     if s is None:
-        return float(default)
+        return default
     w = getattr(s, "weights", None)
     if w is None:
-        return float(default)
+        return default
     try:
         if isinstance(w, dict):
-            v = w.get("rank_decay_k", default)
-            return float(v)
-        v2 = getattr(w, "rank_decay_k", default)
-        return float(v2)
+            return w.get(key, default)
+        return getattr(w, key, default)
+    except Exception:
+        return default
+
+
+def _get_rank_decay_k(s: Optional[Settings], default: float = DEFAULT_RANK_DECAY_K) -> float:
+    try:
+        return float(_get_weights_value(s, "rank_decay_k", default))
     except Exception:
         return float(default)
+
+
+def _get_topk_industry(s: Optional[Settings], default: int = DEFAULT_TOPK_INDUSTRY) -> int:
+    try:
+        return int(_get_weights_value(s, "topk_industry", default))
+    except Exception:
+        return int(default)
+
+
+def _get_dragon_bonus(s: Optional[Settings], default: float = DEFAULT_DRAGON_BONUS) -> float:
+    try:
+        return float(_get_weights_value(s, "dragon_bonus", default))
+    except Exception:
+        return float(default)
+
+
+def _get_fuzzy_max_rows(s: Optional[Settings], default: int = DEFAULT_FUZZY_MAX_ROWS) -> int:
+    try:
+        return int(_get_weights_value(s, "fuzzy_max_rows", default))
+    except Exception:
+        return int(default)
 
 
 # -------------------------
@@ -256,13 +285,14 @@ def _get_rank_decay_k(s: Optional[Settings], default: float = DEFAULT_RANK_DECAY
 @dataclass
 class ThemeDebug:
     hot_boards_rows: int = 0
-    hot_boards_cols: List[str] = None
+    hot_boards_cols: List[str] = field(default_factory=list)
     hot_rank_col: str = ""
     hot_industry_col: str = ""
     industry_score_map_size: int = 0
     industry_score_min: float = 0.0
     industry_score_max: float = 0.0
 
+    candidate_rows: int = 0
     candidate_code_col: str = ""
     candidate_industry_col_before: str = ""
     candidate_industry_col_final: str = ""
@@ -277,6 +307,11 @@ class ThemeDebug:
     matched_industry_exact: int = 0
     matched_industry_norm: int = 0
     matched_industry_fuzzy: int = 0
+
+    # 额外诊断信息
+    industry_map_empty: bool = False
+    top_list_rows: int = 0
+    stock_basic_rows: int = 0
 
 
 def _build_industry_score_map(
@@ -314,7 +349,7 @@ def _build_industry_score_map(
         return {}, dbg
 
     df = df.sort_values(rank_col, ascending=True).drop_duplicates(subset=[ind_col], keep="first")
-    if topk and topk > 0:
+    if topk and int(topk) > 0:
         df = df.head(int(topk))
 
     ranks = df[rank_col].astype(int).to_numpy()
@@ -398,13 +433,14 @@ def _apply_industry_and_dragon(
     top_list: pd.DataFrame,
     industry_score: Dict[str, float],
     dragon_bonus: float = DEFAULT_DRAGON_BONUS,
+    fuzzy_max_rows: int = DEFAULT_FUZZY_MAX_ROWS,
 ) -> Tuple[pd.DataFrame, ThemeDebug]:
     """
     对候选df计算 ThemeBoost / 题材加成：
     - industry_boost：按行业热度映射
     - dragon_bonus：命中龙虎榜则加固定值（默认0.08）
     """
-    dbg = ThemeDebug(hot_boards_cols=[])
+    dbg = ThemeDebug()
 
     if cand_df is None or cand_df.empty:
         dbg.reason = "candidate df empty"
@@ -412,6 +448,9 @@ def _apply_industry_and_dragon(
         return out, dbg
 
     out = cand_df.copy()
+    dbg.candidate_rows = int(len(out))
+    dbg.stock_basic_rows = int(len(stock_basic)) if isinstance(stock_basic, pd.DataFrame) else 0
+    dbg.top_list_rows = int(len(top_list)) if isinstance(top_list, pd.DataFrame) else 0
 
     # code 列
     code_col = _first_existing_col(out, CODE_COL_CANDIDATES)
@@ -438,8 +477,8 @@ def _apply_industry_and_dragon(
     ind_col = ind_col_final if ind_col_final else None
 
     # 龙虎榜命中集合（向量化：ts_code / code6）
-    dragon_ts = pd.Series(dtype=str)
-    dragon_c6 = pd.Series(dtype=str)
+    dragon_ts_set: set = set()
+    dragon_c6_set: set = set()
     if top_list is not None and not top_list.empty:
         tl_code_col = _first_existing_col(top_list, DRAGON_CODE_COLS)
         if tl_code_col:
@@ -448,9 +487,12 @@ def _apply_industry_and_dragon(
             dragon_c6 = tl.map(lambda x: _norm_code(x)[1])
             dragon_ts = dragon_ts[dragon_ts != ""].drop_duplicates()
             dragon_c6 = dragon_c6[dragon_c6 != ""].drop_duplicates()
+            dragon_ts_set = set(dragon_ts.tolist())
+            dragon_c6_set = set(dragon_c6.tolist())
 
     # 行业热度映射：精确 + 规范化
     industry_map_exact = dict(industry_score or {})
+    dbg.industry_map_empty = (len(industry_map_exact) == 0)
 
     industry_map_norm: Dict[str, float] = {}
     for k, v in industry_map_exact.items():
@@ -489,19 +531,24 @@ def _apply_industry_and_dragon(
             norm_sc = inds_norm[remain].map(industry_map_norm)
             m_norm = norm_sc.notna()
             if m_norm.any():
-                idx = norm_sc[m_norm].index
-                industry_boost[out.index.get_indexer(idx)] = norm_sc[m_norm].astype(float).to_numpy()
+                # ✅ 关键修复：用布尔 mask 回写，避免 indexer/loc 混用导致错位
+                remain_idx = np.where(remain.to_numpy())[0]
+                hit_pos = remain_idx[m_norm.to_numpy()]
+                industry_boost[hit_pos] = norm_sc[m_norm].astype(float).to_numpy()
                 c = int(m_norm.sum())
                 matched += c
                 matched_norm += c
 
-        # 3) fuzzy contains（只对仍未命中的少量行做逐行，topK<=40 性能可控）
-        #    条件：nk 包含 kk 或 kk 包含 nk，取分最高的 kk
+        # 3) fuzzy contains（只对仍未命中的少量行做逐行）
         remain2_mask = (industry_boost == 0.0) & (inds_norm != "")
-        if remain2_mask.any() and norm_keys:
-            remain2_idx = out.index[remain2_mask]
-            for ridx in remain2_idx:
-                nk = inds_norm.loc[ridx]
+        remain2_pos = np.where(remain2_mask)[0]
+        if len(remain2_pos) > 0 and norm_keys:
+            # 控制极端情况下耗时
+            if fuzzy_max_rows and len(remain2_pos) > int(fuzzy_max_rows):
+                remain2_pos = remain2_pos[: int(fuzzy_max_rows)]
+
+            for pos in remain2_pos:
+                nk = inds_norm.iat[pos]
                 if not nk:
                     continue
                 best = None
@@ -515,7 +562,7 @@ def _apply_industry_and_dragon(
                         if best is None or float(vv) > float(best):
                             best = float(vv)
                 if best is not None:
-                    industry_boost[out.index.get_loc(ridx)] = float(best)
+                    industry_boost[pos] = float(best)
                     matched += 1
                     matched_fuzzy += 1
 
@@ -529,9 +576,12 @@ def _apply_industry_and_dragon(
     codes_ts = codes.map(lambda x: _norm_code(x)[0])
     codes_c6 = codes.map(lambda x: _norm_code(x)[1])
 
-    hit_ts = codes_ts.isin(set(dragon_ts.tolist())) if len(dragon_ts) else pd.Series([False] * n, index=out.index)
-    hit_c6 = codes_c6.isin(set(dragon_c6.tolist())) if len(dragon_c6) else pd.Series([False] * n, index=out.index)
-    hit = (hit_ts | hit_c6).to_numpy()
+    if dragon_ts_set or dragon_c6_set:
+        hit_ts = codes_ts.isin(dragon_ts_set)
+        hit_c6 = codes_c6.isin(dragon_c6_set)
+        hit = (hit_ts | hit_c6).to_numpy()
+    else:
+        hit = np.zeros(n, dtype=bool)
 
     dragon_bonus_arr = np.zeros(n, dtype=float)
     if hit.any():
@@ -550,6 +600,17 @@ def _apply_industry_and_dragon(
         out["板块"] = ""
 
     dbg.theme_boost_nonzero = int((out["ThemeBoost"] > 0).sum())
+
+    # 更细的 reason（可用于诊断）
+    if dbg.industry_map_empty:
+        dbg.reason = "industry map empty (hot_boards missing/empty or parse failed)"
+    elif not ind_col or ind_col not in out.columns:
+        dbg.reason = "candidate industry column missing (and enrich failed or not available)"
+    elif dbg.candidate_industry_nonblank_ratio_final < 0.1:
+        dbg.reason = "candidate industry mostly blank (after enrich), industry match likely 0"
+    elif dbg.matched_industry_count == 0:
+        dbg.reason = "industry match 0 (names mismatch), consider normalize/fuzzy or check hot_boards industry values"
+
     return out, dbg
 
 
@@ -585,33 +646,57 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 
     # 若 ctx 里没带 df，尝试从 snapshot_dir 读取
     snapshot_dir = _ctx_get_path(ctx, ["snapshot_dir", "snap_dir", "snapshot_path"])
+    snapshot_files: Dict[str, str] = {}
     if snapshot_dir is not None:
+        sd = Path(snapshot_dir)
         if hot_boards.empty:
-            hot_boards = _read_csv_guess(Path(snapshot_dir) / "hot_boards.csv")
+            p = sd / "hot_boards.csv"
+            snapshot_files["hot_boards.csv"] = str(p)
+            hot_boards = _read_csv_guess(p)
         if stock_basic.empty:
-            stock_basic = _read_csv_guess(Path(snapshot_dir) / "stock_basic.csv")
+            p = sd / "stock_basic.csv"
+            snapshot_files["stock_basic.csv"] = str(p)
+            stock_basic = _read_csv_guess(p)
         if top_list.empty:
-            top_list = _read_csv_guess(Path(snapshot_dir) / "top_list.csv")
+            p = sd / "top_list.csv"
+            snapshot_files["top_list.csv"] = str(p)
+            top_list = _read_csv_guess(p)
 
     # 3) build industry score map
+    topk_industry = _get_topk_industry(s, DEFAULT_TOPK_INDUSTRY)
+    rank_decay_k = _get_rank_decay_k(s, DEFAULT_RANK_DECAY_K)
     industry_map, dbg_map = _build_industry_score_map(
         hot_boards=hot_boards,
-        k=_get_rank_decay_k(s, DEFAULT_RANK_DECAY_K),
-        topk=DEFAULT_TOPK_INDUSTRY,
+        k=rank_decay_k,
+        topk=topk_industry,
     )
 
     # 4) apply
+    dragon_bonus = _get_dragon_bonus(s, DEFAULT_DRAGON_BONUS)
+    fuzzy_max_rows = _get_fuzzy_max_rows(s, DEFAULT_FUZZY_MAX_ROWS)
+
     out_df, dbg_apply = _apply_industry_and_dragon(
         cand_df=cand_df,
         stock_basic=stock_basic,
         top_list=top_list,
         industry_score=industry_map,
-        dragon_bonus=DEFAULT_DRAGON_BONUS,
+        dragon_bonus=dragon_bonus,
+        fuzzy_max_rows=fuzzy_max_rows,
     )
 
     # 5) assemble debug
     td = _resolve_trade_date(ctx)
     dbg_all["trade_date"] = td
+    dbg_all["snapshot_dir"] = str(snapshot_dir) if snapshot_dir is not None else ""
+    dbg_all["snapshot_files"] = snapshot_files
+
+    dbg_all["params"] = {
+        "rank_decay_k": float(rank_decay_k),
+        "topk_industry": int(topk_industry),
+        "dragon_bonus": float(dragon_bonus),
+        "fuzzy_max_rows": int(fuzzy_max_rows),
+    }
+
     dbg_all["hot_boards_rows"] = int(len(hot_boards)) if isinstance(hot_boards, pd.DataFrame) else 0
     dbg_all["hot_boards_cols"] = list(hot_boards.columns) if isinstance(hot_boards, pd.DataFrame) else []
 
@@ -627,16 +712,20 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     dbg_all["candidate"] = {
+        "rows": int(getattr(dbg_apply, "candidate_rows", 0)),
         "code_col": getattr(dbg_apply, "candidate_code_col", ""),
         "industry_col_before": getattr(dbg_apply, "candidate_industry_col_before", ""),
         "industry_col_final": getattr(dbg_apply, "candidate_industry_col_final", ""),
         "industry_nonblank_ratio_before": float(getattr(dbg_apply, "candidate_industry_nonblank_ratio_before", 0.0)),
         "industry_nonblank_ratio_final": float(getattr(dbg_apply, "candidate_industry_nonblank_ratio_final", 0.0)),
+        "stock_basic_rows": int(getattr(dbg_apply, "stock_basic_rows", 0)),
+        "top_list_rows": int(getattr(dbg_apply, "top_list_rows", 0)),
     }
 
     dbg_all["matched_industry_count"] = int(getattr(dbg_apply, "matched_industry_count", 0))
     dbg_all["dragon_hits"] = int(getattr(dbg_apply, "dragon_hits", 0))
     dbg_all["theme_boost_nonzero"] = int(getattr(dbg_apply, "theme_boost_nonzero", 0))
+    dbg_all["apply_reason"] = getattr(dbg_apply, "reason", "")
 
     dbg_all["matched_industry_detail"] = {
         "exact": int(getattr(dbg_apply, "matched_industry_exact", 0)),
@@ -644,11 +733,18 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         "fuzzy_contains": int(getattr(dbg_apply, "matched_industry_fuzzy", 0)),
     }
 
-    # 关键判断：为什么会“全是 0.08”
-    if dbg_all["matched_industry_count"] == 0 and dbg_all["dragon_hits"] > 0:
+    # 更细的诊断：不仅仅 “全是 0.08 / 全是 0”
+    if not bool(dbg_map.get("ok")):
+        dbg_all["diagnosis"] = f"industry score map build failed: {dbg_map.get('reason','')}"
+    elif dbg_all["matched_industry_count"] == 0 and dbg_all["dragon_hits"] > 0:
         dbg_all["diagnosis"] = "industry heat NOT applied; only dragon bonus applied -> many 0.08"
     elif dbg_all["matched_industry_count"] == 0 and dbg_all["dragon_hits"] == 0:
-        dbg_all["diagnosis"] = "both industry heat and dragon bonus NOT applied -> all 0"
+        # 再进一步：可能是行业列没补齐 / 行业几乎全空 / 名称完全对不上
+        final_ratio = dbg_all["candidate"].get("industry_nonblank_ratio_final", 0.0)
+        if final_ratio < 0.1:
+            dbg_all["diagnosis"] = "both industry heat and dragon bonus NOT applied -> likely industry blank (after enrich) and no dragon hits"
+        else:
+            dbg_all["diagnosis"] = "both industry heat and dragon bonus NOT applied -> likely industry name mismatch (check hot_boards industry vs candidate industry)"
     else:
         dbg_all["diagnosis"] = "industry heat applied (ok)"
 
