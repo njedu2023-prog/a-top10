@@ -19,17 +19,14 @@ Step5 : 概率模型推断（ML核心层） + 可训练闭环（LR + LightGBM）
         models/step5_lr.joblib
         models/step5_lgbm.joblib
 
-这个文件的主要目标是保证：
-1) 你各个步骤文件里字段名改动，step5 也能自动映射，不会因为缺字段装 0 造成 ThemeBoost 永远是 0；
-2) 涨停打标 id 格式不一致时，也能对齐（有时候 ts_code：000001.SZ，有时候 code：000001）。
-
-方案A（标准量化做法）新增：
-- 每次推断后，将“交易日/ts_code/特征/概率/来源”等追加写入 outputs/learning/feature_history.csv
-  用于回测复盘、特征漂移监控、模型诊断。
+✅ 本终版新增（自学习最后一公里关键）：
+- 每个交易日推断后，自动落盘/追加：outputs/learning/feature_history.csv
+  用于 Step7 进行 next_day 打标与训练样本构建。
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, List, Tuple, Dict, Any
@@ -134,26 +131,12 @@ TS_CODE_ALIASES = [
     "代码",
 ]
 
-# 交易日别名（用于 feature_history 落盘）
-TRADE_DATE_ALIASES = [
-    "trade_date",
-    "TradeDate",
-    "TRADE_DATE",
-    "date",
-    "Date",
-    "日期",
-    "交易日期",
-    "交易日",
-]
-
 
 # -------------------------
 # Helpers
 # -------------------------
 def _ensure_df(obj) -> pd.DataFrame:
-    """
-    兼容：有时上游误传 dict/list（比如某一步返回了 dict），这里尽量兜底转 DataFrame。
-    """
+    """兼容：有时上游误传 dict/list（比如某一步返回了 dict），这里尽量兜底转 DataFrame。"""
     if obj is None:
         return pd.DataFrame()
     if isinstance(obj, pd.DataFrame):
@@ -168,7 +151,6 @@ def _ensure_df(obj) -> pd.DataFrame:
             return pd.DataFrame(obj)
         except Exception:
             return pd.DataFrame()
-    # 最后兜底
     try:
         return pd.DataFrame(obj)
     except Exception:
@@ -180,10 +162,7 @@ def _lower_map(df: pd.DataFrame) -> Dict[str, str]:
 
 
 def _normalize_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    将各种可能的字段名同一步进行基本的横向对齐：
-    假设 step4 输出里映射字段名为“题材加成分”，那么在 step5 里就会填充到 ThemeBoost 中。
-    """
+    """将各种可能的字段名同一步进行基本的横向对齐。"""
     df = _ensure_df(df)
     if df.empty:
         return df
@@ -218,10 +197,7 @@ def _normalize_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_id_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    将 id 列动态映射到 ts_code（尽量）：
-    一个原始列和多个别名中，最终做到：起码没 ts_code 的情况下，在尽可能的情况下生成一个 ts_code。
-    """
+    """将 id 列动态映射到 ts_code（尽量）。"""
     df = _ensure_df(df)
     if df.empty:
         return df
@@ -257,43 +233,6 @@ def _get_ts_code_col(df: pd.DataFrame) -> Optional[str]:
     return None
 
 
-def _get_trade_date_col(df: pd.DataFrame) -> Optional[str]:
-    df = _ensure_df(df)
-    if df.empty:
-        return None
-    lower = _lower_map(df)
-    for name in TRADE_DATE_ALIASES:
-        key = str(name).strip().lower()
-        if key in lower:
-            return lower[key]
-    return None
-
-
-def _infer_trade_date(df: pd.DataFrame, s=None) -> str:
-    """
-    优先从 df 的日期字段取；否则尝试从 settings s 上取；都没有则空字符串。
-    """
-    df = _ensure_df(df)
-    dcol = _get_trade_date_col(df)
-    if dcol is not None:
-        try:
-            v = str(df[dcol].iloc[0]).strip()
-            return v
-        except Exception:
-            pass
-
-    # 兼容：一些 settings 里可能挂着 trade_date/date
-    if s is not None:
-        for attr in ["trade_date", "date", "today", "run_date"]:
-            if hasattr(s, attr):
-                try:
-                    v = str(getattr(s, attr)).strip()
-                    return v
-                except Exception:
-                    continue
-    return ""
-
-
 def _to_nosuffix(ts: str) -> str:
     ts = str(ts).strip()
     if not ts:
@@ -304,7 +243,6 @@ def _to_nosuffix(ts: str) -> str:
 def _ensure_features(df: pd.DataFrame) -> pd.DataFrame:
     df = _ensure_df(df)
     if df.empty:
-        # 保持列结构尽量一致
         out = pd.DataFrame()
         for c in FEATURES:
             out[c] = pd.Series(dtype="float64")
@@ -343,140 +281,111 @@ def _read_csv_if_exists(p: Path) -> pd.DataFrame:
 
 
 def _safe_log1p_pos(x: np.ndarray) -> np.ndarray:
-    """
-    用于金额/成交额等“正值长尾”的压缩：log1p(max(x,0))
-    """
+    """用于金额/成交额等“正值长尾”的压缩：log1p(max(x,0))"""
     x = np.where(np.isfinite(x), x, 0.0)
     x = np.maximum(x, 0.0)
     return np.log1p(x)
 
 
-def _utc_now_str() -> str:
-    # 避免引入 datetime 的时区差异，直接用 pandas（项目里本就依赖）
-    try:
-        return pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return ""
+def _ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
 
 
-def _get_feature_history_path(s=None) -> Path:
+def _guess_trade_date(df: pd.DataFrame) -> str:
     """
-    统一输出：outputs/learning/feature_history.csv
-    如果 settings 提供了 outputs 根目录，则优先使用它（尽量兼容）。
+    推断交易日（YYYYMMDD）优先级：
+    1) df 中常见日期列（trade_date/date/日期 等）
+    2) 环境变量 TRADE_DATE
+    3) 今天日期（Asia/Shanghai 时区由 workflow TZ 控制；这里直接用本机日期兜底）
     """
-    # 默认落在仓库相对路径
-    base = Path("outputs") / "learning"
+    df = _ensure_df(df)
+    candidates = ["trade_date", "TRADE_DATE", "date", "日期", "交易日", "dt", "cal_date"]
+    if not df.empty:
+        lower = _lower_map(df)
+        for c in candidates:
+            key = str(c).strip().lower()
+            if key in lower:
+                v = str(df[lower[key]].iloc[0]).strip()
+                v = v.replace("-", "").replace("/", "")
+                if len(v) >= 8:
+                    return v[:8]
 
-    if s is not None:
-        # 尝试从 data_repo/root 等推断更“标准”的输出根目录
-        try:
-            if hasattr(s, "data_repo"):
-                dr = s.data_repo
-                for attr in ["outputs_dir", "output_dir", "out_dir"]:
-                    if hasattr(dr, attr):
-                        base = Path(getattr(dr, attr)) / "learning"
-                        break
-                else:
-                    if hasattr(dr, "root"):
-                        base = Path(dr.root) / "outputs" / "learning"
-        except Exception:
-            pass
+    env_td = str(os.getenv("TRADE_DATE", "")).strip()
+    env_td = env_td.replace("-", "").replace("/", "")
+    if len(env_td) >= 8:
+        return env_td[:8]
 
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "feature_history.csv"
+    # 兜底：当天
+    return pd.Timestamp.today().strftime("%Y%m%d")
 
 
-def _append_feature_history(
-    original_df: pd.DataFrame,
-    prob_df: pd.DataFrame,
+def _write_feature_history(
+    raw_input_df: pd.DataFrame,
+    out_df: pd.DataFrame,
+    trade_date: str,
     s=None,
-) -> None:
+) -> Dict[str, Any]:
     """
-    方案A：将本次推断输入（id/日期/特征）+ 输出（概率/来源）写入历史日志。
-    - 追加写入，不影响主流程
-    - 自动兼容缺少 ts_code / trade_date
+    写入 outputs/learning/feature_history.csv（追加模式）
+    - 只写必要字段，保证 Step7 易用
+    - 去重策略：同 trade_date + ts_code 去重，保留最新一条
     """
     try:
-        original_df = _ensure_df(original_df)
-        prob_df = _ensure_df(prob_df)
-        if prob_df.empty:
-            return
+        raw_input_df = _ensure_df(raw_input_df)
+        out_df = _ensure_df(out_df)
 
-        # 尽量从 original_df 取 ts_code 与 trade_date
-        odf = _normalize_id_columns(original_df)
-        ts_col = _get_ts_code_col(odf)
-        trade_date = _infer_trade_date(odf, s=s)
+        out_df2 = out_df.copy()
+        out_df2 = _normalize_id_columns(out_df2)
+        ts_col = _get_ts_code_col(out_df2) or "ts_code"
+        if ts_col not in out_df2.columns:
+            # 兜底：如果真的没有 ts_code，就不写（否则 Step7 没法用）
+            return {"ok": False, "reason": "missing ts_code for feature_history"}
 
-        # 如果 original_df 没有 ts_code，就退化从 prob_df/FEATURES df 里找
-        if ts_col is None:
-            pdf_tmp = _normalize_id_columns(prob_df)
-            ts_col = _get_ts_code_col(pdf_tmp)
-            if ts_col is not None:
-                odf = pdf_tmp  # 用它来取 ts_code
+        # 统一字段
+        keep_cols = ["ts_code"] + FEATURES + ["Probability", "_prob_src"]
+        for c in keep_cols:
+            if c not in out_df2.columns:
+                out_df2[c] = np.nan
 
-        # name 列（可选）
-        name_col = None
-        for cand in ["name", "stock_name", "股票", "证券简称", "简称"]:
-            if cand in original_df.columns:
-                name_col = cand
-                break
+        feat = out_df2[keep_cols].copy()
+        feat.rename(columns={ts_col: "ts_code"}, inplace=True)
+        feat["trade_date"] = str(trade_date)
 
-        # 组装写入 df
-        n = len(prob_df)
-        ts_list = [""] * n
-        if ts_col is not None and ts_col in odf.columns:
+        # 类型清洗
+        for c in FEATURES + ["Probability"]:
+            feat[c] = pd.to_numeric(feat[c], errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+        feat["_prob_src"] = feat["_prob_src"].astype(str).fillna("")
+        feat["ts_code"] = feat["ts_code"].astype(str).str.strip()
+
+        # 输出路径（强制仓库根目录 outputs/learning）
+        base = Path("outputs") / "learning"
+        _ensure_dir(base)
+        fp = base / "feature_history.csv"
+
+        if fp.exists():
+            old = pd.read_csv(fp, dtype=str, encoding="utf-8")
+            merged = pd.concat([old, feat.astype(str)], ignore_index=True)
+        else:
+            merged = feat.astype(str)
+
+        # 去重：trade_date + ts_code
+        merged["trade_date"] = merged["trade_date"].astype(str).str.strip()
+        merged["ts_code"] = merged["ts_code"].astype(str).str.strip()
+        merged = merged.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
+
+        # 排序：按 trade_date 再按 Probability（可选）
+        if "Probability" in merged.columns:
             try:
-                ts_list = odf[ts_col].astype(str).str.strip().tolist()
-                if len(ts_list) != n:
-                    # 长度不一致就尽量对齐：用 prob_df 的 index 重取
-                    ts_list = (odf[ts_col].astype(str).reindex(prob_df.index).fillna("").tolist())
+                merged["_prob_f"] = pd.to_numeric(merged["Probability"], errors="coerce").fillna(0.0)
+                merged = merged.sort_values(["trade_date", "_prob_f"], ascending=[True, False]).drop(columns=["_prob_f"])
             except Exception:
-                ts_list = [""] * n
+                merged = merged.sort_values(["trade_date"], ascending=[True])
 
-        name_list = [""] * n
-        if name_col is not None:
-            try:
-                name_list = original_df[name_col].astype(str).reindex(prob_df.index).fillna("").tolist()
-            except Exception:
-                name_list = [""] * n
-
-        out = pd.DataFrame(
-            {
-                "run_time_utc": [_utc_now_str()] * n,
-                "trade_date": [trade_date] * n,
-                "ts_code": ts_list,
-                "name": name_list,
-                "Probability": pd.to_numeric(prob_df.get("Probability", np.nan), errors="coerce"),
-                "_prob_src": prob_df.get("_prob_src", ""),
-            }
-        )
-
-        # 特征列
-        for c in FEATURES:
-            out[c] = pd.to_numeric(prob_df.get(c, np.nan), errors="coerce")
-
-        # 基础清洗：避免 NaN 写成空字符串导致 dtype 混乱
-        out["Probability"] = out["Probability"].astype(float).fillna(np.nan)
-        for c in FEATURES:
-            out[c] = out[c].astype(float).fillna(np.nan)
-
-        # 追加写文件
-        path = _get_feature_history_path(s=s)
-        write_header = not path.exists()
-
-        # 为了减少并发写入造成的破坏：先写临时文件再 append（尽量稳）
-        # 这里不做全量去重，标准量化日志就是 append；后续你在分析层自己去重/聚合。
-        out.to_csv(
-            path,
-            mode="a",
-            index=False,
-            header=write_header,
-            encoding="utf-8",
-            line_terminator="\n",
-        )
-    except Exception:
-        # 任何写入错误都不影响主流程
-        return
+        merged.to_csv(fp, index=False, encoding="utf-8")
+        return {"ok": True, "path": str(fp), "rows": int(len(merged)), "trade_date": str(trade_date)}
+    except Exception as e:
+        return {"ok": False, "reason": f"exception: {e}"}
 
 
 # -------------------------
@@ -566,13 +475,7 @@ def save_lgbm(model, s=None) -> None:
 # Labeling / Training Data Builder
 # -------------------------
 def _label_from_next_day_limit_list(next_snap: Path) -> set:
-    """
-    用 next_day 的 limit_list_d.csv 打标：在涨停列表里 => y=1
-
-    实践中时常会被「ts_code、code、不同格式（带不带 .SZ/.SH）」搞不一致，所以统一并存两个格式：
-    - raw：原来格式，也存下
-    - no_suffix：000001
-    """
+    """用 next_day 的 limit_list_d.csv 打标：在涨停列表里 => y=1"""
     ll = _read_csv_if_exists(next_snap / "limit_list_d.csv")
     if ll.empty:
         return set()
@@ -645,10 +548,7 @@ def _build_xy_from_history(
 
 
 def _resolve_snapshot_dirs_from_settings(s, lookback: int) -> List[Tuple[str, Path]]:
-    """
-    从 s.data_repo 获取最近 lookback+1 天快照目录（+1 用于 next_day 打标）
-    要求：s.data_repo 至少提供 snapshot_dir(date)；可选 list_snapshot_dates()
-    """
+    """从 s.data_repo 获取最近 lookback+1 天快照目录（+1 用于 next_day 打标）"""
     if s is None or not hasattr(s, "data_repo"):
         return []
 
@@ -661,7 +561,6 @@ def _resolve_snapshot_dirs_from_settings(s, lookback: int) -> List[Tuple[str, Pa
         except Exception:
             dates = []
     else:
-        # 仇底：扫描你仓库本地快照根目录（按你当前仓库结构：_warehouse/.../raw/YYYY/YYYYMMDD）
         root = getattr(dr, "warehouse_root", None)
         repo_name = getattr(dr, "repo_name", None)
         raw_dir = getattr(dr, "raw_dir", None)
@@ -751,7 +650,6 @@ def train_step5_lgbm(
     if len(y) < min_samples or pos < min_pos:
         return {"ok": False, "model": "lgbm", "reason": f"not enough labeled samples: n={len(y)}, pos={pos}"}
 
-    # 轻量默认参数（先跑通闭环，后面再细调）
     model = lgb.LGBMClassifier(
         n_estimators=400,
         learning_rate=0.05,
@@ -775,9 +673,7 @@ def train_step5_models(
     lookback: int = 120,
     theme_file_name: str = "step4_theme.csv",
 ) -> Dict[str, Any]:
-    """
-    统一入口：每天收盘后先训练（尽量两种都训）
-    """
+    """统一入口：每天收盘后先训练（尽量两种都训）"""
     res_lr = train_step5_lr(s, lookback=max(60, int(lookback * 0.75)), theme_file_name=theme_file_name)
     res_lgbm = train_step5_lgbm(s, lookback=lookback, theme_file_name=theme_file_name)
     ok_any = bool(res_lr.get("ok")) or bool(res_lgbm.get("ok"))
@@ -792,18 +688,13 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
     推断优先级：
     1) LightGBM（若存在已训练模型）
     2) LogisticRegression（若存在已训练模型）
-    3) pseudo-sigmoid（仇底）
+    3) pseudo-sigmoid（兜底）
 
-    通过这个顺序，你就缺一个模型（没装 lightgbm），也不会直接死机；
-    同时字段名变来变去，也不会因为缺字段默认 0 把 ThemeBoost 吃光（会先自动映射）。
-
-    方案A：
-    - 推断完成后追加写 outputs/learning/feature_history.csv
+    ✅ 每次推断后自动写入 feature_history.csv
     """
-    theme_df = _ensure_df(theme_df)
-    out = _ensure_features(theme_df)
+    raw_input = _ensure_df(theme_df)
+    out = _ensure_features(raw_input)
 
-    # 空输入直接返回
     if out.empty:
         out["Probability"] = pd.Series(dtype="float64")
         out["_prob_src"] = pd.Series(dtype="object")
@@ -817,13 +708,11 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
             proba = m_lgbm.predict_proba(X)[:, 1]
             out["Probability"] = np.clip(proba, 0.0, 1.0)
             out["_prob_src"] = "lgbm"
-            out_sorted = out.sort_values("Probability", ascending=False)
-
-            # 方案A：落盘特征历史
-            _append_feature_history(theme_df, out_sorted, s=s)
-            return out_sorted
+            # 写 feature_history
+            td = _guess_trade_date(raw_input)
+            _write_feature_history(raw_input_df=raw_input, out_df=out, trade_date=td, s=s)
+            return out.sort_values("Probability", ascending=False)
         except Exception:
-            # 若模型损坏/不兼容，继续降级
             pass
 
     m_lr = load_lr(s=s)
@@ -832,15 +721,13 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
             proba = m_lr.predict_proba(X)[:, 1]
             out["Probability"] = np.clip(proba, 0.0, 1.0)
             out["_prob_src"] = "lr"
-            out_sorted = out.sort_values("Probability", ascending=False)
-
-            # 方案A：落盘特征历史
-            _append_feature_history(theme_df, out_sorted, s=s)
-            return out_sorted
+            td = _guess_trade_date(raw_input)
+            _write_feature_history(raw_input_df=raw_input, out_df=out, trade_date=td, s=s)
+            return out.sort_values("Probability", ascending=False)
         except Exception:
             pass
 
-    # 仇底 pseudo probability（保证跑通）
+    # 兜底 pseudo probability（保证跑通）
     strength = np.clip(out["StrengthScore"].astype(float).values / 100.0, 0.0, 1.5)
     theme = np.clip(out["ThemeBoost"].astype(float).values, 0.0, 2.0)
 
@@ -861,11 +748,12 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
 
     out["Probability"] = _sigmoid(z)
     out["_prob_src"] = "pseudo"
-    out_sorted = out.sort_values("Probability", ascending=False)
 
-    # 方案A：落盘特征历史
-    _append_feature_history(theme_df, out_sorted, s=s)
-    return out_sorted
+    # 写 feature_history（无论何种推断来源，都落盘）
+    td = _guess_trade_date(raw_input)
+    _write_feature_history(raw_input_df=raw_input, out_df=out, trade_date=td, s=s)
+
+    return out.sort_values("Probability", ascending=False)
 
 
 def run(df: pd.DataFrame, s=None) -> pd.DataFrame:
