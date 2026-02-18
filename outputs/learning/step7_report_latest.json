@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-19 00:25:33",
+  "ts": "2026-02-19 00:44:37",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -21,6 +21,7 @@
     "detail": {}
   },
   "warnings": [
+    "no step4 feature files found to build feature_history.",
     "no feature history file found in outputs/, training skipped.",
     "train_df empty, skip train_step5_models."
   ]

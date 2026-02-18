@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-02-19 00:25:33
+- 生成时间：2026-02-19 00:44:37
 - TopN：10
 - Lookback：150 天
 
@@ -25,5 +25,6 @@
 
 ## 4) Warnings
 
+- no step4 feature files found to build feature_history.
 - no feature history file found in outputs/, training skipped.
 - train_df empty, skip train_step5_models.
