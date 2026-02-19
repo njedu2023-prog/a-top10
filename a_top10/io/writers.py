@@ -17,9 +17,9 @@ CODE_COL_CANDIDATES = [
     "证券代码",
     "股票代码",
 ]
-NAME_COL_CANDIDATES = ["name", "stock_name", "名称"]
+NAME_COL_CANDIDATES = ["name", "stock_name", "名称", "股票", "证券名称", "股票简称"]
 PROB_COL_CANDIDATES = ["prob", "Probability", "概率", "涨停概率"]
-BOARD_COL_CANDIDATES = ["board", "板块", "industry", "行业"]
+BOARD_COL_CANDIDATES = ["board", "板块", "industry", "行业", "所属行业", "concept", "题材"]
 
 
 def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> str:
@@ -34,13 +34,31 @@ def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> s
 
     col_map = {
         "rank": "排名",
+        "rank_limit": "排名",
+        "排名": "排名",
+
         "ts_code": "代码",
+        "code": "代码",
+        "代码": "代码",
+
         "name": "股票",
+        "stock_name": "股票",
+        "股票": "股票",
+
         "score": "Score",
+        "Score": "Score",
+
         "prob": "Probability",
+        "Probability": "Probability",
+
         "StrengthScore": "强度得分",
+        "强度得分": "强度得分",
+
         "ThemeBoost": "题材加成",
+        "题材加成": "题材加成",
+
         "board": "板块",
+        "板块": "板块",
     }
     d = d.rename(columns=col_map)
 
@@ -231,7 +249,7 @@ def _resolve_snapshot_dir(settings, ctx, trade_date: str) -> Optional[Path]:
 
 
 def _load_limit_df(settings, ctx, trade_date: str) -> pd.DataFrame:
-    df = _ctx_df(ctx, ["limit_df", "limit_list", "limit", "limit_list_d"])
+    df = _ctx_df(ctx, ["limit_df", "limit_list", "limit", "limit_list_d", "limit_up", "limitup"])
     if df is not None and not df.empty:
         return df.copy()
 
@@ -373,10 +391,87 @@ def _load_json_topN(outdir: Path, td: str) -> Optional[pd.DataFrame]:
     return _to_df(top)
 
 
+def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    把“强度列表”标准化成报告需要的列：
+      排名 / 代码 / 股票 / Probability / 强度得分 / 题材加成 / 板块
+    兼容 Step6 新增 limit_up_table（中文列）以及旧 join 输出（英文列）。
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    d = df.copy()
+
+    # rank
+    if "排名" in d.columns:
+        pass
+    elif "rank_limit" in d.columns:
+        d["排名"] = d["rank_limit"]
+    elif "rank" in d.columns:
+        d["排名"] = d["rank"]
+    else:
+        d.insert(0, "排名", range(1, len(d) + 1))
+
+    # code
+    if "代码" not in d.columns:
+        c = _first_existing_col(d, ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"])
+        if c:
+            d["代码"] = d[c]
+        else:
+            d["代码"] = ""
+
+    # name
+    if "股票" not in d.columns:
+        n = _first_existing_col(d, ["name", "stock_name", "名称", "证券名称", "股票简称"])
+        if n:
+            d["股票"] = d[n]
+        else:
+            d["股票"] = ""
+
+    # prob
+    if "Probability" not in d.columns:
+        p = _first_existing_col(d, ["prob", "Probability", "概率", "涨停概率"])
+        if p:
+            d["Probability"] = d[p]
+        else:
+            d["Probability"] = ""
+
+    # strength
+    if "强度得分" not in d.columns:
+        s = _first_existing_col(d, ["StrengthScore", "强度得分", "强度", "_strength"])
+        if s:
+            d["强度得分"] = d[s]
+        else:
+            d["强度得分"] = ""
+
+    # theme
+    if "题材加成" not in d.columns:
+        t = _first_existing_col(d, ["ThemeBoost", "题材加成", "题材", "_theme"])
+        if t:
+            d["题材加成"] = d[t]
+        else:
+            d["题材加成"] = ""
+
+    # board
+    if "板块" not in d.columns:
+        b = _first_existing_col(d, ["board", "板块", "industry", "行业", "所属行业", "concept", "题材"])
+        if b:
+            d["板块"] = d[b]
+        else:
+            d["板块"] = ""
+
+    # 输出列顺序固定
+    out_cols = ["排名", "代码", "股票", "Probability", "强度得分", "题材加成", "板块"]
+    d = d[[c for c in out_cols if c in d.columns]].copy()
+    return d
+
+
 def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
     """
-    筛出当日涨停股，并输出 StrengthScore / ThemeBoost / board（强度列表）
-    都来自主程序字段，writer 只做 join/filter。
+    旧逻辑 fallback：
+    - 筛出当日涨停股
+    - merge full_df 带回 StrengthScore / ThemeBoost / board / prob（如果有）
+    - 并按 StrengthScore(优先) / score / prob 排序
     """
     if limit_df is None or limit_df.empty:
         return None
@@ -385,11 +480,16 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
     if not lcode:
         return None
 
-    # 如果 full_df 不存在，尽量用 limit_df 自身输出
+    # full_df 不存在：至少输出代码（其余空）
     if full_df is None or full_df.empty:
         df = limit_df[[lcode]].copy()
-        df["板块"] = ""
-        return df.rename(columns={lcode: "ts_code"})
+        df = df.rename(columns={lcode: "ts_code"})
+        df["name"] = ""
+        df["prob"] = ""
+        df["StrengthScore"] = ""
+        df["ThemeBoost"] = ""
+        df["board"] = ""
+        return df
 
     fcode = _first_existing_col(full_df, CODE_COL_CANDIDATES)
     if not fcode:
@@ -403,28 +503,40 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
     if fcode != "ts_code":
         f["ts_code"] = f[fcode]
 
-    # 优先用 StrengthScore 作为强度排序，其次 score 再其次 prob
-    sort_cols = []
-    if "StrengthScore" in f.columns:
-        sort_cols = ["StrengthScore"]
-    elif "score" in f.columns:
-        sort_cols = ["score"]
-    elif "prob" in f.columns:
-        sort_cols = ["prob"]
-
     # merge
     m = pd.merge(l[["ts_code"]], f, on="ts_code", how="left")
 
-    # 结果输出必要列
-    # 保证 name 列存在（给 _df_to_md_table 重命名）
-    if "name" not in m.columns and _first_existing_col(m, NAME_COL_CANDIDATES):
-        m["name"] = m[_first_existing_col(m, NAME_COL_CANDIDATES)]
-    if "板块" not in m.columns and _first_existing_col(m, BOARD_COL_CANDIDATES):
-        m["板块"] = m[_first_existing_col(m, BOARD_COL_CANDIDATES)]
+    # name fallback
+    if "name" not in m.columns:
+        nc = _first_existing_col(m, NAME_COL_CANDIDATES)
+        if nc:
+            m["name"] = m[nc]
+        else:
+            m["name"] = ""
+
+    # board fallback
+    if "board" not in m.columns:
+        bc = _first_existing_col(m, BOARD_COL_CANDIDATES)
+        if bc:
+            m["board"] = m[bc]
+        else:
+            m["board"] = ""
+
+    # sort priority
+    sort_cols = []
+    if "StrengthScore" in m.columns:
+        sort_cols = ["StrengthScore"]
+    elif "score" in m.columns:
+        sort_cols = ["score"]
+    elif "prob" in m.columns:
+        sort_cols = ["prob"]
 
     if sort_cols:
         m = m.sort_values(by=sort_cols, ascending=False)
 
+    # rank for display
+    m = m.reset_index(drop=True)
+    m.insert(0, "rank_limit", m.index + 1)
     return m
 
 
@@ -450,7 +562,7 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
 
         topN_df = _load_json_topN(outdir, d)
         ldf = _load_limit_df(settings, ctx, next_td)
-        hit_df, mres = _topN_to_hit_df(topN_df, ldf)
+        _, mres = _topN_to_hit_df(topN_df, ldf)
 
         hit_count = mres.get("hit_count")
         top_count = mres.get("top_count")
@@ -485,21 +597,25 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     # parse topn
     topN_df: Optional[pd.DataFrame] = None
     full_df: Optional[pd.DataFrame] = None
+    limit_up_table_df: Optional[pd.DataFrame] = None
 
     if isinstance(topn, dict):
         topN_df = _pick_first_not_none(topn, ["topN", "topn", "TopN", "top"])
         full_df = topn.get("full") if "full" in topn else None
+        # ✅ Step6 新增：limit_up_table（优先用于第3块）
+        limit_up_table_df = topn.get("limit_up_table") if "limit_up_table" in topn else None
     else:
         topN_df = topn
 
     topN_df = _to_df(topN_df)
     full_df = _to_df(full_df)
+    limit_up_table_df = _to_df(limit_up_table_df)
 
     # trade calendar
     calendar = _list_trade_dates(settings)
     prev_td, next_td = _prev_next_trade_date_with_fallback(calendar, trade_date)
 
-    # 本日 limit_list（用于第2块验证命中；第3块强度列表）
+    # 本日 limit_list（用于第2块验证命中；第3块强度列表 fallback）
     limit_df_current = _load_limit_df(settings, ctx, trade_date)
 
     # JSON payload：保持兼容，不大动 payload 结构（metrics 仍按“预测日验证预测日”的旧口径）
@@ -511,6 +627,8 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         "gate": gate,
         "topN": [] if topN_df is None else topN_df.to_dict(orient="records"),
         "full": [] if full_df is None else full_df.to_dict(orient="records"),
+        # ✅ 可选附带：limit_up_table（不影响旧解析）
+        "limit_up_table": [] if limit_up_table_df is None else limit_up_table_df.to_dict(orient="records"),
         "learn": learn,
         "metrics": metrics_same_day,
         "metrics_same_day": metrics_same_day,
@@ -522,7 +640,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         encoding="utf-8",
     )
 
-    # Markdown（你要的四块中文标题）
+    # Markdown（四块中文标题）
     md_path = outdir / f"predict_top10_{trade_date}.md"
     lines = [f"# {trade_date} 预测报告\n"]
 
@@ -549,7 +667,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     # 第2块：命中情况（prev_td -> trade_date）
     lines.append(f"## 《{prev_td} 预测：{trade_date} 命中情况》\n")
     prev_topN_df = _load_json_topN(outdir, prev_td)
-    prev_hit_df, prev_metrics = _topN_to_hit_df(prev_topN_df, limit_df_current)
+    prev_hit_df, _prev_metrics = _topN_to_hit_df(prev_topN_df, limit_df_current)
     if prev_topN_df is None or prev_topN_df.empty:
         lines.append("（未找到上一交易日预测文件或上一交易日 Top10 为空）\n\n")
     else:
@@ -558,13 +676,24 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
     # 第3块：强度列表（trade_date 所有涨停）
     lines.append(f"## 《{trade_date} 所有涨停股票的强度列表》\n")
-    strength_limit_df = _join_limit_strength(limit_df_current, full_df)
-    if strength_limit_df is None or strength_limit_df.empty:
-        lines.append("(未能生成强度列表：limit_list 或 full_df 空)\n\n")
+
+    # ✅ 优先用 Step6 输出 limit_up_table（字段已经对齐报告）
+    strength_limit_df = None
+    if limit_up_table_df is not None and not limit_up_table_df.empty:
+        strength_limit_df = _standardize_strength_table(limit_up_table_df)
     else:
+        # fallback：旧 join 逻辑
+        j = _join_limit_strength(limit_df_current, full_df)
+        if j is not None and not j.empty:
+            strength_limit_df = _standardize_strength_table(j)
+
+    if strength_limit_df is None or strength_limit_df.empty:
+        lines.append("(未能生成强度列表：limit_list 或 full_df 空，且未提供 limit_up_table)\n\n")
+    else:
+        # 输出统一列：排名/代码/股票/Probability/强度得分/题材加成/板块
         lines.append(_df_to_md_table(
             strength_limit_df,
-            cols=["ts_code", "name", "StrengthScore", "ThemeBoost", "board"],
+            cols=["排名", "代码", "股票", "Probability", "强度得分", "题材加成", "板块"],
         ))
         lines.append("\n")
 
