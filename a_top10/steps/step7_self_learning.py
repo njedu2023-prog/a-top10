@@ -4,23 +4,28 @@
 """
 Step7：自学习闭环更新模型权重（命中率滚动提升）
 
-目标：
+目标（终版）：
 - 回收 outputs/predict_top10_*.md 的 TopN 预测
 - 用 “下一交易日”的 limit_list_d.csv 打标（命中统计）
-- 构建训练样本（优先使用历史 step4_theme.csv / step4_history.csv 之类的“特征历史落盘”）
-- 若没有特征历史：自动从 outputs/ 里“按日落盘的 step4_theme_YYYYMMDD.csv”聚合生成 feature_history
-- 调用 Step5 训练（LR + LightGBM）并落盘 models/
-- 输出命中率历史与最新报告到 outputs/learning
+- 训练样本来源（强制主路径）：
+    outputs/learning/feature_history.csv   （Step5 推断后自动追加）
+  说明：这是唯一可靠的“跨日、可训练”样本来源。
+- 训练输出：
+    models/step5_lr.joblib
+    models/step5_lgbm.joblib（可选，lightgbm 存在时）
+- 输出学习报告：
+    outputs/learning/step7_hit_rate_history.csv
+    outputs/learning/step7_report_latest.json
+    outputs/learning/step7_report_latest.md
 
-注意：
-- Step7 不能损坏主程序：任何缺文件/字段/签名不匹配都必须“降级不报错”，只写 warnings。
+注意（工程约束）：
+- Step7 不能损坏主程序：任何缺文件/字段/库不匹配都必须“降级不报错”，只写 warnings。
 """
 
 from __future__ import annotations
 
 import json
 import re
-import inspect
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -28,12 +33,61 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from a_top10.config import Settings
-from a_top10.steps.step5_ml_probability import (
-    _get_ts_code_col,
-    _normalize_id_columns,
-    train_step5_models,
-)
 
+# 仅复用 id 归一化，避免重复造轮子
+from a_top10.steps.step5_ml_probability import _normalize_id_columns
+
+# 训练依赖（best-effort）
+try:
+    import joblib
+except Exception:  # pragma: no cover
+    joblib = None
+
+try:
+    import numpy as np
+except Exception:  # pragma: no cover
+    np = None
+
+try:
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import Pipeline
+except Exception:  # pragma: no cover
+    LogisticRegression = None
+    StandardScaler = None
+    Pipeline = None
+
+try:
+    import lightgbm as lgb
+except Exception:  # pragma: no cover
+    lgb = None
+
+
+# ============================================================
+# Constants
+# ============================================================
+
+FEATURES = ["StrengthScore", "ThemeBoost", "seal_amount", "open_times", "turnover_rate"]
+
+FEATURE_ALIASES: Dict[str, List[str]] = {
+    "StrengthScore": ["StrengthScore", "strengthscore", "strength_score", "强度得分", "强度", "强度分"],
+    "ThemeBoost": ["ThemeBoost", "themeboost", "theme_boost", "题材加成", "题材"],
+    "seal_amount": ["seal_amount", "sealamount", "seal_amt", "seal", "封单金额", "封单"],
+    "open_times": ["open_times", "opentimes", "open_time", "open_count", "openings", "开板次数", "打开次数"],
+    "turnover_rate": ["turnover_rate", "turnoverrate", "turn_rate", "turnover", "换手率", "换手率%"],
+}
+
+# feature_history 主文件（你仓库当前已存在）
+FEATURE_HISTORY_PATH = Path("outputs") / "learning" / "feature_history.csv"
+
+# 模型文件固定路径（与 Step5 对齐）
+MODELS_DIR_DEFAULT = Path("models")
+LR_MODEL_PATH = MODELS_DIR_DEFAULT / "step5_lr.joblib"
+LGBM_MODEL_PATH = MODELS_DIR_DEFAULT / "step5_lgbm.joblib"
+
+# 冷启动阈值（你当前数据量不大 + 正样本稀少，必须降门槛才能先落盘）
+MIN_SAMPLES = 80
+MIN_POS = 5
 
 # ============================================================
 # Utils
@@ -57,22 +111,11 @@ def _safe_write_json(p: Path, obj: Any) -> None:
     p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _get_attr(s: Any, names: List[str], default: Any = None) -> Any:
-    for n in names:
-        if hasattr(s, n):
-            v = getattr(s, n)
-            if v is not None:
-                return v
-    return default
-
-
-def _as_path(x: Any, default: Path) -> Path:
-    if x is None:
-        return default
+def _safe_read_text(p: Path) -> str:
     try:
-        return Path(x)
+        return p.read_text(encoding="utf-8", errors="ignore")
     except Exception:
-        return default
+        return ""
 
 
 def _to_nosuffix(ts: str) -> str:
@@ -82,21 +125,85 @@ def _to_nosuffix(ts: str) -> str:
     return ts.split(".")[0]
 
 
+def _safe_str(x: Any) -> str:
+    if x is None:
+        return ""
+    s = str(x).strip()
+    if s.lower() in ("nan", "<na>"):
+        return ""
+    return s
+
+
+def _read_csv_guess(path: Path) -> pd.DataFrame:
+    if path is None or not path.exists():
+        return pd.DataFrame()
+    for enc in ("utf-8", "utf-8-sig", "gbk"):
+        try:
+            return pd.read_csv(path, dtype=str, encoding=enc, engine="python")
+        except Exception:
+            continue
+    try:
+        return pd.read_csv(path, dtype=str, engine="python")
+    except Exception:
+        return pd.DataFrame()
+
+
+def _get_outputs_dir(s: Settings) -> Path:
+    # 兼容 Settings.io.outputs_dir
+    io = getattr(s, "io", None)
+    if io is not None and getattr(io, "outputs_dir", None):
+        try:
+            return Path(getattr(io, "outputs_dir"))
+        except Exception:
+            pass
+    return Path("outputs")
+
+
+def _get_models_dir(s: Settings) -> Path:
+    # 兼容 Settings.data_repo.models_dir / model_dir
+    dr = getattr(s, "data_repo", None)
+    if dr is not None:
+        for attr in ("models_dir", "model_dir"):
+            v = getattr(dr, attr, None)
+            if v:
+                try:
+                    return Path(v)
+                except Exception:
+                    pass
+        # 兼容 data_repo.root/models
+        root = getattr(dr, "root", None)
+        if root:
+            try:
+                return Path(root) / "models"
+            except Exception:
+                pass
+    return MODELS_DIR_DEFAULT
+
+
+# ============================================================
+# Hit-rate (from predict_top10_*.md)
+# ============================================================
+
 def _trade_date_from_output_path(p: Path) -> Optional[str]:
-    # 支持 predict_top10_YYYYMMDD.md / predict_top10_YYYYMMDD_*.md
-    name = Path(p).name
+    name = p.name
     m = re.match(r"predict_top10_(\d{8})(?:_.*)?\.md$", name)
     return m.group(1) if m else None
 
 
+def _list_predict_files(outputs_dir: Path) -> List[Path]:
+    if not outputs_dir.exists():
+        return []
+    ps = sorted(outputs_dir.glob("predict_top10_*.md"))
+    return [p for p in ps if p.is_file()]
+
+
 def _parse_topn_codes(md_path: Path, topn: int) -> List[str]:
     """
-    解析 md 表格中 TopN 的股票代码（尽量宽松）
+    解析 md 表格中 TopN 的股票代码（宽松）
     典型行：| 1 | 600000.SH | xxx | ...
     """
-    try:
-        text = Path(md_path).read_text(encoding="utf-8", errors="ignore")
-    except Exception:
+    text = _safe_read_text(md_path)
+    if not text:
         return []
 
     codes: List[str] = []
@@ -109,484 +216,400 @@ def _parse_topn_codes(md_path: Path, topn: int) -> List[str]:
     return codes[: int(topn)]
 
 
-def _limit_codes_from_df(df: pd.DataFrame) -> List[str]:
+def _infer_next_trade_date(trade_dates_sorted: List[str], cur_date: str) -> Optional[str]:
+    try:
+        idx = trade_dates_sorted.index(cur_date)
+    except ValueError:
+        return None
+    if idx + 1 >= len(trade_dates_sorted):
+        return None
+    return trade_dates_sorted[idx + 1]
+
+
+# ============================================================
+# Limit list reading (robust)
+# ============================================================
+
+def _limit_codes_from_df(df: pd.DataFrame) -> set:
     """
-    从 limit_list_d.csv 读取涨停代码列表（兼容字段名）
+    从 limit_list_d.csv 读取涨停代码集合（含无后缀版本）
     """
     if df is None or df.empty:
-        return []
+        return set()
 
     df = _normalize_id_columns(df)
-    ts_col = _get_ts_code_col(df)
+    ts_col = "ts_code" if "ts_code" in df.columns else None
+    if ts_col is None:
+        # 再兜底
+        for c in ("TS_CODE", "code", "证券代码", "股票代码", "代码"):
+            if c in df.columns:
+                ts_col = c
+                break
     if ts_col is None or ts_col not in df.columns:
-        return []
+        return set()
 
-    vals: List[str] = []
-    for v in df[ts_col].tolist():
-        v = str(v).strip()
+    out: set = set()
+    for v in df[ts_col].astype(str).tolist():
+        v = _safe_str(v)
         if not v:
             continue
-        vals.append(v)
-        vals.append(_to_nosuffix(v))
-
-    return vals
+        out.add(v)
+        out.add(_to_nosuffix(v))
+    return out
 
 
 def _read_limit_list_anyway(s: Settings, trade_date: str, warnings: List[str]) -> pd.DataFrame:
     """
-    读取指定 trade_date 的 limit_list_d 数据：
-    1) 优先走 s.data_repo.read_limit_list(trade_date)
-    2) 兜底从 _warehouse/a-share-top3-data/data/raw/YYYY/limit_list_d.csv 读取并过滤
+    读取指定 trade_date 的 limit_list_d 数据（强韧）：
+    1) s.data_repo.read_limit_list(trade_date)（若存在）
+    2) _warehouse/a-share-top3-data/data/raw/YYYY/YYYYMMDD/limit_list_d.csv
+    3) _warehouse/a-share-top3-data/data/raw/YYYY/limit_list_d.csv（聚合文件，若存在则过滤）
     """
     # 1) data_repo
-    data_repo = getattr(s, "data_repo", None)
-    if data_repo is not None and hasattr(data_repo, "read_limit_list"):
+    dr = getattr(s, "data_repo", None)
+    if dr is not None and hasattr(dr, "read_limit_list"):
         try:
-            df = data_repo.read_limit_list(trade_date)
-            if isinstance(df, pd.DataFrame):
+            df = dr.read_limit_list(trade_date)
+            if isinstance(df, pd.DataFrame) and not df.empty:
                 return df
         except Exception as e:
-            warnings.append(f"read_limit_list via s.data_repo failed: {e}")
+            warnings.append(f"read_limit_list via s.data_repo failed: {type(e).__name__}")
 
-    # 2) fallback to warehouse csv
+    # 2) per-day snapshot file
     try:
-        y = trade_date[:4]
-        base = Path("_warehouse") / "a-share-top3-data" / "data" / "raw" / y / "limit_list_d.csv"
-        if not base.exists():
-            warnings.append(f"limit_list_d.csv not found at {base}")
+        y = str(trade_date)[:4]
+        p = Path("_warehouse") / "a-share-top3-data" / "data" / "raw" / y / str(trade_date) / "limit_list_d.csv"
+        if p.exists():
+            return _read_csv_guess(p)
+    except Exception:
+        pass
+
+    # 3) aggregated (rare)
+    try:
+        y = str(trade_date)[:4]
+        p = Path("_warehouse") / "a-share-top3-data" / "data" / "raw" / y / "limit_list_d.csv"
+        if not p.exists():
+            warnings.append(f"limit_list_d not found for {trade_date} (warehouse)")
             return pd.DataFrame()
 
-        df = pd.read_csv(base, dtype=str, encoding="utf-8", engine="python")
-        # 过滤 trade_date 列（兼容字段名）
-        cand_cols = ["trade_date", "TRADE_DATE", "日期", "交易日期"]
-        use_col = None
-        for c in cand_cols:
-            if c in df.columns:
-                use_col = c
-                break
-        if use_col is None:
-            warnings.append("limit_list_d.csv has no trade_date column, use whole file as fallback.")
+        df = _read_csv_guess(p)
+        if df.empty:
             return df
 
-        df = df[df[use_col].astype(str).str.replace("-", "").str.strip() == str(trade_date)]
+        # filter by trade_date column if exists
+        for c in ("trade_date", "TRADE_DATE", "日期", "交易日期"):
+            if c in df.columns:
+                td = df[c].astype(str).str.replace("-", "").str.strip()
+                return df[td == str(trade_date)].copy()
         return df
-
     except Exception as e:
-        warnings.append(f"fallback read limit_list_d.csv failed: {e}")
+        warnings.append(f"fallback read limit_list failed: {type(e).__name__}")
         return pd.DataFrame()
 
 
-def _list_predict_files(outputs_dir: Path) -> List[Path]:
-    if not outputs_dir.exists():
-        return []
-    ps = sorted(outputs_dir.glob("predict_top10_*.md"))
-    return [p for p in ps if p.is_file()]
-
-
-def _infer_next_trade_date(predict_dates: List[str], cur_date: str) -> Optional[str]:
-    """
-    用已存在的预测日期序列推断“下一交易日”：
-    - 预测文件是按交易日生成的，因此下一交易日通常是列表中的下一个日期
-    """
-    try:
-        idx = predict_dates.index(cur_date)
-    except ValueError:
-        return None
-    if idx + 1 >= len(predict_dates):
-        return None
-    return predict_dates[idx + 1]
-
-
 # ============================================================
-# Feature history auto build (NEW)
+# Feature history -> train set
 # ============================================================
 
-def _extract_date_from_filename(name: str) -> Optional[str]:
-    m = re.search(r"(\d{8})", name)
-    return m.group(1) if m else None
-
-
-def _safe_read_csv(path: Path, warnings: List[str]) -> pd.DataFrame:
-    try:
-        return pd.read_csv(path, dtype=str, encoding="utf-8", engine="python")
-    except Exception:
-        # 有些文件可能是 utf-8-sig
-        try:
-            return pd.read_csv(path, dtype=str, encoding="utf-8-sig", engine="python")
-        except Exception as e2:
-            warnings.append(f"read csv failed: {path} ({e2})")
-            return pd.DataFrame()
-
-
-def _normalize_trade_date_col(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[str]]:
+def _normalize_feature_columns(df: pd.DataFrame, warnings: List[str]) -> pd.DataFrame:
     """
-    把日期列统一成 trade_date（YYYYMMDD）并返回列名
-    """
-    if df is None or df.empty:
-        return df, None
-
-    date_col = None
-    for c in ["trade_date", "TRADE_DATE", "日期", "交易日期"]:
-        if c in df.columns:
-            date_col = c
-            break
-
-    if date_col is None:
-        return df, None
-
-    # 统一成 trade_date
-    df[date_col] = df[date_col].astype(str).str.replace("-", "").str.strip()
-    if date_col != "trade_date":
-        df.rename(columns={date_col: "trade_date"}, inplace=True)
-    return df, "trade_date"
-
-
-def _ensure_trade_date_from_filename(df: pd.DataFrame, f: Path) -> pd.DataFrame:
-    """
-    如果文件没带 trade_date 列，则从文件名里猜一个补上（例如 step4_theme_20260213.csv）
+    把 feature_history 中可能的别名列映射为 FEATURES 标准列。
+    不覆盖已有标准列。
     """
     if df is None or df.empty:
         return df
-    if "trade_date" in df.columns:
-        return df
-    d = _extract_date_from_filename(f.name)
-    if d and re.match(r"^\d{8}$", d):
-        df["trade_date"] = d
+
+    out = df.copy()
+    lower_map = {str(c).strip().lower(): c for c in out.columns}
+
+    for canon, aliases in FEATURE_ALIASES.items():
+        if canon in out.columns:
+            continue
+        found = None
+        if canon.lower() in lower_map:
+            found = lower_map[canon.lower()]
+        else:
+            for a in aliases:
+                ak = str(a).strip().lower()
+                if ak in lower_map:
+                    found = lower_map[ak]
+                    break
+        if found:
+            out[canon] = out[found]
+        else:
+            out[canon] = ""
+
+    # id/date
+    if "trade_date" not in out.columns:
+        for c in ("TRADE_DATE", "日期", "交易日期", "dt", "date"):
+            if c in out.columns:
+                out.rename(columns={c: "trade_date"}, inplace=True)
+                break
+
+    out = _normalize_id_columns(out)
+    if "ts_code" not in out.columns:
+        # 兜底
+        for c in ("TS_CODE", "code", "证券代码", "股票代码", "代码"):
+            if c in out.columns:
+                out.rename(columns={c: "ts_code"}, inplace=True)
+                break
+
+    # clean
+    if "trade_date" in out.columns:
+        out["trade_date"] = out["trade_date"].astype(str).str.replace("-", "").str.strip()
+    if "ts_code" in out.columns:
+        out["ts_code"] = out["ts_code"].astype(str).str.strip()
+
+    # warn if still missing essentials
+    if "trade_date" not in out.columns:
+        warnings.append("feature_history missing trade_date column.")
+    if "ts_code" not in out.columns:
+        warnings.append("feature_history missing ts_code column.")
+
+    return out
+
+
+def _load_feature_history(warnings: List[str]) -> pd.DataFrame:
+    df = _read_csv_guess(FEATURE_HISTORY_PATH)
+    if df is None or df.empty:
+        warnings.append("feature_history.csv not found or empty: outputs/learning/feature_history.csv")
+        return pd.DataFrame()
     return df
 
 
-def _ensure_ts_code_col(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[str]]:
-    """
-    尝试把 code/ts_code/证券代码 等统一成 ts_code
-    """
-    if df is None or df.empty:
-        return df, None
-
-    df = _normalize_id_columns(df)
-    ts_col = _get_ts_code_col(df)
-    if ts_col is None:
-        # 再兜底一些常见列
-        for c in ["ts_code", "TS_CODE", "code", "CODE", "证券代码", "股票代码"]:
-            if c in df.columns:
-                ts_col = c
-                break
-    if ts_col is None:
-        return df, None
-    if ts_col != "ts_code":
-        df.rename(columns={ts_col: "ts_code"}, inplace=True)
-    df["ts_code"] = df["ts_code"].astype(str).str.strip()
-    return df, "ts_code"
-
-
-def _pick_feature_files(outputs_dir: Path) -> List[Path]:
-    """
-    搜索“按日落盘”的特征文件：
-    - step4_theme_YYYYMMDD.csv（优先）
-    - 其次 step4_theme.csv / step4_history.csv / step4_theme_history.csv 等
-    """
-    files: List[Path] = []
-    if not outputs_dir.exists():
-        return files
-
-    # 1) 强优先：按日文件
-    daily = sorted(outputs_dir.glob("step4_theme_*.csv"))
-    daily = [p for p in daily if p.is_file() and _extract_date_from_filename(p.name)]
-    files.extend(daily)
-
-    # 2) 再兜底：单文件
-    for name in [
-        "step4_theme.csv",
-        "step4_history.csv",
-        "step4_theme_all.csv",
-    ]:
-        p = outputs_dir / name
-        if p.exists() and p.is_file():
-            files.append(p)
-
-    # 去重
-    uniq: List[Path] = []
-    seen = set()
-    for p in files:
-        if str(p) not in seen:
-            uniq.append(p)
-            seen.add(str(p))
-    return uniq
-
-
-def _auto_build_feature_history(
-    outputs_dir: Path,
-    warnings: List[str],
-    out_name: str = "step4_theme_history.csv",
-    max_files: int = 400,
-) -> Optional[Path]:
-    """
-    从 outputs 内若干 step4_theme_YYYYMMDD.csv 聚合成一个 feature_history 文件。
-    - 成功返回生成的文件路径
-    - 失败返回 None（只写 warnings）
-    """
-    try:
-        out_path = outputs_dir / out_name
-        files = _pick_feature_files(outputs_dir)
-        if not files:
-            warnings.append("no step4 feature files found to build feature_history.")
-            return None
-
-        # 控制规模（避免 repo 太大 / 读取太慢）
-        if len(files) > max_files:
-            files = files[-max_files:]
-
-        dfs: List[pd.DataFrame] = []
-        for f in files:
-            df = _safe_read_csv(f, warnings)
-            if df is None or df.empty:
-                continue
-
-            df, _ = _normalize_trade_date_col(df)
-            df = _ensure_trade_date_from_filename(df, f)
-            df, ts = _ensure_ts_code_col(df)
-            if "trade_date" not in df.columns:
-                warnings.append(f"skip {f.name}: no trade_date column and cannot infer from filename.")
-                continue
-            if ts is None or "ts_code" not in df.columns:
-                warnings.append(f"skip {f.name}: no ts_code column.")
-                continue
-
-            # 清理日期格式
-            df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str.strip()
-            # 只保留有效日期
-            df = df[df["trade_date"].astype(str).str.match(r"^\d{8}$", na=False)]
-            if df.empty:
-                continue
-
-            dfs.append(df)
-
-        if not dfs:
-            warnings.append("feature_history auto build produced empty dfs.")
-            return None
-
-        big = pd.concat(dfs, ignore_index=True, sort=False)
-
-        # 去重：同日同票取最后一条（通常是最新生成）
-        if "trade_date" in big.columns and "ts_code" in big.columns:
-            big["_k_td"] = big["trade_date"].astype(str)
-            big["_k_code"] = big["ts_code"].astype(str)
-            big.drop_duplicates(subset=["_k_td", "_k_code"], keep="last", inplace=True)
-            big.drop(columns=["_k_td", "_k_code"], inplace=True, errors="ignore")
-
-        # 按日期排序
-        try:
-            big.sort_values(["trade_date", "ts_code"], inplace=True)
-        except Exception:
-            pass
-
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        big.to_csv(out_path, index=False, encoding="utf-8-sig")
-        return out_path
-
-    except Exception as e:
-        warnings.append(f"auto build feature_history failed: {e}")
-        return None
-
-
-# ============================================================
-# Training dataset builder
-# ============================================================
-
-def _find_feature_history_file(outputs_dir: Path) -> Optional[Path]:
-    """
-    寻找“可训练的特征历史文件”：
-    优先级：step4_theme_history.csv -> step4_theme.csv / step4_history.csv / theme_history.csv ...
-    """
-    candidates = [
-        outputs_dir / "step4_theme_history.csv",  # NEW: auto build target
-        outputs_dir / "step4_theme.csv",
-        outputs_dir / "step4_theme_history_old.csv",
-        outputs_dir / "step4_history.csv",
-        outputs_dir / "theme_history.csv",
-        outputs_dir / "step4_theme_all.csv",
-    ]
-    for p in candidates:
-        if p.exists() and p.is_file():
-            return p
-    # 再兜底：找最近的 step4_theme_*.csv
-    ps = sorted(outputs_dir.glob("step4_theme_*.csv"))
-    if ps:
-        return ps[-1]
-    return None
-
-
-def _build_train_df_from_history(
+def _build_train_set_from_feature_history(
     s: Settings,
-    outputs_dir: Path,
     lookback_days: int,
     warnings: List[str],
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    从特征历史落盘文件中构建训练集（带 label）：
-    - 要求至少有：trade_date + ts_code(或 code)
-    - label：下一交易日是否涨停（1/0）
+    从 feature_history.csv 构建训练集：
+    - X: FEATURES
+    - y: next_trade_date 是否涨停
     """
-    hist_path = _find_feature_history_file(outputs_dir)
-    if hist_path is None:
-        warnings.append("no feature history file found in outputs/, training skipped.")
-        return pd.DataFrame()
+    meta: Dict[str, Any] = {
+        "feature_history_file": str(FEATURE_HISTORY_PATH) if FEATURE_HISTORY_PATH.exists() else "",
+        "lookback_days": int(lookback_days),
+        "dates_total": 0,
+        "dates_used": 0,
+        "rows_raw": 0,
+        "rows_used": 0,
+        "rows_dropped_allzero": 0,
+    }
 
-    try:
-        df = pd.read_csv(hist_path, dtype=str, encoding="utf-8", engine="python")
-    except Exception:
-        try:
-            df = pd.read_csv(hist_path, dtype=str, encoding="utf-8-sig", engine="python")
-        except Exception as e:
-            warnings.append(f"read feature history failed: {e}, training skipped.")
-            return pd.DataFrame()
+    df0 = _load_feature_history(warnings)
+    if df0.empty:
+        return pd.DataFrame(), meta
 
-    if df is None or df.empty:
-        warnings.append("feature history is empty, training skipped.")
-        return pd.DataFrame()
+    meta["rows_raw"] = int(len(df0))
 
-    df = _normalize_id_columns(df)
+    df = _normalize_feature_columns(df0, warnings)
+    if df.empty or "trade_date" not in df.columns or "ts_code" not in df.columns:
+        warnings.append("feature_history invalid after normalize (missing trade_date/ts_code).")
+        return pd.DataFrame(), meta
 
-    # trade_date
-    date_col = None
-    for c in ["trade_date", "TRADE_DATE", "日期", "交易日期"]:
-        if c in df.columns:
-            date_col = c
-            break
-    if date_col is None:
-        warnings.append("feature history has no trade_date column, training skipped.")
-        return pd.DataFrame()
+    # keep valid date
+    df = df[df["trade_date"].astype(str).str.match(r"^\d{8}$", na=False)].copy()
+    df = df[df["ts_code"].astype(str).map(lambda x: len(_safe_str(x)) > 0)].copy()
+    if df.empty:
+        warnings.append("feature_history filtered empty (no valid trade_date/ts_code).")
+        return pd.DataFrame(), meta
 
-    # ts_code
-    ts_col = _get_ts_code_col(df)
-    if ts_col is None or ts_col not in df.columns:
-        # 兜底
-        if "ts_code" in df.columns:
-            ts_col = "ts_code"
-        else:
-            warnings.append("feature history has no ts_code column, training skipped.")
-            return pd.DataFrame()
-
-    # 标准化日期格式 YYYYMMDD
-    df[date_col] = df[date_col].astype(str).str.replace("-", "").str.strip()
-    df[ts_col] = df[ts_col].astype(str).str.strip()
-
-    # 仅取最近 lookback_days 的交易日（按文件中的唯一日期序排序）
-    uniq_dates = sorted([d for d in df[date_col].dropna().unique().tolist() if re.match(r"^\d{8}$", str(d))])
+    # unique trading dates from feature_history
+    uniq_dates = sorted(df["trade_date"].dropna().unique().tolist())
+    uniq_dates = [d for d in uniq_dates if re.match(r"^\d{8}$", str(d))]
+    meta["dates_total"] = int(len(uniq_dates))
     if not uniq_dates:
-        warnings.append("feature history has no valid YYYYMMDD dates, training skipped.")
-        return pd.DataFrame()
+        warnings.append("feature_history has no valid YYYYMMDD trade_date.")
+        return pd.DataFrame(), meta
 
     use_dates = uniq_dates[-int(lookback_days):] if len(uniq_dates) > lookback_days else uniq_dates
-    df = df[df[date_col].isin(use_dates)].copy()
-    if df.empty:
-        warnings.append("feature history filtered to empty by lookback, training skipped.")
-        return pd.DataFrame()
+    meta["dates_used"] = int(len(use_dates))
 
-    # 构建 label：next_day limit_list 命中
-    # 为每个 trade_date 缓存下一日涨停代码集合，避免重复读文件
+    df = df[df["trade_date"].isin(use_dates)].copy()
+    if df.empty:
+        warnings.append("feature_history lookback filtered empty.")
+        return pd.DataFrame(), meta
+
+    # numeric features
+    for c in FEATURES:
+        df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0.0)
+
+    # drop all-zero feature rows (no information)
+    xsum = df[FEATURES].abs().sum(axis=1)
+    drop_mask = (xsum <= 1e-12)
+    dropped = int(drop_mask.sum())
+    if dropped > 0:
+        meta["rows_dropped_allzero"] = dropped
+        df = df[~drop_mask].copy()
+
+    meta["rows_used"] = int(len(df))
+    if df.empty:
+        warnings.append("after dropping all-zero feature rows, train_df is empty.")
+        return pd.DataFrame(), meta
+
+    # build labels based on next_trade_date (from date sequence in feature_history)
     date_to_next: Dict[str, Optional[str]] = {}
-    # 直接用 uniq_dates 推断 next_date：同一历史文件中日期序列的下一个
     for d in use_dates:
         date_to_next[d] = _infer_next_trade_date(uniq_dates, d)
 
-    cache_limit_codes: Dict[str, set] = {}
+    # cache limit sets
+    cache_limit: Dict[str, set] = {}
 
     labels: List[int] = []
+    next_dates: List[str] = []
+
     for _, row in df.iterrows():
-        d = str(row[date_col]).strip()
-        code = str(row[ts_col]).strip()
-        nd = date_to_next.get(d)
+        d = str(row["trade_date"]).strip()
+        code = str(row["ts_code"]).strip()
+        nd = date_to_next.get(d) or ""
+        next_dates.append(nd)
+
         if not nd:
             labels.append(0)
             continue
 
-        if nd not in cache_limit_codes:
+        if nd not in cache_limit:
             lim_df = _read_limit_list_anyway(s, nd, warnings)
-            lim_codes = set(_limit_codes_from_df(lim_df))
-            cache_limit_codes[nd] = lim_codes
+            cache_limit[nd] = _limit_codes_from_df(lim_df)
 
-        hit = (code in cache_limit_codes[nd]) or (_to_nosuffix(code) in cache_limit_codes[nd])
+        limset = cache_limit[nd]
+        hit = (code in limset) or (_to_nosuffix(code) in limset)
         labels.append(1 if hit else 0)
 
+    df["next_trade_date"] = next_dates
     df["label"] = labels
 
-    # 清理全空列
-    for c in list(df.columns):
-        if df[c].isna().all():
-            df.drop(columns=[c], inplace=True)
+    # clean for training
+    keep_cols = ["trade_date", "next_trade_date", "ts_code", "label"] + FEATURES
+    df = df[[c for c in keep_cols if c in df.columns]].copy()
 
-    return df
+    return df, meta
 
 
-def _call_train_step5_models_dynamic(
+# ============================================================
+# Train & Save models
+# ============================================================
+
+def _train_lr(train_df: pd.DataFrame, warnings: List[str]) -> Optional[Any]:
+    if Pipeline is None or StandardScaler is None or LogisticRegression is None:
+        warnings.append("sklearn not available: LR training skipped.")
+        return None
+
+    X = train_df[FEATURES].astype(float).values
+    y = train_df["label"].astype(int).values
+
+    model = Pipeline(
+        steps=[
+            ("scaler", StandardScaler(with_mean=True, with_std=True)),
+            ("lr", LogisticRegression(max_iter=2000, class_weight="balanced", solver="lbfgs")),
+        ]
+    )
+    model.fit(X, y)
+    return model
+
+
+def _train_lgbm(train_df: pd.DataFrame, warnings: List[str]) -> Optional[Any]:
+    if lgb is None:
+        warnings.append("lightgbm not available: LGBM training skipped.")
+        return None
+
+    X = train_df[FEATURES].astype(float).values
+    y = train_df["label"].astype(int).values
+
+    model = lgb.LGBMClassifier(
+        n_estimators=400,
+        learning_rate=0.05,
+        num_leaves=31,
+        max_depth=-1,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        reg_lambda=1.0,
+        min_child_samples=20,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+    )
+    model.fit(X, y)
+    return model
+
+
+def _save_joblib_model(model: Any, path: Path, warnings: List[str]) -> bool:
+    if model is None:
+        return False
+    if joblib is None:
+        warnings.append("joblib not available: cannot save model.")
+        return False
+    try:
+        _ensure_dir(path.parent)
+        joblib.dump(model, path)
+        return True
+    except Exception as e:
+        warnings.append(f"save model failed: {path.name} ({type(e).__name__})")
+        return False
+
+
+def _train_and_save_models(
     s: Settings,
     train_df: pd.DataFrame,
-    models_dir: Path,
     warnings: List[str],
 ) -> Dict[str, Any]:
     """
-    动态适配 train_step5_models 的签名：
-    常见可能：
-      train_step5_models(s, train_df, models_dir=...)
-      train_step5_models(s, train_df)
-      train_step5_models(train_df, models_dir=...)
-      train_step5_models(train_df)
+    训练并落盘 models/step5_lr.joblib / models/step5_lgbm.joblib
     """
-    result: Dict[str, Any] = {"trained": False, "detail": {}}
+    res: Dict[str, Any] = {
+        "trained": False,
+        "lr_saved": False,
+        "lgbm_saved": False,
+        "models_dir": "",
+        "detail": {},
+    }
 
     if train_df is None or train_df.empty:
-        warnings.append("train_df empty, skip train_step5_models.")
-        return result
+        warnings.append("train_df empty: training skipped.")
+        res["detail"] = {"reason": "train_df empty"}
+        return res
 
-    try:
-        sig = inspect.signature(train_step5_models)
-        params = list(sig.parameters.keys())
-    except Exception as e:
-        warnings.append(f"inspect.signature(train_step5_models) failed: {e}")
-        return result
+    # basic class check
+    pos = int(train_df["label"].astype(int).sum())
+    neg = int(len(train_df) - pos)
 
-    kwargs: Dict[str, Any] = {}
-    args: List[Any] = []
+    res["detail"]["train_rows"] = int(len(train_df))
+    res["detail"]["pos"] = pos
+    res["detail"]["neg"] = neg
 
-    # 识别 models_dir 参数名
-    for k in ["models_dir", "model_dir", "out_dir", "save_dir", "models_path", "model_path"]:
-        if k in params:
-            kwargs[k] = str(models_dir)
+    if len(train_df) < MIN_SAMPLES:
+        warnings.append(f"not enough samples for cold start: n={len(train_df)} < {MIN_SAMPLES}")
+        res["detail"]["reason"] = "min_samples"
+        return res
+    if pos < MIN_POS:
+        warnings.append(f"not enough positive labels for cold start: pos={pos} < {MIN_POS}")
+        res["detail"]["reason"] = "min_pos"
+        return res
+    if pos == 0 or neg == 0:
+        warnings.append("only one class present (all 0 or all 1): training skipped.")
+        res["detail"]["reason"] = "single_class"
+        return res
 
-    # 识别 settings 参数
-    if len(params) >= 1:
-        p0 = params[0]
-        # 常见：第一个就是 s/settings
-        if p0 in ["s", "settings", "cfg", "config"]:
-            args.append(s)
-            # 第二个才是 train_df
-            if len(params) >= 2:
-                args.append(train_df)
-        else:
-            # 第一个就是 train_df
-            args.append(train_df)
-            # 第二个可能是 s
-            if len(params) >= 2 and params[1] in ["s", "settings", "cfg", "config"]:
-                args.append(s)
+    models_dir = _get_models_dir(s)
+    res["models_dir"] = str(models_dir)
 
-    # 如果还没塞进去 train_df，就尽量补
-    if not any(isinstance(a, pd.DataFrame) for a in args):
-        # 找 train_df 位置：看有没有名为 train_df/data/df
-        for k in ["train_df", "df", "data"]:
-            if k in params:
-                kwargs[k] = train_df
-                break
-        else:
-            args.append(train_df)
+    # Train LR (must)
+    lr_model = _train_lr(train_df, warnings)
+    lr_path = models_dir / LR_MODEL_PATH.name
+    lr_saved = _save_joblib_model(lr_model, lr_path, warnings)
+    res["lr_saved"] = bool(lr_saved)
 
-    try:
-        out = train_step5_models(*args, **kwargs)
-        result["trained"] = True
-        result["detail"] = {"return": str(type(out))}
-        return result
-    except Exception as e:
-        warnings.append(f"train_step5_models call failed: {e}")
-        return result
+    # Train LGBM (optional)
+    lgbm_model = _train_lgbm(train_df, warnings)
+    lgbm_path = models_dir / LGBM_MODEL_PATH.name
+    lgbm_saved = _save_joblib_model(lgbm_model, lgbm_path, warnings)
+    res["lgbm_saved"] = bool(lgbm_saved)
+
+    res["trained"] = bool(lr_saved or lgbm_saved)
+    res["detail"]["lr_path"] = str(lr_path) if lr_saved else ""
+    res["detail"]["lgbm_path"] = str(lgbm_path) if lgbm_saved else ""
+    return res
 
 
 # ============================================================
@@ -599,40 +622,32 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
     warnings: List[str] = []
 
-    outputs_dir = _as_path(_get_attr(s, ["outputs_dir", "output_dir", "outputs_path"], None), Path("outputs"))
+    outputs_dir = _get_outputs_dir(s)
     learning_dir = outputs_dir / "learning"
-    models_dir = _as_path(_get_attr(s, ["models_dir", "model_dir", "models_path"], None), outputs_dir / "models")
-
     _ensure_dir(outputs_dir)
     _ensure_dir(learning_dir)
-    _ensure_dir(models_dir)
 
-    topn = int(_get_attr(s, ["topn", "TOPN"], 10) or 10)
-    lookback_days = int(_get_attr(s, ["step7_lookback_days", "lookback_days"], 150) or 150)
+    # topn / lookback
+    topn = 10
+    try:
+        topn = int(getattr(s, "topn", 10) or 10)
+    except Exception:
+        topn = 10
 
-    # ---------------------------
-    # 0) Feature history 自动生成（最后一步：闭环必需）
-    # ---------------------------
-    # 若没有 feature_history，就尝试自动从 outputs 的 step4_theme_YYYYMMDD.csv 聚合生成
-    hist_before = _find_feature_history_file(outputs_dir)
-    if hist_before is None:
-        built = _auto_build_feature_history(outputs_dir=outputs_dir, warnings=warnings)
-        if built:
-            warnings.append(f"feature_history auto generated: {built}")
-    else:
-        # 可选：如果你希望每次都增量更新，也可以改成“总是 build 覆盖”
-        pass
+    lookback_days = 150
+    try:
+        lookback_days = int(getattr(s, "step7_lookback_days", getattr(s, "lookback_days", 150)) or 150)
+    except Exception:
+        lookback_days = 150
 
     # ---------------------------
     # 1) 命中率统计（基于历史 predict_top10）
     # ---------------------------
     predict_files = _list_predict_files(outputs_dir)
     predict_dates = [d for d in [_trade_date_from_output_path(p) for p in predict_files] if d]
-    predict_dates = sorted(list(dict.fromkeys(predict_dates)))  # uniq keep order
+    predict_dates = sorted(list(dict.fromkeys(predict_dates)))  # uniq
 
     hit_rows: List[Dict[str, Any]] = []
-
-    # 构建 date -> file（同一天可能多份，取最后一个）
     date_to_file: Dict[str, Path] = {}
     for p in predict_files:
         d = _trade_date_from_output_path(p)
@@ -647,7 +662,6 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         nd = _infer_next_trade_date(predict_dates, d)
         codes = _parse_topn_codes(md_path, topn=topn)
 
-        # 没有 next day，则无法验证命中
         if not nd:
             hit_rows.append({
                 "trade_date": d,
@@ -660,7 +674,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             continue
 
         lim_df = _read_limit_list_anyway(s, nd, warnings)
-        lim_set = set(_limit_codes_from_df(lim_df))
+        lim_set = _limit_codes_from_df(lim_df)
 
         hit = 0
         for c in codes:
@@ -678,43 +692,27 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         })
 
     hit_df = pd.DataFrame(hit_rows)
-
-    # 落盘命中率历史
     hit_csv = learning_dir / "step7_hit_rate_history.csv"
     if not hit_df.empty:
         hit_df.to_csv(hit_csv, index=False, encoding="utf-8-sig")
 
     # ---------------------------
-    # 2) 构建训练集并训练（真闭环核心）
+    # 2) 构建训练集（来自 feature_history.csv）并训练落盘模型
     # ---------------------------
-    train_df = _build_train_df_from_history(
+    train_df, train_meta = _build_train_set_from_feature_history(
         s=s,
-        outputs_dir=outputs_dir,
         lookback_days=lookback_days,
         warnings=warnings,
     )
 
-    # 训练统计信息
-    train_meta: Dict[str, Any] = {
-        "train_rows": int(len(train_df)) if train_df is not None else 0,
-        "pos": int(train_df["label"].astype(int).sum()) if (train_df is not None and "label" in train_df.columns and not train_df.empty) else 0,
-        "neg": int((len(train_df) - train_df["label"].astype(int).sum())) if (train_df is not None and "label" in train_df.columns and not train_df.empty) else 0,
-        "feature_history_file": str(_find_feature_history_file(outputs_dir)) if _find_feature_history_file(outputs_dir) else "",
-    }
-
-    train_result = _call_train_step5_models_dynamic(
-        s=s,
-        train_df=train_df,
-        models_dir=models_dir,
-        warnings=warnings,
-    )
+    # 训练执行（保证落盘 models/*.joblib）
+    train_result = _train_and_save_models(s=s, train_df=train_df, warnings=warnings)
 
     # ---------------------------
     # 3) 输出学习报告
     # ---------------------------
     latest_hit = None
     if not hit_df.empty:
-        # 取最近一个“可验证”的记录（hit 非空）
         v = hit_df[hit_df["hit"].astype(str).str.len() > 0]
         if not v.empty:
             latest_hit = v.iloc[-1].to_dict()
@@ -732,14 +730,14 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     report_json = learning_dir / "step7_report_latest.json"
     _safe_write_json(report_json, report)
 
-    # 同时输出一份 md，便于人看
     md_lines: List[str] = []
-    md_lines.append(f"# Step7 自学习报告（latest）")
+    md_lines.append("# Step7 自学习报告（latest）")
     md_lines.append("")
     md_lines.append(f"- 生成时间：{report['ts']}")
     md_lines.append(f"- TopN：{topn}")
     md_lines.append(f"- Lookback：{lookback_days} 天")
     md_lines.append("")
+
     md_lines.append("## 1) 最新命中")
     if latest_hit:
         md_lines.append("")
@@ -754,25 +752,37 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     md_lines.append("")
     md_lines.append("## 2) 训练数据概况")
     md_lines.append("")
-    md_lines.append(f"- 样本数：{train_meta.get('train_rows',0)}")
-    md_lines.append(f"- 正样本：{train_meta.get('pos',0)}")
-    md_lines.append(f"- 负样本：{train_meta.get('neg',0)}")
     md_lines.append(f"- 特征历史文件：{train_meta.get('feature_history_file','') or '未找到'}")
+    md_lines.append(f"- 原始行数：{train_meta.get('rows_raw',0)}")
+    md_lines.append(f"- 过滤后行数：{train_meta.get('rows_used',0)}")
+    md_lines.append(f"- 丢弃全零特征行：{train_meta.get('rows_dropped_allzero',0)}")
+    md_lines.append(f"- 日期总数：{train_meta.get('dates_total',0)}")
+    md_lines.append(f"- 使用日期：{train_meta.get('dates_used',0)}")
 
     md_lines.append("")
     md_lines.append("## 3) 训练执行结果")
     md_lines.append("")
     md_lines.append(f"- trained：{train_result.get('trained')}")
-    md_lines.append(f"- detail：{train_result.get('detail')}")
+    md_lines.append(f"- lr_saved：{train_result.get('lr_saved')}")
+    md_lines.append(f"- lgbm_saved：{train_result.get('lgbm_saved')}")
+    md_lines.append(f"- models_dir：{train_result.get('models_dir','')}")
+    if isinstance(train_result.get("detail"), dict):
+        d = train_result["detail"]
+        md_lines.append(f"- train_rows：{d.get('train_rows','')}")
+        md_lines.append(f"- pos/neg：{d.get('pos','')}/{d.get('neg','')}")
+        if d.get("lr_path"):
+            md_lines.append(f"- lr_path：{d.get('lr_path')}")
+        if d.get("lgbm_path"):
+            md_lines.append(f"- lgbm_path：{d.get('lgbm_path')}")
 
     if warnings:
         md_lines.append("")
         md_lines.append("## 4) Warnings")
         md_lines.append("")
-        for w in warnings[:50]:
+        for w in warnings[:80]:
             md_lines.append(f"- {w}")
-        if len(warnings) > 50:
-            md_lines.append(f"- ...（共 {len(warnings)} 条，仅展示前 50 条）")
+        if len(warnings) > 80:
+            md_lines.append(f"- ...（共 {len(warnings)} 条，仅展示前 80 条）")
 
     report_md = learning_dir / "step7_report_latest.md"
     _safe_write_text(report_md, "\n".join(md_lines) + "\n")
@@ -782,9 +792,9 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             "hit_history_csv": str(hit_csv),
             "report_json": str(report_json),
             "report_md": str(report_md),
-            "models_dir": str(models_dir),
+            "models_dir": str(train_result.get("models_dir", "")),
             "trained": bool(train_result.get("trained")),
-            "train_rows": train_meta.get("train_rows", 0),
+            "train_rows": int(train_result.get("detail", {}).get("train_rows", 0)) if isinstance(train_result.get("detail"), dict) else 0,
             "warnings": warnings,
         }
     }
@@ -792,6 +802,6 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 
 # CLI 调试入口（不会影响主 pipeline）
 if __name__ == "__main__":
-    s = Settings()  # 依赖你现有的 config.py / default.yml
+    s = Settings()
     out = run_step7(s, ctx={})
     print(json.dumps(out, ensure_ascii=False, indent=2))
