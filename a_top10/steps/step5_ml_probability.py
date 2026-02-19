@@ -710,8 +710,7 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         proba = np.clip(proba, 0.0, 1.0)
         proba = proba + np.array([_stable_jitter_from_ts(t) for t in ts_series.values], dtype=float)
 
-        # 如果模型输出“几乎常数”，用 pseudo 做轻量 tie-break（非常关键：解决你截图）
-        # 这里是“微扰融合”：不改概率量级，但能拉开相对次序
+        # 如果模型输出“几乎常数”，用 pseudo 做轻量 tie-break（非常关键）
         try:
             if np.nanstd(proba) < 1e-8:
                 p2 = _pseudo_proba()
