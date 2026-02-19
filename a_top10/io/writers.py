@@ -551,6 +551,7 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
     return m
 
 
+
 def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.DataFrame:
     """
     近10日命中率口径：predict_date -> next_trade_date 的 limit_list。
@@ -676,8 +677,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         lines.append("\n")
 
 
-
-    # 第3块：强度列表（trade_date 所有涨停）
+    # 第2块：强度列表（trade_date 所有涨停）
     lines.append(f"## 《{trade_date} 所有涨停股票的强度列表》\n")
 
     # ✅ 优先用 Step6 输出 limit_up_table（字段已经对齐报告）
@@ -700,7 +700,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         ))
         lines.append("\n")
 
-    # 第2块：命中情况（prev_td -> trade_date）
+    # 第3块：命中情况（prev_td -> trade_date）
     prev_title = prev_td if prev_td else "上一交易日"
     lines.append(f"## 《{prev_title} 预测：{trade_date} 命中情况》\n")
 
