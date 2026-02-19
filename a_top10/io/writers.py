@@ -466,9 +466,9 @@ def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
 
     # 输出列顺序固定
     out_cols = ["排名", "代码", "股票", "Probability", "强度得分", "题材加成", "板块"]
-d = d[[c for c in out_cols if c in d.columns]].copy()
+    d = d[[c for c in out_cols if c in d.columns]].copy()
 
-# === 按强度得分降序排序，并重排排名 ===
+    # === 按强度得分降序排序，并重排排名 ===
     if "强度得分" in d.columns:
         d["强度得分"] = pd.to_numeric(d["强度得分"], errors="coerce")
         d = d.sort_values(by="强度得分", ascending=False, na_position="last").reset_index(drop=True)
