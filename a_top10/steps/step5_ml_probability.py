@@ -285,14 +285,17 @@ def _guess_trade_date(df: pd.DataFrame) -> str:
 def _stable_jitter_from_ts(ts: str) -> float:
     """
     给排序做一个极小的确定性扰动，避免“全一样”导致肉眼误判。
-    量级 1e-6，不会改变模型概率的量级。
+
+    ⚠️ 修复点：
+    - 原先 1e-6 量级在 writers 或报告显示保留 5 位小数时会被“截断成一样”
+    - 这里提升到 1e-4 量级（仍然很小，不改变概率量级），但能在报告里看到差异
     """
     s = str(ts or "").strip()
     if not s:
         return 0.0
     h = hashlib.md5(s.encode("utf-8")).hexdigest()[:8]
     v = int(h, 16) / float(16**8)  # 0~1
-    return (v - 0.5) * 2e-6  # -1e-6 ~ +1e-6
+    return (v - 0.5) * 2e-4  # -1e-4 ~ +1e-4
 
 
 def _write_feature_history(
@@ -706,21 +709,29 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         return _sigmoid(z)
 
     def _post_process(proba: np.ndarray, src: str) -> pd.DataFrame:
-        # clip + 极小确定性 jitter（防止完全一样导致排序肉眼误判）
+        # 先做数值清洗
+        proba = np.asarray(proba, dtype=float)
+        proba = np.nan_to_num(proba, nan=0.0, posinf=1.0, neginf=0.0)
+
+        # clip + 确定性 jitter（防止完全一样导致排序肉眼误判）
         proba = np.clip(proba, 0.0, 1.0)
         proba = proba + np.array([_stable_jitter_from_ts(t) for t in ts_series.values], dtype=float)
 
-        # 如果模型输出“几乎常数”，用 pseudo 做轻量 tie-break（非常关键）
+        # 如果模型输出“几乎常数”，用 pseudo 做更明显的 tie-break
         try:
             if np.nanstd(proba) < 1e-8:
                 p2 = _pseudo_proba()
-                proba = 0.98 * proba + 0.02 * p2
+                # ✅ 修复点：增强 tie-break 权重，否则显示仍会“像全一样”
+                proba = 0.80 * proba + 0.20 * p2
                 src = f"{src}+tie"
         except Exception:
             pass
 
+        # 再次 clip，保证合法
+        proba = np.clip(proba, 0.0, 1.0)
+
         out2 = out.copy()
-        out2["Probability"] = np.clip(proba, 0.0, 1.0)
+        out2["Probability"] = proba
         out2["_prob_src"] = src
 
         td = _guess_trade_date(raw_input)
