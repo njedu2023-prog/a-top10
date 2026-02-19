@@ -36,27 +36,20 @@ def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> s
         "rank": "排名",
         "rank_limit": "排名",
         "排名": "排名",
-
         "ts_code": "代码",
         "code": "代码",
         "代码": "代码",
-
         "name": "股票",
         "stock_name": "股票",
         "股票": "股票",
-
         "score": "Score",
         "Score": "Score",
-
         "prob": "Probability",
         "Probability": "Probability",
-
         "StrengthScore": "强度得分",
         "强度得分": "强度得分",
-
         "ThemeBoost": "题材加成",
         "题材加成": "题材加成",
-
         "board": "板块",
         "板块": "板块",
     }
@@ -161,6 +154,23 @@ def _ctx_path(ctx: Any, keys: Sequence[str]) -> Optional[Path]:
     return None
 
 
+def _ctx_trade_date(ctx: Any) -> str:
+    """
+    尝试从 ctx 里提取“这份 ctx 数据对应的 trade_date”。
+    若无法判断，返回空串。
+    """
+    if not isinstance(ctx, dict):
+        return ""
+    for k in ("trade_date", "TRADE_DATE", "asof", "date", "snapshot_date"):
+        v = ctx.get(k)
+        if v is None:
+            continue
+        s = _safe_str(v)
+        if len(s) == 8 and s.isdigit():
+            return s
+    return ""
+
+
 def _read_csv_guess(p: Path) -> pd.DataFrame:
     if p is None or not p.exists():
         return pd.DataFrame()
@@ -207,7 +217,6 @@ def _count_limitups(limit_df: Optional[pd.DataFrame]) -> int:
         elif c6:
             uniq.add(c6)
 
-    # 若全是空值导致 uniq 为空，退化为行数
     return int(len(uniq)) if uniq else int(len(limit_df))
 
 
@@ -274,9 +283,16 @@ def _resolve_snapshot_dir(settings, ctx, trade_date: str) -> Optional[Path]:
 
 
 def _load_limit_df(settings, ctx, trade_date: str) -> pd.DataFrame:
-    df = _ctx_df(ctx, ["limit_df", "limit_list", "limit", "limit_list_d", "limit_up", "limitup"])
-    if df is not None and not df.empty:
-        return df.copy()
+    """
+    ✅ 关键修复（“55问题”）：
+    - ctx 里的 limit_df 往往只对应“当前 trade_date”
+    - 当我们请求别的日期（例如历史回测 next_td）时，不能盲用 ctx，否则会把同一份数据套到所有天上
+    """
+    ctx_td = _ctx_trade_date(ctx)
+    if ctx_td and ctx_td == trade_date:
+        df = _ctx_df(ctx, ["limit_df", "limit_list", "limit", "limit_list_d", "limit_up", "limitup"])
+        if df is not None and not df.empty:
+            return df.copy()
 
     snap = _resolve_snapshot_dir(settings, ctx, trade_date)
     if snap is None:
@@ -322,8 +338,6 @@ def _topN_to_hit_df(topN_df: Optional[pd.DataFrame], limit_df: pd.DataFrame) -> 
         df["板块"] = df.get("board", "").fillna("")
 
     top_count = len(df)
-
-    # ✅ 验证日涨停家数：统一口径（去重代码）
     limit_count = _count_limitups(limit_df)
 
     _, limit_ts, limit_c6 = _build_code_sets(limit_df, CODE_COL_CANDIDATES)
@@ -354,7 +368,7 @@ def _topN_to_hit_df(topN_df: Optional[pd.DataFrame], limit_df: pd.DataFrame) -> 
 def _list_trade_dates(settings) -> List[str]:
     """
     用 DataRepo 自带 list_snapshot_dates 作为交易日历（最稳）。
-    找不到就兜底用已有 outputs 文件名推断。
+    找不到就返回空。
     """
     dates: List[str] = []
     dr = getattr(settings, "data_repo", None)
@@ -369,7 +383,6 @@ def _list_trade_dates(settings) -> List[str]:
 
 
 def _prev_next_trade_date(calendar: List[str], trade_date: str) -> Tuple[str, str]:
-    """只按已存在的交易日历计算上下交易日"""
     if calendar and trade_date in calendar:
         i = calendar.index(trade_date)
         prev_td = calendar[i - 1] if i - 1 >= 0 else ""
@@ -379,7 +392,6 @@ def _prev_next_trade_date(calendar: List[str], trade_date: str) -> Tuple[str, st
 
 
 def _prev_next_trade_date_with_fallback(calendar: List[str], trade_date: str) -> Tuple[str, str]:
-    """用于报告显示：next_td 可以用工作日规则兜底出来"""
     prev_td, next_td = _prev_next_trade_date(calendar, trade_date)
     if prev_td and next_td:
         return prev_td, next_td
@@ -406,7 +418,6 @@ def _prev_next_trade_date_with_fallback(calendar: List[str], trade_date: str) ->
 
 
 def _load_json_topN(outdir: Path, td: str) -> Optional[pd.DataFrame]:
-    # ✅ 修复：td 为空时不要读 predict_top10_.json
     if not td:
         return None
     p = outdir / f"predict_top10_{td}.json"
@@ -425,7 +436,6 @@ def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
     """
     把“强度列表”标准化成报告需要的列：
       排名 / 代码 / 股票 / Probability / 强度得分 / 题材加成 / 板块
-    兼容 Step6 新增 limit_up_table（中文列）以及旧 join 输出（英文列）。
     """
     if df is None or df.empty:
         return pd.DataFrame()
@@ -445,57 +455,36 @@ def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
     # code
     if "代码" not in d.columns:
         c = _first_existing_col(d, ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"])
-        if c:
-            d["代码"] = d[c]
-        else:
-            d["代码"] = ""
+        d["代码"] = d[c] if c else ""
 
     # name
     if "股票" not in d.columns:
         n = _first_existing_col(d, ["name", "stock_name", "名称", "证券名称", "股票简称"])
-        if n:
-            d["股票"] = d[n]
-        else:
-            d["股票"] = ""
+        d["股票"] = d[n] if n else ""
 
     # prob
     if "Probability" not in d.columns:
         p = _first_existing_col(d, ["prob", "Probability", "概率", "涨停概率"])
-        if p:
-            d["Probability"] = d[p]
-        else:
-            d["Probability"] = ""
+        d["Probability"] = d[p] if p else ""
 
     # strength
     if "强度得分" not in d.columns:
-        # ✅ 优先使用 Step6 真实强度字段
         s = _first_existing_col(d, ["_strength", "StrengthScore", "强度得分", "强度"])
-        if s:
-            d["强度得分"] = d[s]
-        else:
-            d["强度得分"] = ""
+        d["强度得分"] = d[s] if s else ""
 
     # theme
     if "题材加成" not in d.columns:
         t = _first_existing_col(d, ["ThemeBoost", "题材加成", "题材", "_theme"])
-        if t:
-            d["题材加成"] = d[t]
-        else:
-            d["题材加成"] = ""
+        d["题材加成"] = d[t] if t else ""
 
     # board
     if "板块" not in d.columns:
         b = _first_existing_col(d, ["board", "板块", "industry", "行业", "所属行业", "concept", "题材"])
-        if b:
-            d["板块"] = d[b]
-        else:
-            d["板块"] = ""
+        d["板块"] = d[b] if b else ""
 
-    # 输出列顺序固定
     out_cols = ["排名", "代码", "股票", "Probability", "强度得分", "题材加成", "板块"]
     d = d[[c for c in out_cols if c in d.columns]].copy()
 
-    # === 按强度得分降序排序，并重排排名 ===
     if "强度得分" in d.columns:
         d["强度得分"] = pd.to_numeric(d["强度得分"], errors="coerce")
         d = d.sort_values(by="强度得分", ascending=False, na_position="last").reset_index(drop=True)
@@ -505,12 +494,6 @@ def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
-    """
-    旧逻辑 fallback：
-    - 筛出当日涨停股
-    - merge full_df 带回 StrengthScore / ThemeBoost / board / prob（如果有）
-    - 并按 StrengthScore(优先) / score / prob 排序
-    """
     if limit_df is None or limit_df.empty:
         return None
 
@@ -518,7 +501,6 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
     if not lcode:
         return None
 
-    # full_df 不存在：至少输出代码（其余空）
     if full_df is None or full_df.empty:
         df = limit_df[[lcode]].copy()
         df = df.rename(columns={lcode: "ts_code"})
@@ -541,26 +523,16 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
     if fcode != "ts_code":
         f["ts_code"] = f[fcode]
 
-    # merge
     m = pd.merge(l[["ts_code"]], f, on="ts_code", how="left")
 
-    # name fallback
     if "name" not in m.columns:
         nc = _first_existing_col(m, NAME_COL_CANDIDATES)
-        if nc:
-            m["name"] = m[nc]
-        else:
-            m["name"] = ""
+        m["name"] = m[nc] if nc else ""
 
-    # board fallback
     if "board" not in m.columns:
         bc = _first_existing_col(m, BOARD_COL_CANDIDATES)
-        if bc:
-            m["board"] = m[bc]
-        else:
-            m["board"] = ""
+        m["board"] = m[bc] if bc else ""
 
-    # sort priority
     sort_cols = []
     if "StrengthScore" in m.columns:
         sort_cols = ["StrengthScore"]
@@ -572,7 +544,6 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
     if sort_cols:
         m = m.sort_values(by=sort_cols, ascending=False)
 
-    # rank for display
     m = m.reset_index(drop=True)
     m.insert(0, "rank_limit", m.index + 1)
     return m
@@ -581,8 +552,7 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
 def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.DataFrame:
     """
     近10日命中率口径：predict_date -> next_trade_date 的 limit_list。
-
-    注意：latest（未来没有 next_td 的）会被跳过，避免用空 limit_list 得出误导 0。
+    注意：latest（未来没有 next_td 的）会被跳过。
     """
     calendar = _list_trade_dates(settings)
     files = sorted(outdir.glob("predict_top10_*.json"), key=lambda p: p.name, reverse=True)
@@ -600,7 +570,7 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
 
         topN_df = _load_json_topN(outdir, d)
 
-        # ✅ 验证日涨停：用 next_td 的 limit_list
+        # ✅ 验证日涨停：用 next_td 的 limit_list（且不盲用 ctx）
         ldf_verify = _load_limit_df(settings, ctx, next_td)
 
         _, mres = _topN_to_hit_df(topN_df, ldf_verify)
@@ -616,7 +586,6 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
             "日期": d,
             "命中数": int(hit_count),
             "命中率": str(hit_rate) if hit_rate is not None else "",
-            # ✅ 当日涨停家数：严格按验证日数据统计
             "当日涨停家数": _count_limitups(ldf_verify),
         })
         if len(rows) >= max_days:
@@ -628,14 +597,12 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
 
 
 def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
-    # outputs_dir
     outdir = getattr(getattr(settings, "io", None), "outputs_dir", None)
     if not outdir:
         outdir = "outputs"
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # parse topn
     topN_df: Optional[pd.DataFrame] = None
     full_df: Optional[pd.DataFrame] = None
     limit_up_table_df: Optional[pd.DataFrame] = None
@@ -643,7 +610,6 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     if isinstance(topn, dict):
         topN_df = _pick_first_not_none(topn, ["topN", "topn", "TopN", "top"])
         full_df = topn.get("full") if "full" in topn else None
-        # ✅ Step6 新增：limit_up_table（优先用于第2块）
         limit_up_table_df = topn.get("limit_up_table") if "limit_up_table" in topn else None
     else:
         topN_df = topn
@@ -652,23 +618,20 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     full_df = _to_df(full_df)
     limit_up_table_df = _to_df(limit_up_table_df)
 
-    # trade calendar
     calendar = _list_trade_dates(settings)
     prev_td, next_td = _prev_next_trade_date_with_fallback(calendar, trade_date)
 
-    # 本日 limit_list（用于第2块强度列表 fallback / 第3块命中）
+    # 当前 trade_date：如果 ctx 带了 trade_date，会命中；否则走 snapshot（通常也有）
     limit_df_current = _load_limit_df(settings, ctx, trade_date)
 
-    # JSON payload：保持兼容，不大动 payload 结构
     _hit_df_same_day, metrics_same_day = _topN_to_hit_df(topN_df, limit_df_current)
 
     payload: Dict[str, Any] = {
         "trade_date": trade_date,
-        "verify_date": next_td,  # 下一交易日：预测目标日
+        "verify_date": next_td,
         "gate": gate,
         "topN": [] if topN_df is None else topN_df.to_dict(orient="records"),
         "full": [] if full_df is None else full_df.to_dict(orient="records"),
-        # ✅ 可选附带：limit_up_table（不影响旧解析）
         "limit_up_table": [] if limit_up_table_df is None else limit_up_table_df.to_dict(orient="records"),
         "learn": learn,
         "metrics": metrics_same_day,
@@ -681,7 +644,6 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         encoding="utf-8",
     )
 
-    # Markdown（四块中文标题）
     md_path = outdir / f"predict_top10_{trade_date}.md"
     lines = [f"# {trade_date} 预测报告\n"]
 
@@ -708,12 +670,10 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     # 第2块：强度列表（trade_date 所有涨停）
     lines.append(f"## 《{trade_date} 所有涨停股票的强度列表》\n")
 
-    # ✅ 优先用 Step6 输出 limit_up_table（字段已经对齐报告）
     strength_limit_df = None
     if limit_up_table_df is not None and not limit_up_table_df.empty:
         strength_limit_df = _standardize_strength_table(limit_up_table_df)
     else:
-        # fallback：旧 join 逻辑
         j = _join_limit_strength(limit_df_current, full_df)
         if j is not None and not j.empty:
             strength_limit_df = _standardize_strength_table(j)
