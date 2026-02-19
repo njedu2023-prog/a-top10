@@ -675,17 +675,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         ))
         lines.append("\n")
 
-    # 第2块：命中情况（prev_td -> trade_date）
-    prev_title = prev_td if prev_td else "上一交易日"
-    lines.append(f"## 《{prev_title} 预测：{trade_date} 命中情况》\n")
 
-    prev_topN_df = _load_json_topN(outdir, prev_td)
-    prev_hit_df, _prev_metrics = _topN_to_hit_df(prev_topN_df, limit_df_current)
-    if prev_topN_df is None or prev_topN_df.empty:
-        lines.append("（未找到上一交易日预测文件或上一交易日 Top10 为空）\n\n")
-    else:
-        lines.append(_df_to_md_table(prev_hit_df, cols=["ts_code", "name", "prob", "命中", "板块"]))
-        lines.append("\n")
 
     # 第3块：强度列表（trade_date 所有涨停）
     lines.append(f"## 《{trade_date} 所有涨停股票的强度列表》\n")
@@ -710,6 +700,20 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         ))
         lines.append("\n")
 
+    # 第2块：命中情况（prev_td -> trade_date）
+    prev_title = prev_td if prev_td else "上一交易日"
+    lines.append(f"## 《{prev_title} 预测：{trade_date} 命中情况》\n")
+
+    prev_topN_df = _load_json_topN(outdir, prev_td)
+    prev_hit_df, _prev_metrics = _topN_to_hit_df(prev_topN_df, limit_df_current)
+    if prev_topN_df is None or prev_topN_df.empty:
+        lines.append("（未找到上一交易日预测文件或上一交易日 Top10 为空）\n\n")
+    else:
+        lines.append(_df_to_md_table(prev_hit_df, cols=["ts_code", "name", "prob", "命中", "板块"]))
+        lines.append("\n")
+
+
+    
     # 第4块：近10日命中率（predict_date -> next_trade_date 验证日）
     hist_df = _recent_hit_history(outdir, settings, ctx, max_days=10)
     if hist_df is not None and not hist_df.empty:
