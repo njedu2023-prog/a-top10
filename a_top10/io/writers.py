@@ -441,7 +441,8 @@ def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
 
     # strength
     if "强度得分" not in d.columns:
-        s = _first_existing_col(d, ["StrengthScore", "强度得分", "强度", "_strength"])
+        # 优先使用 Step6 真实强度字段
+       s = _first_existing_col(d, ["_strength", "StrengthScore", "强度得分", "强度"])
         if s:
             d["强度得分"] = d[s]
         else:
