@@ -186,6 +186,31 @@ def _build_code_sets(df: pd.DataFrame, candidates: Sequence[str]) -> Tuple[str, 
     return code_col or "", ts_set, c6_set
 
 
+def _count_limitups(limit_df: Optional[pd.DataFrame]) -> int:
+    """
+    ✅ 统一口径：统计“当日涨停家数”
+    - 优先按代码列规范化后去重统计
+    - 若无代码列：退化为行数
+    """
+    if limit_df is None or limit_df.empty:
+        return 0
+
+    code_col = _first_existing_col(limit_df, CODE_COL_CANDIDATES)
+    if not code_col:
+        return int(len(limit_df))
+
+    uniq: set = set()
+    for v in limit_df[code_col].tolist():
+        ts, c6 = _norm_code(v)
+        if ts:
+            uniq.add(ts)
+        elif c6:
+            uniq.add(c6)
+
+    # 若全是空值导致 uniq 为空，退化为行数
+    return int(len(uniq)) if uniq else int(len(limit_df))
+
+
 def _resolve_snapshot_dir(settings, ctx, trade_date: str) -> Optional[Path]:
     cands: List[Path] = []
     p = _ctx_path(ctx, ["snapshot_dir", "snap_dir", "snapshot_path"])
@@ -267,14 +292,14 @@ def _load_limit_df(settings, ctx, trade_date: str) -> pd.DataFrame:
 def _topN_to_hit_df(topN_df: Optional[pd.DataFrame], limit_df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     metrics: Dict[str, Any] = {}
     if topN_df is None or topN_df.empty:
-        metrics.update({"hit_count": 0, "top_count": 0, "limit_count": 0, "hit_rate": ""})
+        metrics.update({"hit_count": 0, "top_count": 0, "limit_count": _count_limitups(limit_df), "hit_rate": ""})
         return pd.DataFrame(), metrics
 
     df = topN_df.copy()
 
     code_col = _first_existing_col(df, CODE_COL_CANDIDATES)
     if not code_col:
-        metrics.update({"hit_count": 0, "top_count": len(df), "limit_count": 0, "hit_rate": ""})
+        metrics.update({"hit_count": 0, "top_count": len(df), "limit_count": _count_limitups(limit_df), "hit_rate": ""})
         df["命中"] = ""
         df["板块"] = df.get("board", "")
         return df, metrics
@@ -298,8 +323,10 @@ def _topN_to_hit_df(topN_df: Optional[pd.DataFrame], limit_df: pd.DataFrame) -> 
 
     top_count = len(df)
 
+    # ✅ 验证日涨停家数：统一口径（去重代码）
+    limit_count = _count_limitups(limit_df)
+
     _, limit_ts, limit_c6 = _build_code_sets(limit_df, CODE_COL_CANDIDATES)
-    limit_count = max(len(limit_ts), len(limit_c6))
 
     hits = []
     hit_count = 0
@@ -441,7 +468,7 @@ def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
 
     # strength
     if "强度得分" not in d.columns:
-    # 优先使用 Step6 真实强度字段
+        # ✅ 优先使用 Step6 真实强度字段
         s = _first_existing_col(d, ["_strength", "StrengthScore", "强度得分", "强度"])
         if s:
             d["强度得分"] = d[s]
@@ -551,7 +578,6 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
     return m
 
 
-
 def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.DataFrame:
     """
     近10日命中率口径：predict_date -> next_trade_date 的 limit_list。
@@ -573,12 +599,14 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
             continue
 
         topN_df = _load_json_topN(outdir, d)
-        ldf = _load_limit_df(settings, ctx, next_td)
-        _, mres = _topN_to_hit_df(topN_df, ldf)
+
+        # ✅ 验证日涨停：用 next_td 的 limit_list
+        ldf_verify = _load_limit_df(settings, ctx, next_td)
+
+        _, mres = _topN_to_hit_df(topN_df, ldf_verify)
 
         hit_count = mres.get("hit_count")
         top_count = mres.get("top_count")
-        limit_count = mres.get("limit_count")
         hit_rate = mres.get("hit_rate")
 
         if hit_count is None or top_count is None:
@@ -588,7 +616,8 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
             "日期": d,
             "命中数": int(hit_count),
             "命中率": str(hit_rate) if hit_rate is not None else "",
-            "当日涨停家数": int(limit_count) if limit_count is not None else 0,
+            # ✅ 当日涨停家数：严格按验证日数据统计
+            "当日涨停家数": _count_limitups(ldf_verify),
         })
         if len(rows) >= max_days:
             break
@@ -614,7 +643,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     if isinstance(topn, dict):
         topN_df = _pick_first_not_none(topn, ["topN", "topn", "TopN", "top"])
         full_df = topn.get("full") if "full" in topn else None
-        # ✅ Step6 新增：limit_up_table（优先用于第3块）
+        # ✅ Step6 新增：limit_up_table（优先用于第2块）
         limit_up_table_df = topn.get("limit_up_table") if "limit_up_table" in topn else None
     else:
         topN_df = topn
@@ -627,15 +656,15 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     calendar = _list_trade_dates(settings)
     prev_td, next_td = _prev_next_trade_date_with_fallback(calendar, trade_date)
 
-    # 本日 limit_list（用于第2块验证命中；第3块强度列表 fallback）
+    # 本日 limit_list（用于第2块强度列表 fallback / 第3块命中）
     limit_df_current = _load_limit_df(settings, ctx, trade_date)
 
-    # JSON payload：保持兼容，不大动 payload 结构（metrics 仍按“预测日验证预测日”的旧口径）
+    # JSON payload：保持兼容，不大动 payload 结构
     _hit_df_same_day, metrics_same_day = _topN_to_hit_df(topN_df, limit_df_current)
 
     payload: Dict[str, Any] = {
         "trade_date": trade_date,
-        "verify_date": next_td,  # 下一交易日：预测目标日（report 第1块标题里的那个）
+        "verify_date": next_td,  # 下一交易日：预测目标日
         "gate": gate,
         "topN": [] if topN_df is None else topN_df.to_dict(orient="records"),
         "full": [] if full_df is None else full_df.to_dict(orient="records"),
@@ -676,7 +705,6 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         ))
         lines.append("\n")
 
-
     # 第2块：强度列表（trade_date 所有涨停）
     lines.append(f"## 《{trade_date} 所有涨停股票的强度列表》\n")
 
@@ -693,7 +721,6 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     if strength_limit_df is None or strength_limit_df.empty:
         lines.append("(未能生成强度列表：limit_list 或 full_df 空，且未提供 limit_up_table)\n\n")
     else:
-        # 输出统一列：排名/代码/股票/Probability/强度得分/题材加成/板块
         lines.append(_df_to_md_table(
             strength_limit_df,
             cols=["排名", "代码", "股票", "Probability", "强度得分", "题材加成", "板块"],
@@ -712,8 +739,6 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         lines.append(_df_to_md_table(prev_hit_df, cols=["ts_code", "name", "prob", "命中", "板块"]))
         lines.append("\n")
 
-
-    
     # 第4块：近10日命中率（predict_date -> next_trade_date 验证日）
     hist_df = _recent_hit_history(outdir, settings, ctx, max_days=10)
     if hist_df is not None and not hist_df.empty:
