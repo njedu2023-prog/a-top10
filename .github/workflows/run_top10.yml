@@ -89,7 +89,12 @@ jobs:
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
+
+          # ✅ writers 需要 tabulate
           pip install -U tabulate
+
+          # ✅ Step7 需要 lightgbm（否则永远无法生成 step5_lgbm.joblib）
+          pip install -U lightgbm
 
       - name: Resolve trade_date (manual or auto)
         id: resolve_date
@@ -210,7 +215,7 @@ jobs:
             python -m a_top10
           fi
 
-          # ✅ Step7：自学习闭环
+          # ✅ Step7：自学习闭环（会写 outputs/learning 报告 + models/*.joblib）
           python -m a_top10.steps.step7_self_learning
 
       - name: Step7 artifacts check + stamp (always)
@@ -227,15 +232,15 @@ jobs:
           echo "====== LIST outputs/learning ======"
           ls -la outputs/learning || true
 
-          echo "====== LIST outputs/models ======"
-          ls -la outputs/models || true
+          echo "====== LIST models (repo root) ======"
+          ls -la models || true
 
           # ✅ 关键：写一个每次必变的哨兵文件，保证你在仓库“看得见 Step7 跑过”
           mkdir -p outputs/learning
           echo "run_id=${rid} trade_date=${td} utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "outputs/learning/_last_run_${td}_${rid}.txt"
           echo "STAMP written: outputs/learning/_last_run_${td}_${rid}.txt"
 
-      - name: Commit & push outputs (always)
+      - name: Commit & push outputs + models (always)
         if: always()
         shell: bash
         run: |
@@ -244,10 +249,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # ✅ 只提交 outputs（避免把 _warehouse 等目录误提交）
-          git add -A outputs
+          # ✅ 只提交 outputs + models（避免把 _warehouse 等目录误提交）
+          git add -A outputs models
 
-          echo "====== git status (after add outputs) ======"
+          echo "====== git status (after add outputs+models) ======"
           git status --porcelain
 
           if [ -z "$(git status --porcelain)" ]; then
