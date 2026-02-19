@@ -661,6 +661,7 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
     3) pseudo-sigmoid（兜底）
 
     ✅ 每次推断后自动写入 feature_history.csv
+    ✅ 若模型输出“几乎全一样”，自动用 pseudo 做轻量 tie-break（解决你截图那种全同概率）
     """
     raw_input = _ensure_df(theme_df)
     if raw_input.empty:
@@ -672,71 +673,81 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
     # 保留全字段（非常关键）
     out = raw_input.copy()
 
-    # 特征单独提取（不破坏 out）
+    # 统一 id + 特征
+    ts_norm = _normalize_id_columns(raw_input)
+    ts_series = (
+        ts_norm["ts_code"].astype(str).str.strip()
+        if "ts_code" in ts_norm.columns
+        else pd.Series([""] * len(out))
+    )
+
     feat = _ensure_features(raw_input)
     X = feat[FEATURES].astype(float).values
 
-    # 若全部特征都一样/全 0，后面概率很容易完全相同（这是你截图的最常见成因）
-    # 我们仍然算，但会加极小 jitter 让你肉眼能看到“排序真的有差异”，同时不影响量级。
-    ts_norm = _normalize_id_columns(raw_input)
-    ts_series = ts_norm["ts_code"].astype(str).str.strip() if "ts_code" in ts_norm.columns else pd.Series([""] * len(out))
+    # 伪概率（用于兜底，也用于“同分时”做 tie-break）
+    def _pseudo_proba() -> np.ndarray:
+        strength = np.clip(feat["StrengthScore"].astype(float).values / 100.0, 0.0, 1.5)
+        theme = np.clip(feat["ThemeBoost"].astype(float).values, 0.0, 2.0)
 
+        seal = feat["seal_amount"].astype(float).values
+        seal = _safe_log1p_pos(seal)
+        seal = np.clip(seal / 16.0, 0.0, 1.5)
+
+        opens = np.clip(feat["open_times"].astype(float).values, 0.0, 20.0)
+        turnover = np.clip(feat["turnover_rate"].astype(float).values, 0.0, 50.0) / 50.0
+
+        z = (
+            1.20 * strength
+            + 1.10 * theme
+            + 0.90 * seal
+            + 0.35 * turnover
+            - 0.60 * (opens / 10.0)
+        )
+        return _sigmoid(z)
+
+    def _post_process(proba: np.ndarray, src: str) -> pd.DataFrame:
+        # clip + 极小确定性 jitter（防止完全一样导致排序肉眼误判）
+        proba = np.clip(proba, 0.0, 1.0)
+        proba = proba + np.array([_stable_jitter_from_ts(t) for t in ts_series.values], dtype=float)
+
+        # 如果模型输出“几乎常数”，用 pseudo 做轻量 tie-break（非常关键：解决你截图）
+        # 这里是“微扰融合”：不改概率量级，但能拉开相对次序
+        try:
+            if np.nanstd(proba) < 1e-8:
+                p2 = _pseudo_proba()
+                proba = 0.98 * proba + 0.02 * p2
+                src = f"{src}+tie"
+        except Exception:
+            pass
+
+        out2 = out.copy()
+        out2["Probability"] = np.clip(proba, 0.0, 1.0)
+        out2["_prob_src"] = src
+
+        td = _guess_trade_date(raw_input)
+        _write_feature_history(raw_input_df=raw_input, out_df=out2, trade_date=td, s=s)
+        return out2.sort_values("Probability", ascending=False)
+
+    # 1) LGBM
     m_lgbm = load_lgbm(s=s)
     if m_lgbm is not None:
         try:
             proba = m_lgbm.predict_proba(X)[:, 1]
-            proba = np.clip(proba, 0.0, 1.0)
-            proba = proba + np.array([_stable_jitter_from_ts(t) for t in ts_series.values], dtype=float)
-            out["Probability"] = np.clip(proba, 0.0, 1.0)
-            out["_prob_src"] = "lgbm"
-            td = _guess_trade_date(raw_input)
-            _write_feature_history(raw_input_df=raw_input, out_df=out, trade_date=td, s=s)
-            return out.sort_values("Probability", ascending=False)
+            return _post_process(proba, "lgbm")
         except Exception:
             pass
 
+    # 2) LR
     m_lr = load_lr(s=s)
     if m_lr is not None:
         try:
             proba = m_lr.predict_proba(X)[:, 1]
-            proba = np.clip(proba, 0.0, 1.0)
-            proba = proba + np.array([_stable_jitter_from_ts(t) for t in ts_series.values], dtype=float)
-            out["Probability"] = np.clip(proba, 0.0, 1.0)
-            out["_prob_src"] = "lr"
-            td = _guess_trade_date(raw_input)
-            _write_feature_history(raw_input_df=raw_input, out_df=out, trade_date=td, s=s)
-            return out.sort_values("Probability", ascending=False)
+            return _post_process(proba, "lr")
         except Exception:
             pass
 
-    # 兜底 pseudo probability（保证跑通）
-    strength = np.clip(feat["StrengthScore"].astype(float).values / 100.0, 0.0, 1.5)
-    theme = np.clip(feat["ThemeBoost"].astype(float).values, 0.0, 2.0)
-
-    seal = feat["seal_amount"].astype(float).values
-    seal = _safe_log1p_pos(seal)
-    seal = np.clip(seal / 16.0, 0.0, 1.5)
-
-    opens = np.clip(feat["open_times"].astype(float).values, 0.0, 20.0)
-    turnover = np.clip(feat["turnover_rate"].astype(float).values, 0.0, 50.0) / 50.0
-
-    z = (
-        1.20 * strength
-        + 1.10 * theme
-        + 0.90 * seal
-        + 0.35 * turnover
-        - 0.60 * (opens / 10.0)
-    )
-
-    proba = _sigmoid(z)
-    proba = proba + np.array([_stable_jitter_from_ts(t) for t in ts_series.values], dtype=float)
-    out["Probability"] = np.clip(proba, 0.0, 1.0)
-    out["_prob_src"] = "pseudo"
-
-    td = _guess_trade_date(raw_input)
-    _write_feature_history(raw_input_df=raw_input, out_df=out, trade_date=td, s=s)
-
-    return out.sort_values("Probability", ascending=False)
+    # 3) 兜底 pseudo
+    return _post_process(_pseudo_proba(), "pseudo")
 
 
 def run(df: pd.DataFrame, s=None) -> pd.DataFrame:
