@@ -1,5 +1,13 @@
 {
   "trade_date": "20260211",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260211",
+  "snapshot_files": {},
+  "params": {
+    "rank_decay_k": 0.18,
+    "topk_industry": 40,
+    "dragon_bonus": 0.08,
+    "fuzzy_max_rows": 300
+  },
   "hot_boards_rows": 10,
   "hot_boards_cols": [
     "trade_date",
@@ -39,15 +47,19 @@
     ]
   },
   "candidate": {
+    "rows": 73,
     "code_col": "ts_code",
     "industry_col_before": "industry",
     "industry_col_final": "industry",
     "industry_nonblank_ratio_before": 1.0,
-    "industry_nonblank_ratio_final": 1.0
+    "industry_nonblank_ratio_final": 1.0,
+    "stock_basic_rows": 5483,
+    "top_list_rows": 62
   },
   "matched_industry_count": 41,
   "dragon_hits": 29,
   "theme_boost_nonzero": 51,
+  "apply_reason": "",
   "matched_industry_detail": {
     "exact": 39,
     "normalized": 0,
