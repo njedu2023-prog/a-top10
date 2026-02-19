@@ -379,6 +379,9 @@ def _prev_next_trade_date_with_fallback(calendar: List[str], trade_date: str) ->
 
 
 def _load_json_topN(outdir: Path, td: str) -> Optional[pd.DataFrame]:
+    # ✅ 修复：td 为空时不要读 predict_top10_.json
+    if not td:
+        return None
     p = outdir / f"predict_top10_{td}.json"
     if not p.exists():
         return None
@@ -619,7 +622,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     limit_df_current = _load_limit_df(settings, ctx, trade_date)
 
     # JSON payload：保持兼容，不大动 payload 结构（metrics 仍按“预测日验证预测日”的旧口径）
-    hit_df_same_day, metrics_same_day = _topN_to_hit_df(topN_df, limit_df_current)
+    _hit_df_same_day, metrics_same_day = _topN_to_hit_df(topN_df, limit_df_current)
 
     payload: Dict[str, Any] = {
         "trade_date": trade_date,
@@ -665,7 +668,9 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         lines.append("\n")
 
     # 第2块：命中情况（prev_td -> trade_date）
-    lines.append(f"## 《{prev_td} 预测：{trade_date} 命中情况》\n")
+    prev_title = prev_td if prev_td else "上一交易日"
+    lines.append(f"## 《{prev_title} 预测：{trade_date} 命中情况》\n")
+
     prev_topN_df = _load_json_topN(outdir, prev_td)
     prev_hit_df, _prev_metrics = _topN_to_hit_df(prev_topN_df, limit_df_current)
     if prev_topN_df is None or prev_topN_df.empty:
