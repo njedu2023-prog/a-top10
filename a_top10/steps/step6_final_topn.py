@@ -4,17 +4,13 @@
 """
 Step6: Final Selector (TopN + Full Ranking) — Quant/Production Edition (Enhanced)
 
-【本版本新增兜底修复】
-- 若 Step6 输入 df 没带 Step3 的 StrengthScore（导致最终“强度得分=0”），将自动尝试从本地输出文件合并：
-  outputs/step3_strength_{trade_date}.csv  或 outputs/step3_strength.csv（以及同目录备选）
-- 触发条件：
-  1) strength 列找不到；或
-  2) strength 解析后非零占比很低（默认 < 1%）；或
-  3) settings 显式指定强制合并
-- 合并逻辑：
-  - 以 ts_code 为 key 左连接
-  - 回填策略默认：仅对当前 _strength==0 的行，用外部 StrengthScore 覆盖（避免误覆盖上游已计算值）
-  - 可通过 settings 调整（见 Step6Config.enrich_*）
+【本版本新增兜底修复 + 报告表增强】
+1) 若 Step6 输入 df 没带 Step3 的 StrengthScore（导致最终“强度得分=0”），将自动尝试从本地输出文件合并：
+   outputs/step3_strength_{trade_date}.csv  或 outputs/step3_strength.csv（以及同目录备选）
+2) 新增输出 limit_up_table（不破坏主返回结构）：
+   - 用于报告《所有涨停股票的强度列表》字段对齐 Top10 表：
+     排名序号 / Probability / 强度得分 / 题材加成 / 板块
+   - 需要 Step6 的输入是 dict 且包含当日涨停列表 DataFrame（例如 keys: limit_list_d/limit_up/limit_df 等）
 """
 
 from __future__ import annotations
@@ -22,7 +18,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, List
 import hashlib
-import os
 from pathlib import Path
 
 import numpy as np
@@ -199,11 +194,44 @@ def _detect_trade_date(df: pd.DataFrame, s: Any) -> Optional[str]:
 
     td_col = _first_existing_col(df, ["trade_date", "TRADE_DATE", "TradeDate", "date", "日期"])
     if td_col and td_col in df.columns:
-        # 取出现最多的那个（更稳）
         vals = df[td_col].astype("object").dropna().astype(str).str.strip()
         vals = vals[vals != ""]
         if len(vals) > 0:
             return vals.value_counts().index[0]
+    return None
+
+
+def _find_limit_up_df(src: Optional[Mapping[str, Any]]) -> Optional[pd.DataFrame]:
+    """
+    从 Step6 输入 dict 中探测“当日涨停列表”DataFrame。
+    兼容常见 key：
+      limit_list_d / limit_list / limit_up / limitup / limit_df / limit / stk_limit / limit_break_d ...
+    """
+    if not src:
+        return None
+
+    keys = list(src.keys())
+    prefer = [
+        "limit_list_d", "limit_list", "limit_up", "limitup", "limit_df", "limit",
+        "stk_limit", "limit_break_d", "limit_list", "limit_list_d.csv"
+    ]
+
+    # 1) 优先按候选 key 精确/忽略大小写匹配
+    lower_map = {str(k).lower(): k for k in keys}
+    for k in prefer:
+        lk = str(k).lower()
+        if lk in lower_map:
+            v = src.get(lower_map[lk])
+            if isinstance(v, pd.DataFrame) and not v.empty:
+                return v
+
+    # 2) 再遍历 values：列中含 ts_code 且看起来是涨停列表
+    for v in src.values():
+        if isinstance(v, pd.DataFrame) and not v.empty:
+            tc = _first_existing_col(v, ["ts_code", "TS_CODE", "code", "symbol", "证券代码", "代码"])
+            if tc:
+                return v
+
     return None
 
 
@@ -214,7 +242,7 @@ def _try_enrich_strength_from_step3(
     strength_present: bool,
     strength_nonzero_ratio: float,
     warnings: List[str],
-) -> Dict[str, Any]:
+):
     """
     如果 Step6 输入 df 没带强度列（或几乎全 0），自动从 outputs/step3_strength_{trade_date}.csv 合并回填。
     回填策略默认：仅对 out["_strength"]==0 的行，用外部 StrengthScore 覆盖。
@@ -233,8 +261,6 @@ def _try_enrich_strength_from_step3(
     force = bool(_get_setting(s, ["enrich_strength_force", "ENRICH_STRENGTH_FORCE"], False))
     threshold = float(_get_setting(s, ["enrich_strength_nonzero_threshold", "ENRICH_STRENGTH_NONZERO_THRESHOLD"], 0.01))
     fill_mode = str(_get_setting(s, ["enrich_strength_fill_mode", "ENRICH_STRENGTH_FILL_MODE"], "fill_zero")).lower()
-    # fill_zero: 仅填充 _strength==0
-    # overwrite: 直接用外部覆盖（只要外部非空）
     if fill_mode not in ("fill_zero", "overwrite"):
         fill_mode = "fill_zero"
     meta["mode"] = fill_mode
@@ -250,7 +276,6 @@ def _try_enrich_strength_from_step3(
     trade_date = _detect_trade_date(out, s)
     meta["trade_date"] = trade_date
 
-    # 用户可指定 outputs 目录（默认 ./outputs）
     outputs_dir = _get_setting(s, ["outputs_dir", "OUTPUTS_DIR"], "outputs")
     outputs_dir = str(outputs_dir) if outputs_dir is not None else "outputs"
 
@@ -281,7 +306,6 @@ def _try_enrich_strength_from_step3(
     meta["path"] = str(target)
 
     try:
-        # dtype 保持 ts_code 为字符串，防止 002xxx 被读成数字
         strength_df = pd.read_csv(target, dtype={"ts_code": "string"}, encoding="utf-8")
     except UnicodeDecodeError:
         strength_df = pd.read_csv(target, dtype={"ts_code": "string"}, encoding="utf-8-sig")
@@ -297,7 +321,6 @@ def _try_enrich_strength_from_step3(
         meta["used"] = False
         return meta
 
-    # 识别 key / strength 列
     key_col = _first_existing_col(strength_df, ["ts_code", "TS_CODE", "code", "symbol", "ticker", "证券代码", "代码"])
     if key_col is None:
         warnings.append(f"strength enrich: {target} has no ts_code-like column.")
@@ -319,7 +342,6 @@ def _try_enrich_strength_from_step3(
     tmp["__strength_ext__"] = pd.to_numeric(tmp["__strength_ext__"], errors="coerce").astype("float64")
     tmp["__strength_ext__"] = tmp["__strength_ext__"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
-    # 合并（left）
     out_key = out[ts_col].astype("object").fillna("").astype(str).str.strip()
     merged = out.copy()
     merged["__ts_code__"] = out_key
@@ -328,7 +350,6 @@ def _try_enrich_strength_from_step3(
 
     ext = merged["__strength_ext__"].fillna(0.0).astype("float64")
 
-    # 回填策略
     if "_strength" not in merged.columns:
         merged["_strength"] = 0.0
 
@@ -336,13 +357,11 @@ def _try_enrich_strength_from_step3(
     if fill_mode == "overwrite":
         new_strength = np.where(ext > 0, ext, cur)
     else:
-        # fill_zero：只对当前为 0 的行，用 ext 覆盖
         new_strength = np.where((cur <= 0) & (ext > 0), ext, cur)
 
     filled = int(np.sum((cur != new_strength)))
     merged["_strength"] = pd.Series(new_strength, index=merged.index, dtype="float64")
 
-    # 清理临时列
     merged.drop(columns=["__ts_code__", "__strength_ext__"], inplace=True, errors="ignore")
 
     meta["used"] = True
@@ -394,7 +413,7 @@ class Step6Config:
 
     stable_hash_tiebreak: bool = True
 
-    # enrich options (new)
+    # enrich options
     enrich_strength_force: bool = False
     enrich_strength_nonzero_threshold: float = 0.01
     enrich_strength_fill_mode: str = "fill_zero"  # fill_zero | overwrite
@@ -498,6 +517,8 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     warnings: List[str] = []
     cfg = _load_config(s)
 
+    src_mapping: Optional[Mapping[str, Any]] = df if _is_mapping(df) else None
+
     df = _coerce_df(df)
     if df is None or df.empty:
         empty = pd.DataFrame()
@@ -530,7 +551,6 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     out[name_col] = _as_str_series(out, name_col)
     out[board_col] = _as_str_series(out, board_col)
 
-    # fallback if identity columns are effectively empty
     if _is_effectively_empty(out[ts_col]):
         for c in ["ts_code", "TS_CODE", "证券代码", "代码", "股票代码", "code", "symbol", "ticker"]:
             if c in out.columns and not _is_effectively_empty(_as_str_series(out, c)):
@@ -588,10 +608,10 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     theme_nonzero_ratio = _nonzero_ratio(out["_theme"])
     strength_present = (str_col is not None)
 
-    # -------- 2.5) NEW: Enrich strength from Step3 outputs if missing/mostly zero --------
+    # -------- 2.5) Enrich strength from Step3 outputs if missing/mostly zero --------
     enrich_meta: Dict[str, Any] = {"attempted": False, "used": False}
-    # 把 cfg 的 enrich 设置同步回 settings（便于 _try_enrich_strength_from_step3 读取）
-    # （不强制依赖 cfg，但保证用户用 cfg 也能生效）
+
+    # 将 cfg 映射到 dict settings（确保 cfg 生效）
     if s is None:
         s2 = {
             "enrich_strength_force": cfg.enrich_strength_force,
@@ -600,11 +620,8 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
             "outputs_dir": cfg.outputs_dir,
         }
     else:
-        # 允许用户 settings 覆盖 cfg
         s2 = s
 
-    enriched = None
-    # 触发条件：缺失或几乎全 0 或强制
     force = bool(_get_setting(s2, ["enrich_strength_force", "ENRICH_STRENGTH_FORCE"], cfg.enrich_strength_force))
     threshold = float(_get_setting(
         s2, ["enrich_strength_nonzero_threshold", "ENRICH_STRENGTH_NONZERO_THRESHOLD"], cfg.enrich_strength_nonzero_threshold
@@ -620,15 +637,13 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
             strength_nonzero_ratio=strength_nonzero_ratio,
             warnings=warnings,
         )
-        # result 可能是 meta 或 (merged, meta)
         if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], pd.DataFrame):
             out, enrich_meta = result[0], result[1]
-            # enrich 后重新计算 strength 非零占比（用于 meta）
             strength_nonzero_ratio = _nonzero_ratio(out["_strength"])
         elif isinstance(result, dict):
             enrich_meta = result
 
-    # -------- 2.x) factor diagnostics & warnings --------
+    # -------- Diagnostics warnings --------
     if str_col is None:
         warnings.append(f"strength column not found in input df; used strength_default={cfg.strength_default} (may be enriched).")
     else:
@@ -807,6 +822,58 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "emotion_factor": top_df_raw["_emotion_factor"].round(6),
     })
 
+    # -------- 12) NEW: Build limit_up_table for report --------
+    limit_up_table = pd.DataFrame()
+    try:
+        limit_df = _find_limit_up_df(src_mapping)
+        if isinstance(limit_df, pd.DataFrame) and not limit_df.empty:
+            # limit list columns
+            lim_ts = _first_existing_col(limit_df, ["ts_code", "TS_CODE", "code", "symbol", "证券代码", "代码"]) or "ts_code"
+            lim_nm = _first_existing_col(limit_df, ["name", "NAME", "stock_name", "名称", "证券名称", "股票简称", "股票"]) or None
+
+            lim = limit_df.copy()
+            if lim_ts not in lim.columns:
+                lim[lim_ts] = pd.NA
+            lim[lim_ts] = lim[lim_ts].astype("object").fillna("").astype(str).str.strip()
+
+            # build index from full_sorted
+            f = full_sorted.copy()
+            f["_ts_key"] = f[ts_col].astype("object").fillna("").astype(str).str.strip()
+
+            # keep only limit-up codes (intersection)
+            codes = set(lim[lim_ts].tolist())
+            f2 = f[f["_ts_key"].isin(codes)].copy()
+            f2.reset_index(drop=True, inplace=True)
+            if len(f2) > 0:
+                f2["rank_limit"] = f2.index + 1
+
+                # name fallback: prefer full_sorted name, else limit list name
+                nm_full = f2[name_col].astype("object").fillna("").astype(str)
+                if lim_nm and lim_nm in lim.columns:
+                    lim_nm_s = lim[[lim_ts, lim_nm]].copy()
+                    lim_nm_s[lim_ts] = lim_nm_s[lim_ts].astype("object").fillna("").astype(str).str.strip()
+                    lim_nm_s.rename(columns={lim_ts: "_ts_key", lim_nm: "_name_lim"}, inplace=True)
+                    f2 = f2.merge(lim_nm_s, on="_ts_key", how="left")
+                    nm_lim = f2["_name_lim"].astype("object").fillna("").astype(str)
+                    nm_show = np.where(nm_full != "", nm_full, nm_lim)
+                else:
+                    nm_show = nm_full
+
+                # 输出为“报告表字段”
+                limit_up_table = pd.DataFrame({
+                    "排名": f2["rank_limit"].astype(int),
+                    "代码": f2["_ts_key"].astype("object").fillna("").astype(str),
+                    "股票": pd.Series(nm_show, index=f2.index).astype("object"),
+                    "Probability": f2["_prob"].round(6),
+                    "强度得分": f2["_strength"].round(6),
+                    "题材加成": f2["_theme"].round(6),
+                    "板块": f2[board_col].astype("object").fillna("").astype(str),
+                })
+            else:
+                warnings.append("limit_up_table: limit list provided, but no intersection with step6 full_sorted (ts_code mismatch?).")
+    except Exception as e:
+        warnings.append(f"limit_up_table: failed to build: {e}")
+
     meta = {
         "rows_in": int(len(df)),
         "rows_out": int(len(full_sorted)),
@@ -826,14 +893,20 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
             "prob_col": prob_col, "strength_col": str_col, "theme_col": thm_col
         },
         "parse_diag": {"prob": prob_diag, "strength": str_diag, "theme": thm_diag},
-        "nonzero_ratio": {"strength": float(_nonzero_ratio(full_sorted["_strength"])), "theme": float(_nonzero_ratio(full_sorted["_theme"]))},
+        "nonzero_ratio": {
+            "strength": float(_nonzero_ratio(full_sorted["_strength"])),
+            "theme": float(_nonzero_ratio(full_sorted["_theme"]))
+        },
         "enrich_strength": enrich_meta,
+        "limit_up_table_rows": int(len(limit_up_table)) if isinstance(limit_up_table, pd.DataFrame) else 0,
     }
 
+    # ✅ 主返回结构不变，只新增 limit_up_table
     return {
         "topN": top_df,
         "topn": top_df,
         "full": full_sorted,
+        "limit_up_table": limit_up_table,
         "meta": meta,
         "warnings": warnings,
     }
@@ -844,4 +917,4 @@ def run(df: Any, s=None) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    print("Step6 FinalTopN Quant/Production Edition (Enhanced + Strength Enrich) ready.")
+    print("Step6 FinalTopN Quant/Production Edition (Enhanced + Strength Enrich + limit_up_table) ready.")
