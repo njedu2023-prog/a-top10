@@ -7,7 +7,7 @@ Step5 : 概率模型推断（ML核心层） + 可训练闭环（LR + LightGBM）
 输入：
     theme_df（step4输出，至少应包含 FEATURES 所需字段）
 输出：
-    prob_df（附带 Probability / _prob_src 等）
+    prob_df（附带 Probability / _prob_src / _prob_warn）
 
 闭环训练：
     - 训练数据：历史若干天的 step4 输出（建议落盘为 step4_theme.csv）
@@ -22,11 +22,13 @@ Step5 : 概率模型推断（ML核心层） + 可训练闭环（LR + LightGBM）
 ✅ 本终版新增（自学习最后一公里关键）：
 - 每个交易日推断后，自动落盘/追加：outputs/learning/feature_history.csv
   用于 Step7 进行 next_day 打标与训练样本构建。
+- 输出旁路调试：outputs/learning/step5_debug_latest.json
 """
 
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, List, Tuple, Dict, Any
@@ -241,6 +243,10 @@ def _to_nosuffix(ts: str) -> str:
 
 
 def _ensure_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    只负责“生成/清洗 FEATURES 五列”，不负责保留其它列。
+    注意：推断输出 out 必须保留 raw_input 的全部列（修复你现在的“全一样”风险源之一）。
+    """
     df = _ensure_df(df)
     if df.empty:
         out = pd.DataFrame()
@@ -260,7 +266,7 @@ def _ensure_features(df: pd.DataFrame) -> pd.DataFrame:
             .fillna(0.0)
             .astype("float64")
         )
-    return out
+    return out[FEATURES].copy()
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -296,7 +302,7 @@ def _guess_trade_date(df: pd.DataFrame) -> str:
     推断交易日（YYYYMMDD）优先级：
     1) df 中常见日期列（trade_date/date/日期 等）
     2) 环境变量 TRADE_DATE
-    3) 今天日期（Asia/Shanghai 时区由 workflow TZ 控制；这里直接用本机日期兜底）
+    3) 今天日期
     """
     df = _ensure_df(df)
     candidates = ["trade_date", "TRADE_DATE", "date", "日期", "交易日", "dt", "cal_date"]
@@ -315,50 +321,64 @@ def _guess_trade_date(df: pd.DataFrame) -> str:
     if len(env_td) >= 8:
         return env_td[:8]
 
-    # 兜底：当天
     return pd.Timestamp.today().strftime("%Y%m%d")
+
+
+def _write_json_latest(obj: Dict[str, Any], path: Path) -> None:
+    try:
+        _ensure_dir(path.parent)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def _write_feature_history(
     raw_input_df: pd.DataFrame,
+    feat_df: pd.DataFrame,
     out_df: pd.DataFrame,
     trade_date: str,
     s=None,
 ) -> Dict[str, Any]:
     """
     写入 outputs/learning/feature_history.csv（追加模式）
-    - 只写必要字段，保证 Step7 易用
+    - 强制从 raw_input_df 提取 ts_code（保证 Step7 可用）
+    - features 来自 feat_df（已经清洗），prob 来自 out_df
     - 去重策略：同 trade_date + ts_code 去重，保留最新一条
     """
     try:
         raw_input_df = _ensure_df(raw_input_df)
+        feat_df = _ensure_df(feat_df)
         out_df = _ensure_df(out_df)
 
-        out_df2 = out_df.copy()
-        out_df2 = _normalize_id_columns(out_df2)
-        ts_col = _get_ts_code_col(out_df2) or "ts_code"
-        if ts_col not in out_df2.columns:
-            # 兜底：如果真的没有 ts_code，就不写（否则 Step7 没法用）
+        if raw_input_df.empty or feat_df.empty or out_df.empty:
+            return {"ok": False, "reason": "empty input"}
+
+        rid = _normalize_id_columns(raw_input_df.copy())
+        ts_col = _get_ts_code_col(rid) or "ts_code"
+        if ts_col not in rid.columns:
             return {"ok": False, "reason": "missing ts_code for feature_history"}
 
-        # 统一字段
-        keep_cols = ["ts_code"] + FEATURES + ["Probability", "_prob_src"]
-        for c in keep_cols:
-            if c not in out_df2.columns:
-                out_df2[c] = np.nan
-
-        feat = out_df2[keep_cols].copy()
-        feat.rename(columns={ts_col: "ts_code"}, inplace=True)
+        # 对齐索引（防止被 sort 后错位：这里只写“计算当时”的顺序）
+        feat = pd.DataFrame(index=rid.index)
+        feat["ts_code"] = rid[ts_col].astype(str).str.strip()
         feat["trade_date"] = str(trade_date)
 
-        # 类型清洗
-        for c in FEATURES + ["Probability"]:
-            feat[c] = pd.to_numeric(feat[c], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        for c in FEATURES:
+            if c in feat_df.columns:
+                feat[c] = pd.to_numeric(feat_df[c], errors="coerce").replace([np.inf, -np.inf], np.nan)
+            else:
+                feat[c] = np.nan
 
-        feat["_prob_src"] = feat["_prob_src"].astype(str).fillna("")
-        feat["ts_code"] = feat["ts_code"].astype(str).str.strip()
+        if "Probability" in out_df.columns:
+            feat["Probability"] = pd.to_numeric(out_df["Probability"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        else:
+            feat["Probability"] = np.nan
 
-        # 输出路径（强制仓库根目录 outputs/learning）
+        feat["_prob_src"] = out_df.get("_prob_src", "").astype(str) if "_prob_src" in out_df.columns else ""
+        feat["_prob_warn"] = out_df.get("_prob_warn", "").astype(str) if "_prob_warn" in out_df.columns else ""
+
+        # 输出路径
         base = Path("outputs") / "learning"
         _ensure_dir(base)
         fp = base / "feature_history.csv"
@@ -374,7 +394,7 @@ def _write_feature_history(
         merged["ts_code"] = merged["ts_code"].astype(str).str.strip()
         merged = merged.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
 
-        # 排序：按 trade_date 再按 Probability（可选）
+        # 排序
         if "Probability" in merged.columns:
             try:
                 merged["_prob_f"] = pd.to_numeric(merged["Probability"], errors="coerce").fillna(0.0)
@@ -519,7 +539,7 @@ def _build_xy_from_history(
         if ts_col is None:
             continue
 
-        feat_df = _ensure_features(feat_df)
+        feat_only = _ensure_features(feat_df)
         limit_set = _label_from_next_day_limit_list(snap_next)
 
         codes = feat_df[ts_col].astype(str).str.strip().values
@@ -527,7 +547,7 @@ def _build_xy_from_history(
             [1 if (c in limit_set or _to_nosuffix(c) in limit_set) else 0 for c in codes],
             dtype=int,
         )
-        X = feat_df[FEATURES].astype(float).values
+        X = feat_only[FEATURES].astype(float).values
 
         mask = np.isfinite(X).all(axis=1) & (np.abs(X).sum(axis=1) > 0)
         X = X[mask]
@@ -691,69 +711,117 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
     3) pseudo-sigmoid（兜底）
 
     ✅ 每次推断后自动写入 feature_history.csv
+    ✅ 输出 step5_debug_latest.json（定位“为什么概率全一样”）
     """
     raw_input = _ensure_df(theme_df)
-    out = _ensure_features(raw_input)
-
-    if out.empty:
+    if raw_input.empty:
+        out = pd.DataFrame()
         out["Probability"] = pd.Series(dtype="float64")
         out["_prob_src"] = pd.Series(dtype="object")
+        out["_prob_warn"] = pd.Series(dtype="object")
         return out
 
-    X = out[FEATURES].astype(float).values
+    # out 必须保留原始列（修复你当前报告字段/概率异常的关键点）
+    out = raw_input.copy()
+    out["_prob_src"] = ""
+    out["_prob_warn"] = ""
 
+    feat_df = _ensure_features(raw_input)
+    X = feat_df[FEATURES].astype(float).values
+
+    td = _guess_trade_date(raw_input)
+    debug: Dict[str, Any] = {
+        "trade_date": td,
+        "rows": int(len(out)),
+        "features": FEATURES,
+        "feat_stats": {},
+        "model_try": [],
+    }
+
+    # 记录特征统计，用于判断“是不是全行同值导致概率一致”
+    try:
+        for c in FEATURES:
+            s0 = pd.to_numeric(feat_df[c], errors="coerce").replace([np.inf, -np.inf], np.nan)
+            debug["feat_stats"][c] = {
+                "min": float(np.nanmin(s0.values)) if np.isfinite(np.nanmin(s0.values)) else None,
+                "max": float(np.nanmax(s0.values)) if np.isfinite(np.nanmax(s0.values)) else None,
+                "mean": float(np.nanmean(s0.values)) if np.isfinite(np.nanmean(s0.values)) else None,
+                "std": float(np.nanstd(s0.values)) if np.isfinite(np.nanstd(s0.values)) else None,
+                "nan": int(pd.isna(s0).sum()),
+                "zero": int((s0.fillna(0.0).values == 0.0).sum()),
+            }
+    except Exception:
+        pass
+
+    # ---- 1) LGBM ----
     m_lgbm = load_lgbm(s=s)
     if m_lgbm is not None:
         try:
             proba = m_lgbm.predict_proba(X)[:, 1]
             out["Probability"] = np.clip(proba, 0.0, 1.0)
             out["_prob_src"] = "lgbm"
-            # 写 feature_history
-            td = _guess_trade_date(raw_input)
-            _write_feature_history(raw_input_df=raw_input, out_df=out, trade_date=td, s=s)
-            return out.sort_values("Probability", ascending=False)
-        except Exception:
-            pass
+            debug["model_try"].append({"model": "lgbm", "ok": True})
+        except Exception as e:
+            out["_prob_warn"] = f"lgbm_failed:{e}"
+            debug["model_try"].append({"model": "lgbm", "ok": False, "err": str(e)})
 
-    m_lr = load_lr(s=s)
-    if m_lr is not None:
+    # ---- 2) LR ----
+    if ("Probability" not in out.columns) or out["Probability"].isna().all():
+        m_lr = load_lr(s=s)
+        if m_lr is not None:
+            try:
+                proba = m_lr.predict_proba(X)[:, 1]
+                out["Probability"] = np.clip(proba, 0.0, 1.0)
+                out["_prob_src"] = "lr"
+                debug["model_try"].append({"model": "lr", "ok": True})
+            except Exception as e:
+                out["_prob_warn"] = f"lr_failed:{e}"
+                debug["model_try"].append({"model": "lr", "ok": False, "err": str(e)})
+
+    # ---- 3) pseudo fallback ----
+    if ("Probability" not in out.columns) or out["Probability"].isna().all():
+        strength = np.clip(feat_df["StrengthScore"].astype(float).values / 100.0, 0.0, 1.5)
+        theme = np.clip(feat_df["ThemeBoost"].astype(float).values, 0.0, 2.0)
+
+        seal = feat_df["seal_amount"].astype(float).values
+        seal = _safe_log1p_pos(seal)
+        seal = np.clip(seal / 16.0, 0.0, 1.5)
+
+        opens = np.clip(feat_df["open_times"].astype(float).values, 0.0, 20.0)
+        turnover = np.clip(feat_df["turnover_rate"].astype(float).values, 0.0, 50.0) / 50.0
+
+        z = (
+            1.20 * strength
+            + 1.10 * theme
+            + 0.90 * seal
+            + 0.35 * turnover
+            - 0.60 * (opens / 10.0)
+        )
+
+        out["Probability"] = _sigmoid(z)
+        out["_prob_src"] = "pseudo"
+        debug["model_try"].append({"model": "pseudo", "ok": True})
+
+        # 你的截图“0.75026 全一样”就是这里 z 方差≈0 的典型症状
         try:
-            proba = m_lr.predict_proba(X)[:, 1]
-            out["Probability"] = np.clip(proba, 0.0, 1.0)
-            out["_prob_src"] = "lr"
-            td = _guess_trade_date(raw_input)
-            _write_feature_history(raw_input_df=raw_input, out_df=out, trade_date=td, s=s)
-            return out.sort_values("Probability", ascending=False)
+            pstd = float(np.nanstd(out["Probability"].values))
+            debug["prob_std"] = pstd
+            if pstd < 1e-6:
+                out["_prob_warn"] = "pseudo_prob_constant: features likely constant/zero; check Step3/Step4 fields"
         except Exception:
             pass
 
-    # 兜底 pseudo probability（保证跑通）
-    strength = np.clip(out["StrengthScore"].astype(float).values / 100.0, 0.0, 1.5)
-    theme = np.clip(out["ThemeBoost"].astype(float).values, 0.0, 2.0)
-
-    seal = out["seal_amount"].astype(float).values
-    seal = _safe_log1p_pos(seal)
-    seal = np.clip(seal / 16.0, 0.0, 1.5)
-
-    opens = np.clip(out["open_times"].astype(float).values, 0.0, 20.0)
-    turnover = np.clip(out["turnover_rate"].astype(float).values, 0.0, 50.0) / 50.0
-
-    z = (
-        1.20 * strength
-        + 1.10 * theme
-        + 0.90 * seal
-        + 0.35 * turnover
-        - 0.60 * (opens / 10.0)
-    )
-
-    out["Probability"] = _sigmoid(z)
-    out["_prob_src"] = "pseudo"
+    # 写 debug（定位必需）
+    _write_json_latest(debug, Path("outputs") / "learning" / "step5_debug_latest.json")
 
     # 写 feature_history（无论何种推断来源，都落盘）
-    td = _guess_trade_date(raw_input)
-    _write_feature_history(raw_input_df=raw_input, out_df=out, trade_date=td, s=s)
+    _write_feature_history(raw_input_df=raw_input, feat_df=feat_df, out_df=out, trade_date=td, s=s)
 
-    return out.sort_values("Probability", ascending=False)
+    # 排序返回（但 feature_history 用的是未排序索引对齐）
+    try:
+        return out.sort_values("Probability", ascending=False)
+    except Exception:
+        return out
 
 
 def run(df: pd.DataFrame, s=None) -> pd.DataFrame:
