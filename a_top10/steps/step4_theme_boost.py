@@ -210,10 +210,8 @@ def _read_csv_guess(path: Path) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def _read_csv_guess_from_text(path: Path) -> pd.DataFrame:
-    """
-    用于 learning/step4_theme.csv：尽量读出来（兼容 Actions 上历史文件编码差异）
-    """
+def _read_csv_guess_any(path: Path) -> pd.DataFrame:
+    """兼容 Actions 上历史文件编码差异"""
     if path is None or not Path(path).exists():
         return pd.DataFrame()
     for enc in ("utf-8", "utf-8-sig", "gbk"):
@@ -222,7 +220,6 @@ def _read_csv_guess_from_text(path: Path) -> pd.DataFrame:
         except Exception:
             continue
     try:
-        # 最后兜底：不指定 encoding
         return pd.read_csv(path, dtype=str)
     except Exception:
         return pd.DataFrame()
@@ -254,11 +251,12 @@ def _ensure_outputs_dir(ctx: Dict[str, Any], s: Optional[Settings]) -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
+    # 兼容 settings 里可能的输出目录定义
     if s is not None:
         try:
-            od = getattr(s, "output", None)
-            if od is not None and hasattr(od, "dir"):
-                p2 = Path(od.dir)
+            io = getattr(s, "io", None)
+            if io is not None and hasattr(io, "outputs_dir") and getattr(io, "outputs_dir"):
+                p2 = Path(getattr(io, "outputs_dir"))
                 p2.mkdir(parents=True, exist_ok=True)
                 return p2
         except Exception:
@@ -270,7 +268,6 @@ def _ensure_outputs_dir(ctx: Dict[str, Any], s: Optional[Settings]) -> Path:
 
 
 def _ensure_learning_dir(ctx: Dict[str, Any], s: Optional[Settings]) -> Path:
-    # learning 目录固定在 outputs/learning（GitHub 工作区）
     base = _ensure_outputs_dir(ctx, s)
     p = base / "learning"
     p.mkdir(parents=True, exist_ok=True)
@@ -286,9 +283,7 @@ def _resolve_trade_date(ctx: Dict[str, Any]) -> str:
 
 
 def _get_weights_value(s: Optional[Settings], key: str, default: Any) -> Any:
-    """
-    兼容 Settings.weights 既可能是对象也可能是 dict 的情况。
-    """
+    """兼容 Settings.weights 既可能是对象也可能是 dict 的情况。"""
     if s is None:
         return default
     w = getattr(s, "weights", None)
@@ -330,6 +325,79 @@ def _get_fuzzy_max_rows(s: Optional[Settings], default: int = DEFAULT_FUZZY_MAX_
         return int(default)
 
 
+def _series_nonblank_ratio(sr: Optional[pd.Series]) -> float:
+    if sr is None or len(sr) == 0:
+        return 0.0
+    vals = sr.astype(str).map(_safe_str)
+    return float((vals != "").mean())
+
+
+# -------------------------
+# ✅ Step5 特征透传保障（关键修复）
+# -------------------------
+_STEP5_FEATURE_ALIASES: Dict[str, Sequence[str]] = {
+    "StrengthScore": ["StrengthScore", "strengthscore", "strength_score", "Strength", "strength", "强度得分", "强度", "强度分"],
+    "ThemeBoost": ["ThemeBoost", "themeboost", "theme_boost", "题材加成", "题材", "Theme"],
+    "seal_amount": ["seal_amount", "sealamount", "seal_amt", "seal", "封单金额", "封单"],
+    "open_times": ["open_times", "opentimes", "open_time", "open_count", "openings", "打开次数", "开板次数"],
+    "turnover_rate": ["turnover_rate", "turnoverrate", "turn_rate", "turnover", "换手率", "换手率%"],
+}
+
+
+def _ensure_step5_features_passthrough(df: pd.DataFrame, dbg: Dict[str, Any]) -> pd.DataFrame:
+    """
+    保障 Step4 输出 df 中至少存在 Step5 训练/推断的 5 个核心特征列。
+    规则：
+    - 不覆盖已有标准列
+    - 若存在别名列，映射到标准列（原值透传）
+    - 若仍缺失，创建空列（不强造数据），并记录 dbg
+    """
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    lower_map = {str(c).strip().lower(): c for c in out.columns}
+
+    missing: List[str] = []
+    mapped: Dict[str, str] = {}
+
+    for canon, aliases in _STEP5_FEATURE_ALIASES.items():
+        if canon in out.columns:
+            continue
+
+        found_col = None
+        # 先找大小写等价
+        if canon.lower() in lower_map:
+            found_col = lower_map[canon.lower()]
+        else:
+            for a in aliases:
+                ak = str(a).strip().lower()
+                if ak in lower_map:
+                    found_col = lower_map[ak]
+                    break
+
+        if found_col:
+            out[canon] = out[found_col]
+            mapped[canon] = found_col
+        else:
+            out[canon] = np.nan
+            missing.append(canon)
+
+    # 方便后续步骤读取
+    if "题材加成" not in out.columns and "ThemeBoost" in out.columns:
+        out["题材加成"] = out["ThemeBoost"]
+
+    # 兼容 writers/后续：board 字段也做一份
+    if "board" not in out.columns and "板块" in out.columns:
+        out["board"] = out["板块"]
+
+    dbg["step5_feature_passthrough"] = {
+        "mapped": mapped,
+        "missing": missing,
+    }
+    return out
+
+
 # -------------------------
 # Core: compute ThemeBoost
 # -------------------------
@@ -359,7 +427,6 @@ class ThemeDebug:
     matched_industry_norm: int = 0
     matched_industry_fuzzy: int = 0
 
-    # 额外诊断信息
     industry_map_empty: bool = False
     top_list_rows: int = 0
     stock_basic_rows: int = 0
@@ -370,9 +437,7 @@ def _build_industry_score_map(
     k: float = DEFAULT_RANK_DECAY_K,
     topk: int = DEFAULT_TOPK_INDUSTRY,
 ) -> Tuple[Dict[str, float], Dict[str, Any]]:
-    """
-    从 hot_boards 构建：industry -> score(0..1)
-    """
+    """从 hot_boards 构建：industry -> score(0..1)"""
     dbg: Dict[str, Any] = {}
     if hot_boards is None or hot_boards.empty:
         dbg["ok"] = False
@@ -425,13 +490,6 @@ def _build_industry_score_map(
     return mp, dbg
 
 
-def _series_nonblank_ratio(sr: Optional[pd.Series]) -> float:
-    if sr is None or len(sr) == 0:
-        return 0.0
-    vals = sr.astype(str).map(_safe_str)
-    return float((vals != "").mean())
-
-
 def _enrich_industry_from_stock_basic(
     out: pd.DataFrame,
     code_col: str,
@@ -463,10 +521,8 @@ def _enrich_industry_from_stock_basic(
 
     out2 = out.copy()
     out2["_code6"] = out2[code_col].map(lambda x: _norm_code(x)[1])
-
     out2 = out2.merge(tmp[["_code6", sb_ind_col]], on="_code6", how="left")
 
-    # 组装最终行业列：优先候选原行业，其次 stock_basic 行业
     out2["_industry_final"] = ""
     if ind_col and ind_col in out2.columns:
         out2["_industry_final"] = out2[ind_col].astype(str).map(_safe_str)
@@ -512,6 +568,10 @@ def _apply_industry_and_dragon(
         out["题材加成"] = 0.0
         out["板块"] = ""
         return out, dbg
+
+    # 保障 ts_code 透传（便于 Step5/Step7）
+    if "ts_code" not in out.columns:
+        out["ts_code"] = out[code_col].astype(str).map(_safe_str)
 
     # industry 列（先看候选有没有）
     ind_col_before = _first_existing_col(out, INDUSTRY_COL_CANDIDATES)
@@ -582,7 +642,6 @@ def _apply_industry_and_dragon(
             norm_sc = inds_norm[remain].map(industry_map_norm)
             m_norm = norm_sc.notna()
             if m_norm.any():
-                # ✅ 用布尔 mask 回写，避免 indexer/loc 混用导致错位
                 remain_idx = np.where(remain.to_numpy())[0]
                 hit_pos = remain_idx[m_norm.to_numpy()]
                 industry_boost[hit_pos] = norm_sc[m_norm].astype(float).to_numpy()
@@ -594,7 +653,6 @@ def _apply_industry_and_dragon(
         remain2_mask = (industry_boost == 0.0) & (inds_norm != "")
         remain2_pos = np.where(remain2_mask)[0]
         if len(remain2_pos) > 0 and norm_keys:
-            # 控制极端情况下耗时
             if fuzzy_max_rows and len(remain2_pos) > int(fuzzy_max_rows):
                 remain2_pos = remain2_pos[: int(fuzzy_max_rows)]
 
@@ -687,7 +745,6 @@ def _build_step4_learning_frame(out_df: pd.DataFrame, trade_date: str) -> pd.Dat
     name_col = _first_existing_col(df, NAME_COL_CANDIDATES) or ""
 
     if not code_col:
-        # 没 code 就无法落库（但不能报错）
         return pd.DataFrame(columns=["run_time_utc", "trade_date", "ts_code", "name", "ThemeBoost", "板块"])
 
     run_time_utc = _utc_now_iso()
@@ -716,9 +773,7 @@ def _build_step4_learning_frame(out_df: pd.DataFrame, trade_date: str) -> pd.Dat
 
 
 def _atomic_write_csv(df: pd.DataFrame, path: Path) -> None:
-    """
-    原子写：先写 tmp 再 replace，避免 Actions 中断造成半文件
-    """
+    """原子写：先写 tmp 再 replace，避免 Actions 中断造成半文件"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -740,34 +795,26 @@ def _upsert_step4_learning(learn_df: pd.DataFrame, learning_path: Path) -> Dict[
         dbg["reason"] = "learn_df empty"
         return dbg
 
-    old = _read_csv_guess_from_text(learning_path)
+    old = _read_csv_guess_any(learning_path)
     dbg["rows_old"] = int(len(old)) if isinstance(old, pd.DataFrame) else 0
 
     if old is None or old.empty:
         merged = learn_df.copy()
     else:
-        # 尽量保证旧文件缺列也能合并
         merged = pd.concat([old, learn_df], ignore_index=True, sort=False)
 
-    # schema 补齐（防止历史文件列不全）
     for c in ["run_time_utc", "trade_date", "ts_code", "name", "ThemeBoost", "板块"]:
         if c not in merged.columns:
             merged[c] = ""
 
     merged["trade_date"] = merged["trade_date"].astype(str).map(_safe_str)
     merged["ts_code"] = merged["ts_code"].astype(str).map(_safe_str)
-
-    # run_time_utc 用字符串排序一般也行（ISO8601），这里再做个兜底
     merged["run_time_utc"] = merged["run_time_utc"].astype(str).map(_safe_str)
 
-    # 先按时间排序，再去重保留最后（最新）
     merged = merged.sort_values(["trade_date", "ts_code", "run_time_utc"], ascending=[True, True, True])
     merged = merged.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
 
-    # ThemeBoost 规范为 float
     merged["ThemeBoost"] = pd.to_numeric(merged["ThemeBoost"], errors="coerce").fillna(0.0).astype("float64")
-
-    # 也可以按 trade_date 再整体排序一下（可读性）
     merged = merged.sort_values(["trade_date", "ThemeBoost"], ascending=[True, False]).reset_index(drop=True)
 
     _atomic_write_csv(merged, learning_path)
@@ -785,7 +832,7 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     输入：
       ctx 中应有候选 df（通常 step3 输出），以及 hot_boards / stock_basic / top_list（可选）
     输出：
-      ctx["theme_df"]：带 ThemeBoost/题材加成 的 df
+      ctx["theme_df"]：带 ThemeBoost/题材加成 的 df（且 ✅ 保证 Step5 需要特征列存在）
       ctx["debug"]["step4_theme"]：可复盘诊断
       并尝试落盘：
         outputs/debug_step4_theme_YYYYMMDD.json
@@ -810,7 +857,7 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     stock_basic = _ctx_get_df(ctx, ["stock_basic", "stock_basic_df"])
     top_list = _ctx_get_df(ctx, ["top_list", "top_list_df", "龙虎榜", "longhu"])
 
-    # 若 ctx 里没带 df，尝试从 snapshot_dir 读取
+    # 若 ctx 里没带 df，尝试从 snapshot_dir 读取（best-effort）
     snapshot_dir = _ctx_get_path(ctx, ["snapshot_dir", "snap_dir", "snapshot_path"])
     snapshot_files: Dict[str, str] = {}
     if snapshot_dir is not None:
@@ -905,7 +952,6 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     elif dbg_all["matched_industry_count"] == 0 and dbg_all["dragon_hits"] > 0:
         dbg_all["diagnosis"] = "industry heat NOT applied; only dragon bonus applied -> many 0.08"
     elif dbg_all["matched_industry_count"] == 0 and dbg_all["dragon_hits"] == 0:
-        # 再进一步：可能是行业列没补齐 / 行业几乎全空 / 名称完全对不上
         final_ratio = dbg_all["candidate"].get("industry_nonblank_ratio_final", 0.0)
         if final_ratio < 0.1:
             dbg_all["diagnosis"] = "both industry heat and dragon bonus NOT applied -> likely industry blank (after enrich) and no dragon hits"
@@ -916,6 +962,9 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             )
     else:
         dbg_all["diagnosis"] = "industry heat applied (ok)"
+
+    # ✅ 关键修复：保障 Step5 需要特征列透传到 theme_df
+    out_df = _ensure_step5_features_passthrough(out_df, dbg_all)
 
     ctx["theme_df"] = out_df
     ctx["debug"]["step4_theme"] = dbg_all
@@ -940,7 +989,6 @@ def run_step4(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         ctx["debug"]["step4_theme"]["learning_write"] = dbg_write
         ctx["debug"]["step4_theme"]["learning_file"] = str(learning_path)
     except Exception as e:
-        # 不影响主流程
         ctx["debug"]["step4_theme"]["learning_write"] = {"ok": False, "reason": f"exception: {type(e).__name__}"}
 
     return ctx
