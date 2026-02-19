@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-20 03:42:52",
+  "ts": "2026-02-20 04:35:04",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -11,18 +11,28 @@
     "note": ""
   },
   "train_meta": {
-    "train_rows": 0,
-    "pos": 0,
-    "neg": 0,
-    "feature_history_file": ""
+    "feature_history_file": "outputs/learning/feature_history.csv",
+    "lookback_days": 150,
+    "dates_total": 6,
+    "dates_used": 6,
+    "rows_raw": 488,
+    "rows_used": 345,
+    "rows_dropped_allzero": 143
   },
   "train_result": {
-    "trained": false,
-    "detail": {}
+    "trained": true,
+    "lr_saved": true,
+    "lgbm_saved": false,
+    "models_dir": "models",
+    "detail": {
+      "train_rows": 345,
+      "pos": 78,
+      "neg": 267,
+      "lr_path": "models/step5_lr.joblib",
+      "lgbm_path": ""
+    }
   },
   "warnings": [
-    "no step4 feature files found to build feature_history.",
-    "no feature history file found in outputs/, training skipped.",
-    "train_df empty, skip train_step5_models."
+    "lightgbm not available: LGBM training skipped."
   ]
 }

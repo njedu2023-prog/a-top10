@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-02-20 03:42:52
+- 生成时间：2026-02-20 04:35:04
 - TopN：10
 - Lookback：150 天
 
@@ -13,18 +13,23 @@
 
 ## 2) 训练数据概况
 
-- 样本数：0
-- 正样本：0
-- 负样本：0
-- 特征历史文件：未找到
+- 特征历史文件：outputs/learning/feature_history.csv
+- 原始行数：488
+- 过滤后行数：345
+- 丢弃全零特征行：143
+- 日期总数：6
+- 使用日期：6
 
 ## 3) 训练执行结果
 
-- trained：False
-- detail：{}
+- trained：True
+- lr_saved：True
+- lgbm_saved：False
+- models_dir：models
+- train_rows：345
+- pos/neg：78/267
+- lr_path：models/step5_lr.joblib
 
 ## 4) Warnings
 
-- no step4 feature files found to build feature_history.
-- no feature history file found in outputs/, training skipped.
-- train_df empty, skip train_step5_models.
+- lightgbm not available: LGBM training skipped.

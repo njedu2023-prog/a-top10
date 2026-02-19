@@ -65,5 +65,14 @@
     "normalized": 0,
     "fuzzy_contains": 2
   },
-  "diagnosis": "industry heat applied (ok)"
+  "diagnosis": "industry heat applied (ok)",
+  "step5_feature_passthrough": {
+    "mapped": {},
+    "missing": [
+      "StrengthScore",
+      "seal_amount",
+      "open_times",
+      "turnover_rate"
+    ]
+  }
 }
