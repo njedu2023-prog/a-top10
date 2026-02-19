@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-02-20 04:35:04
+- 生成时间：2026-02-20 05:20:57
 - TopN：10
 - Lookback：150 天
 
@@ -24,12 +24,9 @@
 
 - trained：True
 - lr_saved：True
-- lgbm_saved：False
+- lgbm_saved：True
 - models_dir：models
 - train_rows：345
 - pos/neg：78/267
 - lr_path：models/step5_lr.joblib
-
-## 4) Warnings
-
-- lightgbm not available: LGBM training skipped.
+- lgbm_path：models/step5_lgbm.joblib

@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-20 04:35:04",
+  "ts": "2026-02-20 05:20:57",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -22,17 +22,15 @@
   "train_result": {
     "trained": true,
     "lr_saved": true,
-    "lgbm_saved": false,
+    "lgbm_saved": true,
     "models_dir": "models",
     "detail": {
       "train_rows": 345,
       "pos": 78,
       "neg": 267,
       "lr_path": "models/step5_lr.joblib",
-      "lgbm_path": ""
+      "lgbm_path": "models/step5_lgbm.joblib"
     }
   },
-  "warnings": [
-    "lightgbm not available: LGBM training skipped."
-  ]
+  "warnings": []
 }
