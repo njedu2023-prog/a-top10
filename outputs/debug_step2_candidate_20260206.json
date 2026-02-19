@@ -1,0 +1,37 @@
+{
+  "trade_date": "20260206",
+  "base_source": "limit_list_d/stk_limit",
+  "base_rows": 86,
+  "code_norm": {
+    "found_code_col": "ts_code",
+    "normalized_ratio": 1.0
+  },
+  "stock_basic_rows": 5479,
+  "industry_merge": {
+    "ok": true,
+    "reason": "",
+    "industry_nonblank_ratio_before": 0.0,
+    "industry_nonblank_ratio_after": 1.0,
+    "stock_basic_code_norm": {
+      "found_code_col": "ts_code",
+      "normalized_ratio": 1.0
+    }
+  },
+  "filters": {
+    "drop_st": 0,
+    "drop_delist": 0
+  },
+  "final_rows": 86,
+  "final_cols": [
+    "ts_code",
+    "name",
+    "industry",
+    "trade_date",
+    "limit_type",
+    "close",
+    "up_limit",
+    "down_limit"
+  ],
+  "debug_file": "outputs/debug_step2_candidate_20260206.json",
+  "out_csv": "outputs/step2_candidates_20260206.csv"
+}
