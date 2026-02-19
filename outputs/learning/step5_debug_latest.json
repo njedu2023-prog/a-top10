@@ -1,0 +1,60 @@
+{
+  "trade_date": "20260213",
+  "rows": 55,
+  "features": [
+    "StrengthScore",
+    "ThemeBoost",
+    "seal_amount",
+    "open_times",
+    "turnover_rate"
+  ],
+  "feat_stats": {
+    "StrengthScore": {
+      "min": 0.0,
+      "max": 0.0,
+      "mean": 0.0,
+      "std": 0.0,
+      "nan": 0,
+      "zero": 55
+    },
+    "ThemeBoost": {
+      "min": 0.0,
+      "max": 1.0,
+      "mean": 0.29525659795138703,
+      "std": 0.3229749302421047,
+      "nan": 0,
+      "zero": 12
+    },
+    "seal_amount": {
+      "min": 0.0,
+      "max": 0.0,
+      "mean": 0.0,
+      "std": 0.0,
+      "nan": 0,
+      "zero": 55
+    },
+    "open_times": {
+      "min": 0.0,
+      "max": 0.0,
+      "mean": 0.0,
+      "std": 0.0,
+      "nan": 0,
+      "zero": 55
+    },
+    "turnover_rate": {
+      "min": 0.0,
+      "max": 0.0,
+      "mean": 0.0,
+      "std": 0.0,
+      "nan": 0,
+      "zero": 55
+    }
+  },
+  "model_try": [
+    {
+      "model": "pseudo",
+      "ok": true
+    }
+  ],
+  "prob_std": 0.08234880762526142
+}

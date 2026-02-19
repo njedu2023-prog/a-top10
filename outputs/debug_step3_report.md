@@ -1,16 +1,16 @@
 # Step3 Debug Report
 
-- trade_date: `20260206`
-- rows: 86
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260206`
+- trade_date: `20260213`
+- rows: 55
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260213`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5466
-- daily_basic.csv: 5466
+- daily.csv: 5474
+- daily_basic.csv: 5474
 - top_list.csv: 57
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 86
+- limit_list_d.csv: 55
 - limit_break_d.csv: 0
 
 ## Missing rate
@@ -26,14 +26,14 @@
 
 ```json
 {
-  "trade_date": "20260206",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260206",
+  "trade_date": "20260213",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260213",
   "files": {
-    "daily.csv": 5466,
-    "daily_basic.csv": 5466,
+    "daily.csv": 5474,
+    "daily_basic.csv": 5474,
     "top_list.csv": 57,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 86,
+    "limit_list_d.csv": 55,
     "limit_break_d.csv": 0
   },
   "missing_rate": {
