@@ -2,6 +2,11 @@ name: Run Top10 Engine (Auto Daily)
 
 on:
   schedule:
+    # ✅ GitHub Actions 的 cron 使用 UTC 时区
+    # ✅ 北京时间 Asia/Shanghai = UTC+8
+    # ✅ 周一至周五（1-5）：
+    #    - 19:05 北京时间  => 11:05 UTC
+    #    - 19:35 北京时间  => 11:35 UTC
     - cron: "5 11 * * 1-5"
     - cron: "35 11 * * 1-5"
 
