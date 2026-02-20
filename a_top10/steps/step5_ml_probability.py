@@ -4,24 +4,9 @@
 """
 Step5 : 概率模型推断（ML核心层） + 可训练闭环（LR + LightGBM）
 
-输入：
-    theme_df（step4输出，至少应包含 FEATURES 所需字段）
-输出：
-    prob_df（附带 Probability / _prob_src 等）
-
-闭环训练：
-    - 训练数据：历史若干天的 step4 输出（建议落盘为 step4_theme.csv）
-    - 标签：next_day 是否涨停（用 next_day 的 limit_list_d.csv 来打标）
-    - 模型：
-        1) LogisticRegression（标准化 + class_weight=balanced）
-        2) LightGBM（LGBMClassifier，处理非线性更强）
-    - 持久化：
-        models/step5_lr.joblib
-        models/step5_lgbm.joblib
-
-✅ 本终版新增（自学习最后一公里关键）：
-- 每个交易日推断后，自动落盘/追加：outputs/learning/feature_history.csv
-  用于 Step7 进行 next_day 打标与训练样本构建。
+✅ 关键增强（为了解决 feature_history 全 0）：
+- 写 feature_history.csv 前，若 StrengthScore/turnover_rate/seal_amount/open_times 缺失或全 0，
+  则自动尝试从 outputs/step3_strength_{trade_date}.csv 回补（按 ts_code merge）。
 """
 
 from __future__ import annotations
@@ -54,9 +39,6 @@ except Exception:  # pragma: no cover
 
 from a_top10.config import Settings
 
-# -------------------------
-# Feature set
-# -------------------------
 FEATURES = [
     "StrengthScore",
     "ThemeBoost",
@@ -64,6 +46,7 @@ FEATURES = [
     "open_times",
     "turnover_rate",
 ]
+
 
 # -------------------------
 # Utils
@@ -122,16 +105,12 @@ def _ensure_features(df: pd.DataFrame) -> pd.DataFrame:
     for c in FEATURES:
         if c not in df.columns:
             df[c] = 0.0
-    # 强制数值
     for c in FEATURES:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+        df[c] = pd.to_numeric(df[c], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return df
 
 
 def _guess_trade_date(df: pd.DataFrame) -> str:
-    """
-    尽量从 df 或环境变量推断 trade_date；若失败用当天日期。
-    """
     df = _ensure_df(df)
     for c in ["trade_date", "TradeDate", "日期", "交易日期"]:
         if c in df.columns and len(df) > 0:
@@ -143,24 +122,16 @@ def _guess_trade_date(df: pd.DataFrame) -> str:
     if re.match(r"^\d{8}$", env_td):
         return env_td
 
-    # GitHub Actions 环境里通常没有“交易日”，这里取当天即可（后续 Step0/Step2 也会保证 trade_date 正确）
     return pd.Timestamp.today().strftime("%Y%m%d")
 
 
 def _stable_jitter_from_ts(ts: str) -> float:
-    """
-    给排序做一个极小的确定性扰动，避免“全一样”导致肉眼误判。
-
-    ⚠️ 修复点：
-    - 原先 1e-6 量级在 writers 或报告显示保留 5 位小数时会被“截断成一样”
-    - 这里提升到 1e-4 量级（仍然很小，不改变概率量级），但能在报告里看到差异
-    """
     s = str(ts or "").strip()
     if not s:
         return 0.0
     h = hashlib.md5(s.encode("utf-8")).hexdigest()[:8]
-    v = int(h, 16) / float(16**8)  # 0~1
-    return (v - 0.5) * 2e-4  # -1e-4 ~ +1e-4
+    v = int(h, 16) / float(16**8)
+    return (v - 0.5) * 2e-4
 
 
 def _utc_now_iso() -> str:
@@ -171,7 +142,6 @@ def _utc_now_iso() -> str:
 
 
 def _read_sampling_state(outputs_dir: Path) -> Dict[str, Any]:
-    """读取 Step7 生成的采样状态。不存在则返回默认值。"""
     p = outputs_dir / "learning" / "sampling_state.json"
     if not p.exists():
         return {}
@@ -182,15 +152,74 @@ def _read_sampling_state(outputs_dir: Path) -> Dict[str, Any]:
 
 
 def _get_target_rows_per_day(s=None) -> int:
-    """自动采样：默认 200，若 sampling_state.json 存在则按其 target_rows_per_day。"""
     outputs_dir = Path(getattr(getattr(s, "io", None), "outputs_dir", "outputs")) if s is not None else Path("outputs")
     st = _read_sampling_state(outputs_dir)
     try:
         v = int(st.get("target_rows_per_day", 200))
     except Exception:
         v = 200
-    # 安全夹紧：防止写入过大导致仓库膨胀或 CI 超时
     return int(max(50, min(2000, v)))
+
+
+def _read_step3_strength_file(outputs_dir: Path, trade_date: str) -> pd.DataFrame:
+    p = outputs_dir / f"step3_strength_{trade_date}.csv"
+    if not p.exists():
+        return pd.DataFrame()
+    for enc in ("utf-8", "utf-8-sig", "gbk"):
+        try:
+            return pd.read_csv(p, dtype=str, encoding=enc)
+        except Exception:
+            continue
+    try:
+        return pd.read_csv(p, dtype=str)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _backfill_features_from_step3(raw_input_df: pd.DataFrame, trade_date: str, outputs_dir: Path) -> pd.DataFrame:
+    """
+    ✅ 硬兜底：从 outputs/step3_strength_{trade_date}.csv 回补关键特征
+    """
+    df = _normalize_id_columns(_ensure_df(raw_input_df)).copy()
+    if df.empty or "ts_code" not in df.columns:
+        return df
+
+    step3 = _read_step3_strength_file(outputs_dir, trade_date)
+    if step3 is None or step3.empty:
+        return df
+
+    step3 = _normalize_id_columns(step3)
+    if "ts_code" not in step3.columns:
+        return df
+
+    need_cols = ["StrengthScore", "turnover_rate", "seal_amount", "open_times"]
+    for c in need_cols:
+        if c not in step3.columns:
+            step3[c] = "0"
+
+    step3_small = step3[["ts_code"] + need_cols].copy()
+    for c in need_cols:
+        step3_small[c] = pd.to_numeric(step3_small[c], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    merged = df.merge(step3_small, on="ts_code", how="left", suffixes=("", "_s3"))
+
+    for c in need_cols:
+        # 若原列缺失或全 0，则用 step3 回补
+        if c not in merged.columns:
+            merged[c] = 0.0
+        x = pd.to_numeric(merged[c], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        y = pd.to_numeric(merged.get(f"{c}_s3", 0.0), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+        if float((x != 0.0).mean()) < 0.05 and float((y != 0.0).mean()) > 0.05:
+            merged[c] = y
+        else:
+            # 仅对空值回补
+            merged[c] = x.where(x != 0.0, y)
+
+        if f"{c}_s3" in merged.columns:
+            merged = merged.drop(columns=[f"{c}_s3"])
+
+    return merged
 
 
 def _write_feature_history(
@@ -199,34 +228,25 @@ def _write_feature_history(
     trade_date: str,
     s=None,
 ) -> Dict[str, Any]:
-    """
-    写入 outputs/learning/feature_history.csv（追加模式）
-
-    ✅ 自动采样（Auto-Sampling）：
-    - 默认每天写入 Full Ranking 的前 N 行（N=200/500/1000 由 Step7 输出 sampling_state.json 决定）
-    - 同 trade_date + ts_code 去重，保留最新一条
-    - 仅截断“当日写入的那一批”，历史不动
-
-    ✅ 兼容旧列：run_time_utc/name/_prob_warn 等都保持
-    """
     try:
+        outputs_dir = Path(getattr(getattr(s, "io", None), "outputs_dir", "outputs")) if s is not None else Path("outputs")
+
         raw_input_df = _normalize_id_columns(_ensure_df(raw_input_df))
         out_df = _ensure_df(out_df)
 
         if raw_input_df.empty:
             return {"ok": False, "reason": "empty raw_input"}
-
         if "ts_code" not in raw_input_df.columns:
             return {"ok": False, "reason": "missing ts_code in raw_input"}
 
-        # 目标写入行数（由 Step7 采样状态控制）
+        # ✅ 回补关键特征（解决 feature_history 关键列全 0）
+        raw_input_df = _backfill_features_from_step3(raw_input_df, trade_date=trade_date, outputs_dir=outputs_dir)
+
         target_n = _get_target_rows_per_day(s=s)
 
-        # 基础列
         tmp = pd.DataFrame()
         tmp["ts_code"] = raw_input_df["ts_code"].astype(str).str.strip()
 
-        # name（若存在）
         name_col = None
         for c in ["name", "stock_name", "名称", "股票简称", "证券名称"]:
             if c in raw_input_df.columns:
@@ -234,48 +254,36 @@ def _write_feature_history(
                 break
         tmp["name"] = raw_input_df[name_col].astype(str) if name_col else ""
 
-        # 特征列（确保 FEATURES 都有）
         feat = _ensure_features(raw_input_df)
         for c in FEATURES:
-            if c in feat.columns:
-                tmp[c] = pd.to_numeric(feat[c], errors="coerce").fillna(0.0)
-            else:
-                tmp[c] = 0.0
+            tmp[c] = pd.to_numeric(feat[c], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
-        # 概率与来源
         tmp["Probability"] = pd.to_numeric(out_df.get("Probability", np.nan), errors="coerce")
         tmp["_prob_src"] = out_df.get("_prob_src", "").astype(str).fillna("") if "_prob_src" in out_df.columns else ""
         tmp["_prob_warn"] = out_df.get("_prob_warn", "").astype(str).fillna("") if "_prob_warn" in out_df.columns else ""
 
-        # 时间列：必须写入（否则无法追溯）
         tmp["run_time_utc"] = _utc_now_iso()
         tmp["trade_date"] = str(trade_date).strip()
 
-        # 只保留当日 TopN（Full Ranking by Probability）
         tmp["_prob_f"] = pd.to_numeric(tmp["Probability"], errors="coerce").fillna(0.0)
         tmp = tmp.sort_values("_prob_f", ascending=False).drop(columns=["_prob_f"])
         if target_n > 0:
             tmp = tmp.head(int(target_n))
 
-        # 输出路径
-        outputs_dir = Path(getattr(getattr(s, "io", None), "outputs_dir", "outputs")) if s is not None else Path("outputs")
         base = outputs_dir / "learning"
         _ensure_dir(base)
         fp = base / "feature_history.csv"
 
-        # 读旧 + 合并
         if fp.exists():
             old = pd.read_csv(fp, dtype=str, encoding="utf-8")
             merged = pd.concat([old, tmp.astype(str)], ignore_index=True, sort=False)
         else:
             merged = tmp.astype(str)
 
-        # 统一清洗 + 去重
         merged["trade_date"] = merged.get("trade_date", "").astype(str).str.strip()
         merged["ts_code"] = merged.get("ts_code", "").astype(str).str.strip()
         merged = merged.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
 
-        # 排序：trade_date 升序、Probability 降序
         try:
             merged["_prob_f"] = pd.to_numeric(merged.get("Probability", 0), errors="coerce").fillna(0.0)
             merged = merged.sort_values(["trade_date", "_prob_f"], ascending=[True, False]).drop(columns=["_prob_f"])
@@ -306,11 +314,6 @@ class Step5ModelPaths:
 
 
 def _get_model_paths(s=None) -> Step5ModelPaths:
-    """
-    约定：
-    - 若 Settings 里有 s.data_repo.models_dir / model_dir / root 更好；
-    - 这里做兼容：优先 s.data_repo.xxx，否则落到当前目录 ./models
-    """
     base = None
     if s is not None and hasattr(s, "data_repo"):
         dr = s.data_repo
@@ -369,43 +372,28 @@ def load_lgbm(s=None):
 
 
 # -------------------------
-# Train
+# Train（保持原接口）
 # -------------------------
 def _load_step4_theme_history(s, lookback: int, theme_file_name: str) -> pd.DataFrame:
-    """
-    从 outputs/learning/step4_theme.csv 读取历史 step4 输出（训练样本输入）
-    """
     outputs_dir = Path(getattr(s.io, "outputs_dir", "outputs"))
     fp = outputs_dir / "learning" / theme_file_name
     if not fp.exists():
         return pd.DataFrame()
     try:
-        df = pd.read_csv(fp)
+        return pd.read_csv(fp)
     except Exception:
         try:
-            df = pd.read_csv(fp, encoding="gbk")
+            return pd.read_csv(fp, encoding="gbk")
         except Exception:
             return pd.DataFrame()
 
-    # 只保留最近 lookback 天（按 trade_date）
-    if "trade_date" in df.columns:
-        dts = sorted(df["trade_date"].astype(str).unique())
-        use = set(dts[-lookback:]) if len(dts) > lookback else set(dts)
-        df = df[df["trade_date"].astype(str).isin(use)].copy()
-    return df
-
 
 def _build_X_y_from_theme_history(s, lookback: int, theme_file_name: str) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    简化训练：用 step4_theme.csv 的 FEATURES 做输入，用“是否涨停”做标签。
-    标签来源：下一交易日 limit_list_d.csv
-    """
     hist = _load_step4_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
     hist = _normalize_id_columns(hist)
     if hist.empty or "trade_date" not in hist.columns or "ts_code" not in hist.columns:
         return np.zeros((0, len(FEATURES))), np.zeros((0,))
 
-    # 构造标签：对每个 trade_date 的样本，用 next_day limit_list 做 y
     dates = sorted(hist["trade_date"].astype(str).unique())
     rows = []
     y = []
@@ -442,12 +430,8 @@ def train_step5_lr(s, lookback: int = 90, theme_file_name: str = "step4_theme.cs
     if X.shape[0] < 50 or len(np.unique(y)) < 2:
         return {"ok": False, "reason": "not enough samples or single class", "n": int(X.shape[0]), "pos": int(y.sum())}
 
-    model = Pipeline(
-        steps=[
-            ("scaler", StandardScaler(with_mean=True, with_std=True)),
-            ("lr", LogisticRegression(max_iter=200, class_weight="balanced")),
-        ]
-    )
+    model = Pipeline(steps=[("scaler", StandardScaler(with_mean=True, with_std=True)),
+                            ("lr", LogisticRegression(max_iter=200, class_weight="balanced"))])
     model.fit(X, y)
 
     paths = _get_model_paths(s=s)
@@ -478,12 +462,7 @@ def train_step5_lgbm(s, lookback: int = 120, theme_file_name: str = "step4_theme
     return {"ok": True, "path": str(paths.lgbm_path), "n": int(X.shape[0]), "pos": int(y.sum())}
 
 
-def train_step5_models(
-    s,
-    lookback: int = 120,
-    theme_file_name: str = "step4_theme.csv",
-) -> Dict[str, Any]:
-    """统一入口：每天收盘后先训练（尽量两种都训）"""
+def train_step5_models(s, lookback: int = 120, theme_file_name: str = "step4_theme.csv") -> Dict[str, Any]:
     res_lr = train_step5_lr(s, lookback=max(60, int(lookback * 0.75)), theme_file_name=theme_file_name)
     res_lgbm = train_step5_lgbm(s, lookback=lookback, theme_file_name=theme_file_name)
     ok_any = bool(res_lr.get("ok")) or bool(res_lgbm.get("ok"))
@@ -494,15 +473,6 @@ def train_step5_models(
 # Inference
 # -------------------------
 def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
-    """
-    推断优先级：
-    1) LightGBM（若存在已训练模型）
-    2) LogisticRegression（若存在已训练模型）
-    3) pseudo-sigmoid（兜底）
-
-    ✅ 每次推断后自动写入 feature_history.csv
-    ✅ 若模型输出“几乎全一样”，自动用 pseudo 做轻量 tie-break（解决你截图那种全同概率）
-    """
     raw_input = _ensure_df(theme_df)
     if raw_input.empty:
         out = pd.DataFrame()
@@ -510,61 +480,41 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         out["_prob_src"] = pd.Series(dtype="object")
         return out
 
-    # 保留全字段（非常关键）
     out = raw_input.copy()
 
-    # 统一 id + 特征
     ts_norm = _normalize_id_columns(raw_input)
-    ts_series = (
-        ts_norm["ts_code"].astype(str).str.strip()
-        if "ts_code" in ts_norm.columns
-        else pd.Series([""] * len(out))
-    )
+    ts_series = ts_norm["ts_code"].astype(str).str.strip() if "ts_code" in ts_norm.columns else pd.Series([""] * len(out))
 
     feat = _ensure_features(raw_input)
     X = feat[FEATURES].astype(float).values
 
-    # 伪概率（用于兜底，也用于“同分时”做 tie-break）
     def _pseudo_proba() -> np.ndarray:
         strength = np.clip(feat["StrengthScore"].astype(float).values / 100.0, 0.0, 1.5)
         theme = np.clip(feat["ThemeBoost"].astype(float).values, 0.0, 2.0)
 
-        seal = feat["seal_amount"].astype(float).values
-        seal = _safe_log1p_pos(seal)
+        seal = _safe_log1p_pos(feat["seal_amount"].astype(float).values)
         seal = np.clip(seal / 16.0, 0.0, 1.5)
 
         opens = np.clip(feat["open_times"].astype(float).values, 0.0, 20.0)
         turnover = np.clip(feat["turnover_rate"].astype(float).values, 0.0, 50.0) / 50.0
 
-        z = (
-            1.20 * strength
-            + 1.10 * theme
-            + 0.90 * seal
-            + 0.35 * turnover
-            - 0.60 * (opens / 10.0)
-        )
+        z = 1.20 * strength + 1.10 * theme + 0.90 * seal + 0.35 * turnover - 0.60 * (opens / 10.0)
         return _sigmoid(z)
 
     def _post_process(proba: np.ndarray, src: str) -> pd.DataFrame:
-        # 先做数值清洗
         proba = np.asarray(proba, dtype=float)
         proba = np.nan_to_num(proba, nan=0.0, posinf=1.0, neginf=0.0)
-
-        # clip + 确定性 jitter（防止完全一样导致排序肉眼误判）
         proba = np.clip(proba, 0.0, 1.0)
         proba = proba + np.array([_stable_jitter_from_ts(t) for t in ts_series.values], dtype=float)
 
-        # 如果模型输出“几乎常数”，用 pseudo 做更明显的 tie-break
         try:
             if np.nanstd(proba) < 1e-8:
                 p2 = _pseudo_proba()
-                # ✅ 修复点：增强 tie-break 权重，否则显示仍会“像全一样”
                 proba = 0.80 * proba + 0.20 * p2
                 src = f"{src}+tie"
         except Exception:
             pass
 
-        # 再次 clip，保证合法
         proba = np.clip(proba, 0.0, 1.0)
 
         out2 = out.copy()
@@ -575,7 +525,6 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         _write_feature_history(raw_input_df=raw_input, out_df=out2, trade_date=td, s=s)
         return out2.sort_values("Probability", ascending=False)
 
-    # 1) LGBM
     m_lgbm = load_lgbm(s=s)
     if m_lgbm is not None:
         try:
@@ -584,7 +533,6 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         except Exception:
             pass
 
-    # 2) LR
     m_lr = load_lr(s=s)
     if m_lr is not None:
         try:
@@ -593,7 +541,6 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         except Exception:
             pass
 
-    # 3) 兜底 pseudo
     return _post_process(_pseudo_proba(), "pseudo")
 
 
