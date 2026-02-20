@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-20 19:57:12",
+  "ts": "2026-02-20 21:20:05",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -12,25 +12,114 @@
   },
   "train_meta": {
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "lookback_days": 150,
-    "dates_total": 6,
-    "dates_used": 6,
     "rows_raw": 488,
-    "rows_used": 345,
-    "rows_dropped_allzero": 143
+    "rows_used": 302,
+    "rows_dropped_allzero": 143,
+    "dates_total": 6,
+    "dates_used": 6
   },
+  "sampling_state": {
+    "sampling_stage": "S1_MVP",
+    "target_rows_per_day": 200,
+    "days_covered": 6,
+    "rows_per_day_last_N": [
+      86,
+      112,
+      70,
+      73,
+      92,
+      55
+    ],
+    "quality_gate_pass": false,
+    "quality_gate_details": {
+      "core_cols": [
+        "StrengthScore",
+        "ThemeBoost",
+        "turnover_rate",
+        "seal_amount",
+        "open_times",
+        "Probability"
+      ],
+      "meta_cols": [
+        "trade_date",
+        "ts_code",
+        "_prob_src"
+      ],
+      "missing_cols": [],
+      "metrics": {
+        "StrengthScore": {
+          "non_null_rate": 1.0,
+          "non_zero_rate": 0.0,
+          "std": 0.0,
+          "unique_count": 1
+        },
+        "ThemeBoost": {
+          "non_null_rate": 1.0,
+          "non_zero_rate": 0.7069672131147541,
+          "std": 0.36465105197349135,
+          "unique_count": 19
+        },
+        "turnover_rate": {
+          "non_null_rate": 1.0,
+          "non_zero_rate": 0.0,
+          "std": 0.0,
+          "unique_count": 1
+        },
+        "seal_amount": {
+          "non_null_rate": 1.0,
+          "non_zero_rate": 0.0,
+          "std": 0.0,
+          "unique_count": 1
+        },
+        "open_times": {
+          "non_null_rate": 1.0,
+          "non_zero_rate": 0.0,
+          "std": 0.0,
+          "unique_count": 1
+        },
+        "Probability": {
+          "non_null_rate": 1.0,
+          "non_zero_rate": 1.0,
+          "std": 0.10232286388333957,
+          "unique_count": 236
+        }
+      },
+      "pseudo_ratio": 0.8872950819672131,
+      "window_days": 6,
+      "rows_in_window": 488,
+      "pass": false
+    },
+    "stage_debug": {
+      "prev_stage": "S1_MVP",
+      "days_covered": 6,
+      "rows_last": [
+        86,
+        112,
+        70,
+        73,
+        92,
+        55
+      ],
+      "reason": "quality_gate_fail"
+    },
+    "pseudo_ratio": 0.8872950819672131,
+    "feature_history_file": "outputs/learning/feature_history.csv",
+    "updated_at_utc": "2026-02-20T13:20:05Z",
+    "model_version": "ed934839011dc888736143067d8c504a7e2b1c44"
+  },
+  "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
-    "trained": true,
-    "lr_saved": true,
-    "lgbm_saved": true,
-    "models_dir": "models",
+    "trained": false,
+    "lr_saved": false,
+    "lgbm_saved": false,
+    "models_dir": "",
     "detail": {
-      "train_rows": 345,
-      "pos": 78,
-      "neg": 267,
-      "lr_path": "models/step5_lr.joblib",
-      "lgbm_path": "models/step5_lgbm.joblib"
+      "reason": "skip_train: quality_gate_fail or insufficient_days",
+      "quality_gate_pass": false,
+      "days_covered": 6
     }
   },
-  "warnings": []
+  "warnings": [
+    "quality_gate_fail: sampling_state written but training will be skipped."
+  ]
 }
