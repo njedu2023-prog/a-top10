@@ -16,13 +16,19 @@
 ## Missing rate
 - pct_chg: 0.0000
 - amount: 0.0000
-- turnover: 0.0000
+- turnover_rate: 0.0000
 - circ_mv: 0.0000
 - volume_ratio: 0.0000
 - lhb_net_amount: 0.0000
 - hsgt_net_amount: 0.0000
-- limit_up_flag: 0.0000
-- limit_break_flag: 0.0000
+- seal_amount: 0.0000
+- open_times: 0.0000
+
+## Nonzero rate (关键验收)
+- StrengthScore: 1.0000
+- turnover_rate: 1.0000
+- seal_amount: 0.0000
+- open_times: 0.0000
 
 ```json
 {
@@ -39,13 +45,19 @@
   "missing_rate": {
     "pct_chg": 0.0,
     "amount": 0.0,
-    "turnover": 0.0,
+    "turnover_rate": 0.0,
     "circ_mv": 0.0,
     "volume_ratio": 0.0,
     "lhb_net_amount": 0.0,
     "hsgt_net_amount": 0.0,
-    "limit_up_flag": 0.0,
-    "limit_break_flag": 0.0
+    "seal_amount": 0.0,
+    "open_times": 0.0
+  },
+  "nonzero_rate": {
+    "StrengthScore": 1.0,
+    "turnover_rate": 1.0,
+    "seal_amount": 0.0,
+    "open_times": 0.0
   }
 }
 ```
