@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-20 23:39:34",
+  "ts": "2026-02-20 23:56:07",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -13,8 +13,8 @@
   "train_meta": {
     "feature_history_file": "outputs/learning/feature_history.csv",
     "rows_raw": 488,
-    "rows_used": 302,
-    "rows_dropped_allzero": 131,
+    "rows_used": 328,
+    "rows_dropped_allzero": 105,
     "dates_total": 6,
     "dates_used": 6
   },
@@ -30,7 +30,7 @@
       92,
       55
     ],
-    "quality_gate_pass": false,
+    "quality_gate_pass": true,
     "quality_gate_details": {
       "core_cols": [
         "StrengthScore",
@@ -49,9 +49,9 @@
       "metrics": {
         "StrengthScore": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.11270491803278689,
-          "std": 18.246173702641478,
-          "unique_count": 55
+          "non_zero_rate": 0.3012295081967213,
+          "std": 26.645291586155142,
+          "unique_count": 144
         },
         "ThemeBoost": {
           "non_null_rate": 1.0,
@@ -61,33 +61,33 @@
         },
         "turnover_rate": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.11270491803278689,
-          "std": 8.428657976560501,
-          "unique_count": 56
+          "non_zero_rate": 0.3012295081967213,
+          "std": 11.436091046680435,
+          "unique_count": 148
         },
         "seal_amount": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.09016393442622951,
-          "std": 107947372.4801474,
-          "unique_count": 45
+          "non_zero_rate": 0.23975409836065573,
+          "std": 199227654.47261223,
+          "unique_count": 118
         },
         "open_times": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.07172131147540983,
-          "std": 2.2792321843817214,
-          "unique_count": 10
+          "non_zero_rate": 0.1762295081967213,
+          "std": 2.715786537261842,
+          "unique_count": 15
         },
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.10232286388333957,
-          "unique_count": 236
+          "std": 0.11390797283283524,
+          "unique_count": 230
         }
       },
-      "pseudo_ratio": 0.8872950819672131,
+      "pseudo_ratio": 0.6987704918032787,
       "window_days": 6,
       "rows_in_window": 488,
-      "pass": false
+      "pass": true
     },
     "stage_debug": {
       "prev_stage": "S1_MVP",
@@ -99,13 +99,12 @@
         73,
         92,
         55
-      ],
-      "reason": "quality_gate_fail"
+      ]
     },
-    "pseudo_ratio": 0.8872950819672131,
+    "pseudo_ratio": 0.6987704918032787,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-20T15:39:34Z",
-    "model_version": "60b3c72c2f7f74e91e1ac65ca05f87732894a13d"
+    "updated_at_utc": "2026-02-20T15:56:07Z",
+    "model_version": "d36d3abe53efc7bae7dc170be3ef8a520214ecf8"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
@@ -115,11 +114,9 @@
     "models_dir": "",
     "detail": {
       "reason": "skip_train: quality_gate_fail or insufficient_days",
-      "quality_gate_pass": false,
+      "quality_gate_pass": true,
       "days_covered": 6
     }
   },
-  "warnings": [
-    "quality_gate_fail: sampling_state written but training will be skipped."
-  ]
+  "warnings": []
 }
