@@ -43,8 +43,8 @@ from a_top10.steps.step5_ml_probability import _get_ts_code_col, _normalize_id_c
 LR_MODEL_PATH = Path("step5_lr.joblib")
 LGBM_MODEL_PATH = Path("step5_lgbm.joblib")
 
-MIN_SAMPLES = 200      # 冷启动最低样本量
-MIN_POS = 10           # 冷启动最低正样本数（涨停=1）
+MIN_SAMPLES = 200  # 冷启动最低样本量
+MIN_POS = 10       # 冷启动最低正样本数（涨停=1）
 
 # ============================================================
 # Utils
@@ -68,6 +68,13 @@ def _now_str() -> str:
     return pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _utc_now_iso() -> str:
+    try:
+        return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _to_nosuffix(ts: str) -> str:
     ts = str(ts).strip()
     if not ts:
@@ -80,16 +87,43 @@ def _trade_date_from_output_path(p: Path) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _read_text_best_effort(p: Path) -> str:
+    """
+    ✅ 兜底读取：避免因为编码问题导致 Step7 直接崩溃
+    """
+    try:
+        return p.read_text(encoding="utf-8")
+    except Exception:
+        try:
+            return p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            try:
+                return p.read_text(encoding="gbk", errors="ignore")
+            except Exception:
+                return ""
+
+
 def _parse_topn_codes(md_path: Path, topn: int) -> List[str]:
-    text = Path(md_path).read_text(encoding="utf-8")
+    """
+    从预测报告 md 表格中解析 TopN 代码。
+    ✅ 更稳健：允许列前后空格、允许后缀、允许中间出现非表格行
+    """
+    text = _read_text_best_effort(md_path)
+    if not text:
+        return []
+
     codes: List[str] = []
+    # 典型表格行：| 1 | 000001.SZ | ...
+    # 放宽：第二列抓“看起来像代码”的 token
+    pat = re.compile(r"^\s*\|\s*\d+\s*\|\s*([0-9A-Za-z\.\-]+)\s*\|")
+
     for line in text.splitlines():
-        m = re.match(r"\s*\|\s*\d+\s*\|\s*([0-9A-Za-z\.\-]+)\s*\|", line)
+        m = pat.match(line)
         if m:
             codes.append(m.group(1).strip())
-    codes = codes[: int(topn)]
+
     codes = [c for c in codes if c]
-    return codes
+    return codes[: int(topn)]
 
 
 def _limit_codes_from_df(df: pd.DataFrame) -> List[str]:
@@ -194,10 +228,13 @@ def _build_train_set_from_feature_history(
         df = pd.read_csv(fp, dtype=str, encoding="utf-8")
     except Exception:
         try:
-            df = pd.read_csv(fp, dtype=str, encoding="gbk")
-        except Exception as e:
-            warnings.append(f"read feature_history failed: {e}")
-            return pd.DataFrame(), meta
+            df = pd.read_csv(fp, dtype=str, encoding="utf-8", errors="ignore")
+        except Exception:
+            try:
+                df = pd.read_csv(fp, dtype=str, encoding="gbk", errors="ignore")
+            except Exception as e:
+                warnings.append(f"read feature_history failed: {e}")
+                return pd.DataFrame(), meta
 
     if df is None or df.empty:
         warnings.append("feature_history.csv empty: training skipped.")
@@ -215,7 +252,7 @@ def _build_train_set_from_feature_history(
     df["ts_code"] = df["ts_code"].astype(str).str.strip()
 
     # last lookback_days dates
-    dates = sorted(df["trade_date"].unique().tolist())
+    dates = sorted([d for d in df["trade_date"].unique().tolist() if re.match(r"^\d{8}$", str(d))])
     meta["dates_total"] = int(len(dates))
     use_dates = dates[-lookback_days:] if len(dates) > lookback_days else dates
     meta["dates_used"] = int(len(use_dates))
@@ -245,7 +282,7 @@ def _build_train_set_from_feature_history(
         return pd.DataFrame(), meta
 
     # label: next_trade_date limit_list
-    dates2 = sorted(dfx["trade_date"].unique().tolist())
+    dates2 = sorted([d for d in dfx["trade_date"].unique().tolist() if re.match(r"^\d{8}$", str(d))])
     rows: List[Dict[str, Any]] = []
 
     for i, d in enumerate(dates2[:-1]):
@@ -415,13 +452,6 @@ CORE_FEATURE_COLS_V1 = [
 META_COLS_V1 = ["trade_date", "ts_code", "_prob_src"]
 
 
-def _utc_now_iso() -> str:
-    try:
-        return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    except Exception:
-        return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _read_feature_history(outputs_dir: Path) -> Tuple[pd.DataFrame, str]:
     fp = outputs_dir / "learning" / "feature_history.csv"
     if not fp.exists():
@@ -430,9 +460,12 @@ def _read_feature_history(outputs_dir: Path) -> Tuple[pd.DataFrame, str]:
         return pd.read_csv(fp, dtype=str, encoding="utf-8"), str(fp)
     except Exception:
         try:
-            return pd.read_csv(fp, dtype=str, encoding="gbk"), str(fp)
+            return pd.read_csv(fp, dtype=str, encoding="utf-8", errors="ignore"), str(fp)
         except Exception:
-            return pd.DataFrame(), str(fp)
+            try:
+                return pd.read_csv(fp, dtype=str, encoding="gbk", errors="ignore"), str(fp)
+            except Exception:
+                return pd.DataFrame(), str(fp)
 
 
 def _rows_per_day_series(df: pd.DataFrame) -> pd.Series:
@@ -467,13 +500,19 @@ def _quality_gate_v1(df: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
     except Exception:
         d = df.copy()
 
+    if d.empty:
+        details["reason"] = "window empty"
+        details["pass"] = False
+        return False, details
+
     metrics: Dict[str, Any] = {}
     for c in CORE_FEATURE_COLS_V1:
         x = pd.to_numeric(d[c], errors="coerce")
+        x0 = x.fillna(0.0)
         metrics[c] = {
             "non_null_rate": float(x.notna().mean()) if len(x) else 0.0,
-            "non_zero_rate": float((x.fillna(0.0) != 0.0).mean()) if len(x) else 0.0,
-            "std": float(x.fillna(0.0).std()) if len(x) else 0.0,
+            "non_zero_rate": float((x0 != 0.0).mean()) if len(x0) else 0.0,
+            "std": float(x0.std()) if len(x0) else 0.0,
             "unique_count": int(x.dropna().nunique()),
         }
 
