@@ -74,5 +74,11 @@
       "open_times",
       "turnover_rate"
     ]
+  },
+  "theme_df_feature_nonzero_rate": {
+    "StrengthScore": 0.0,
+    "turnover_rate": 0.0,
+    "seal_amount": 0.0,
+    "open_times": 0.0
   }
 }
