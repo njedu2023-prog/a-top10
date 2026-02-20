@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-21 04:57:25",
+  "ts": "2026-02-21 05:38:44",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -103,8 +103,8 @@
     },
     "pseudo_ratio": 0.6987704918032787,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-20T20:57:25Z",
-    "model_version": "177f19bfee30e122082043077e71f2afed66656c"
+    "updated_at_utc": "2026-02-20T21:38:44Z",
+    "model_version": "83f7231c115df79fa0db9a3d7c665babe60a8c6e"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {

@@ -251,6 +251,7 @@
       "_base_score": 0.7401982362415219,
       "_score": 0.7401982362415219,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 18275042080841063491,
       "rank": 1
     },
@@ -290,6 +291,7 @@
       "_base_score": 0.46172593564120273,
       "_score": 0.46172593564120273,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 9620703758668765930,
       "rank": 2
     },
@@ -329,6 +331,7 @@
       "_base_score": 0.4219436674801919,
       "_score": 0.4219436674801919,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 13648374009321138812,
       "rank": 3
     },
@@ -368,6 +371,7 @@
       "_base_score": 0.41157660665823026,
       "_score": 0.41157660665823026,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 13610894289195547066,
       "rank": 4
     },
@@ -407,6 +411,7 @@
       "_base_score": 0.3866619423918278,
       "_score": 0.3866619423918278,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 2196150490979474394,
       "rank": 5
     },
@@ -446,6 +451,7 @@
       "_base_score": 0.38660824053169607,
       "_score": 0.38660824053169607,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 16311428802222620961,
       "rank": 6
     },
@@ -485,6 +491,7 @@
       "_base_score": 0.3816808777204838,
       "_score": 0.3816808777204838,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 6470138106805065474,
       "rank": 7
     },
@@ -524,6 +531,7 @@
       "_base_score": 0.38038202288562023,
       "_score": 0.38038202288562023,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 13661752789989670736,
       "rank": 8
     },
@@ -563,6 +571,7 @@
       "_base_score": 0.37597718184920403,
       "_score": 0.37597718184920403,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 13847106480521340481,
       "rank": 9
     },
@@ -602,6 +611,7 @@
       "_base_score": 0.3455936529065928,
       "_score": 0.3455936529065928,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 9975879562970673489,
       "rank": 10
     },
@@ -641,6 +651,7 @@
       "_base_score": 0.33442508391640713,
       "_score": 0.33442508391640713,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 7010728232086603640,
       "rank": 11
     },
@@ -680,6 +691,7 @@
       "_base_score": 0.3343738690109514,
       "_score": 0.3343738690109514,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 18148306268947772452,
       "rank": 12
     },
@@ -719,6 +731,7 @@
       "_base_score": 0.30092164321923576,
       "_score": 0.30092164321923576,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 14174187897782277577,
       "rank": 13
     },
@@ -758,6 +771,7 @@
       "_base_score": 0.2744329790394105,
       "_score": 0.2744329790394105,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 14254712223024437905,
       "rank": 14
     },
@@ -797,6 +811,7 @@
       "_base_score": 0.2740795272204297,
       "_score": 0.2740795272204297,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 884310069118426774,
       "rank": 15
     },
@@ -836,6 +851,7 @@
       "_base_score": 0.2707682421308038,
       "_score": 0.2707682421308038,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 8179103761363642700,
       "rank": 16
     },
@@ -875,6 +891,7 @@
       "_base_score": 0.2609153903604991,
       "_score": 0.2609153903604991,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 5903451505944107171,
       "rank": 17
     },
@@ -914,6 +931,7 @@
       "_base_score": 0.2543591633948626,
       "_score": 0.2543591633948626,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 6472571245015702319,
       "rank": 18
     },
@@ -953,6 +971,7 @@
       "_base_score": 0.22012468517613257,
       "_score": 0.22012468517613257,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 17118575501319884531,
       "rank": 19
     },
@@ -992,6 +1011,7 @@
       "_base_score": 0.21252027640141838,
       "_score": 0.21252027640141838,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 2441211557329051164,
       "rank": 20
     },
@@ -1031,6 +1051,7 @@
       "_base_score": 0.19802439347206446,
       "_score": 0.19802439347206446,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 6675581174352764313,
       "rank": 21
     },
@@ -1070,6 +1091,7 @@
       "_base_score": 0.19395125571905525,
       "_score": 0.19395125571905525,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 25105401867006465,
       "rank": 22
     },
@@ -1109,6 +1131,7 @@
       "_base_score": 0.19045750480785636,
       "_score": 0.19045750480785636,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 7787759212779693518,
       "rank": 23
     },
@@ -1148,6 +1171,7 @@
       "_base_score": 0.17348440485316874,
       "_score": 0.17348440485316874,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 8484855726366590873,
       "rank": 24
     },
@@ -1187,6 +1211,7 @@
       "_base_score": 0.17295754936781232,
       "_score": 0.17295754936781232,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 16976437302314959719,
       "rank": 25
     },
@@ -1226,6 +1251,7 @@
       "_base_score": 0.15001401318786178,
       "_score": 0.15001401318786178,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 14955777665721180171,
       "rank": 26
     },
@@ -1265,6 +1291,7 @@
       "_base_score": 0.14992051797401607,
       "_score": 0.14992051797401607,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 1359145861064420560,
       "rank": 27
     },
@@ -1304,6 +1331,7 @@
       "_base_score": 0.14984672903003615,
       "_score": 0.14984672903003615,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 12874140661438441795,
       "rank": 28
     },
@@ -1343,6 +1371,7 @@
       "_base_score": 0.14983316046893105,
       "_score": 0.14983316046893105,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 4642332668574708121,
       "rank": 29
     },
@@ -1382,6 +1411,7 @@
       "_base_score": 0.13289804414022635,
       "_score": 0.13289804414022635,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 1047364286091045781,
       "rank": 30
     },
@@ -1421,6 +1451,7 @@
       "_base_score": 0.13229238411044064,
       "_score": 0.13229238411044064,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 1576461996093478480,
       "rank": 31
     },
@@ -1460,6 +1491,7 @@
       "_base_score": 0.12359485179035509,
       "_score": 0.12359485179035509,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 7876345806411556041,
       "rank": 32
     },
@@ -1499,6 +1531,7 @@
       "_base_score": 0.1044451284193859,
       "_score": 0.1044451284193859,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 3925309087605566887,
       "rank": 33
     },
@@ -1538,6 +1571,7 @@
       "_base_score": 0.09492228910566024,
       "_score": 0.09492228910566024,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 8892626032844501308,
       "rank": 34
     },
@@ -1577,6 +1611,7 @@
       "_base_score": 0.09479583225214279,
       "_score": 0.09479583225214279,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 276335923232575440,
       "rank": 35
     },
@@ -1616,6 +1651,7 @@
       "_base_score": 0.09362073018704907,
       "_score": 0.09362073018704907,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 13606487215210990866,
       "rank": 36
     },
@@ -1655,6 +1691,7 @@
       "_base_score": 0.08661894521202974,
       "_score": 0.08661894521202974,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 9721362422494274535,
       "rank": 37
     },
@@ -1694,6 +1731,7 @@
       "_base_score": 0.08266979397574852,
       "_score": 0.08266979397574852,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 8999193770380698350,
       "rank": 38
     },
@@ -1733,6 +1771,7 @@
       "_base_score": 0.08093729069137975,
       "_score": 0.08093729069137975,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 11253126736137024842,
       "rank": 39
     },
@@ -1772,6 +1811,7 @@
       "_base_score": 0.07482549192896254,
       "_score": 0.07482549192896254,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 8049701705767354877,
       "rank": 40
     },
@@ -1811,6 +1851,7 @@
       "_base_score": 0.07482346274749355,
       "_score": 0.07482346274749355,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 77500058987831691,
       "rank": 41
     },
@@ -1850,6 +1891,7 @@
       "_base_score": 0.07481051169675915,
       "_score": 0.07481051169675915,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 13830107430449846012,
       "rank": 42
     },
@@ -1889,6 +1931,7 @@
       "_base_score": 0.07478643499645547,
       "_score": 0.07478643499645547,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 5330919710549998003,
       "rank": 43
     },
@@ -1928,6 +1971,7 @@
       "_base_score": 0.07477082334179573,
       "_score": 0.07477082334179573,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 14911107412485188447,
       "rank": 44
     },
@@ -1967,6 +2011,7 @@
       "_base_score": 0.0747226993038799,
       "_score": 0.0747226993038799,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 7544120634882485001,
       "rank": 45
     },
@@ -2006,6 +2051,7 @@
       "_base_score": 0.07470648348559765,
       "_score": 0.07470648348559765,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 7532807491403595242,
       "rank": 46
     },
@@ -2045,6 +2091,7 @@
       "_base_score": 0.07135031569534904,
       "_score": 0.07135031569534904,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 9630696469265634510,
       "rank": 47
     },
@@ -2084,6 +2131,7 @@
       "_base_score": 0.07041322223134379,
       "_score": 0.07041322223134379,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 6583428649850416606,
       "rank": 48
     },
@@ -2123,6 +2171,7 @@
       "_base_score": 0.05774747266496368,
       "_score": 0.05774747266496368,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 9677261970067557285,
       "rank": 49
     },
@@ -2162,6 +2211,7 @@
       "_base_score": 0.05679734979455071,
       "_score": 0.05679734979455071,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 16199521063966215465,
       "rank": 50
     },
@@ -2201,6 +2251,7 @@
       "_base_score": 0.04420699498163074,
       "_score": 0.04420699498163074,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 7929717511520810426,
       "rank": 51
     },
@@ -2240,6 +2291,7 @@
       "_base_score": 0.04066565574402706,
       "_score": 0.04066565574402706,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 11814276017666831582,
       "rank": 52
     },
@@ -2279,6 +2331,7 @@
       "_base_score": 0.04054519614870445,
       "_score": 0.04054519614870445,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 12051261816971739391,
       "rank": 53
     },
@@ -2318,6 +2371,7 @@
       "_base_score": 0.040540286464335114,
       "_score": 0.040540286464335114,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 1065732064921944451,
       "rank": 54
     },
@@ -2357,6 +2411,7 @@
       "_base_score": 0.03208812947276886,
       "_score": 0.03208812947276886,
       "_emotion_factor": 1.0,
+      "_regime_weight": 1.0,
       "_tiebreak_hash": 4838380249431996754,
       "rank": 55
     }
