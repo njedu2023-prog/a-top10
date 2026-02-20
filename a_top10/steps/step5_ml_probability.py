@@ -27,6 +27,8 @@ Step5 : 概率模型推断（ML核心层） + 可训练闭环（LR + LightGBM）
 from __future__ import annotations
 
 import os
+import json
+from datetime import datetime
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,13 +47,14 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
 try:
-    import lightgbm as lgb
+    from lightgbm import LGBMClassifier
 except Exception:  # pragma: no cover
-    lgb = None
+    LGBMClassifier = None
 
+from a_top10.config import Settings
 
 # -------------------------
-# Feature Columns（真实字段）
+# Feature set
 # -------------------------
 FEATURES = [
     "StrengthScore",
@@ -61,224 +64,85 @@ FEATURES = [
     "turnover_rate",
 ]
 
-# 字段别名映射：不同步骤文件输出的字段名不必一样，通过这里相互对应
-FEATURE_ALIASES: Dict[str, Sequence[str]] = {
-    "StrengthScore": [
-        "StrengthScore", "strengthscore", "strength_score", "Strength", "strength",
-        "强度得分", "强度", "强度分",
-    ],
-    "ThemeBoost": [
-        "ThemeBoost", "themeboost", "theme_boost", "theme_boost_score",
-        "theme_boost_value", "theme_boost_ratio",
-        "题材加成", "题材加成分", "题材加成得分", "题材",
-    ],
-    "seal_amount": [
-        "seal_amount", "sealamount", "seal_amt", "sealAmount", "seal",
-        "封单金额", "封单",
-    ],
-    "open_times": [
-        "open_times", "opentimes", "open_time", "openTimes", "open_count",
-        "openings", "打开次数", "打开次", "开板次数",
-    ],
-    "turnover_rate": [
-        "turnover_rate", "turnoverrate", "turnover", "turnoverRate",
-        "换手率", "换手", "换手率%",
-    ],
-}
-
-# id 别名（用于涨停打标 / 组装数据）
-TS_CODE_ALIASES = [
-    "ts_code", "TS_CODE", "tscode", "TScode",
-    "stock_code", "symbol", "sec_code", "stk_code", "code",
-    "证券代码", "股票代码", "代码",
-]
-
-
 # -------------------------
-# Helpers
+# Utils
 # -------------------------
-def _ensure_df(obj) -> pd.DataFrame:
-    """兼容：上游误传 dict/list（比如某一步返回了 dict），这里尽量兜底转 DataFrame。"""
-    if obj is None:
+def _ensure_df(x) -> pd.DataFrame:
+    if x is None:
         return pd.DataFrame()
-    if isinstance(obj, pd.DataFrame):
-        return obj
-    if isinstance(obj, dict):
-        try:
-            return pd.DataFrame(obj)
-        except Exception:
-            return pd.DataFrame()
-    if isinstance(obj, (list, tuple)):
-        try:
-            return pd.DataFrame(obj)
-        except Exception:
-            return pd.DataFrame()
+    if isinstance(x, pd.DataFrame):
+        return x
     try:
-        return pd.DataFrame(obj)
+        return pd.DataFrame(x)
     except Exception:
         return pd.DataFrame()
-
-
-def _lower_map(df: pd.DataFrame) -> Dict[str, str]:
-    return {str(c).strip().lower(): c for c in df.columns}
-
-
-def _normalize_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """将各种可能的字段名同一步进行基本的横向对齐。"""
-    df = _ensure_df(df)
-    if df.empty:
-        return df
-
-    out = df.copy()
-    lower = _lower_map(out)
-
-    for canonical, aliases in FEATURE_ALIASES.items():
-        key = str(canonical).strip().lower()
-
-        # 1) 若已经存在 canonical（或大小写同名），直接对齐到 canonical
-        if key in lower:
-            col = lower[key]
-            if col != canonical:
-                out[canonical] = out[col]
-            continue
-
-        # 2) 否则去 alias 里找
-        found = False
-        for alias in aliases:
-            alias_key = str(alias).strip().lower()
-            if alias_key in lower:
-                out[canonical] = out[lower[alias_key]]
-                found = True
-                break
-
-        # 3) 没找到就给 NaN，后面统一 fillna(0)
-        if not found:
-            out[canonical] = np.nan
-
-    return out
-
-
-def _normalize_id_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """将 id 列动态映射到 ts_code（尽量）。"""
-    df = _ensure_df(df)
-    if df.empty:
-        return df
-
-    out = df.copy()
-    lower = _lower_map(out)
-
-    ts_code = None
-    for name in TS_CODE_ALIASES:
-        key = str(name).strip().lower()
-        if key in lower:
-            ts_code = lower[key]
-            break
-
-    # 若找到了某个列（可能叫 code/证券代码），统一映射成 ts_code
-    if ts_code is not None:
-        out["ts_code"] = out[ts_code]
-
-    return out
-
-
-def _get_ts_code_col(df: pd.DataFrame) -> Optional[str]:
-    df = _ensure_df(df)
-    if df.empty:
-        return None
-    lower = _lower_map(df)
-    for name in TS_CODE_ALIASES:
-        key = str(name).strip().lower()
-        if key in lower:
-            return lower[key]
-    return None
-
-
-def _to_nosuffix(ts: str) -> str:
-    ts = str(ts).strip()
-    if not ts:
-        return ts
-    return ts.split(".")[0]
-
-
-def _ensure_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    只保证 FEATURES 存在且是 float。
-    注意：这里**不负责保留其他列**，推断时请用 raw_input.copy() 保持全字段。
-    """
-    df = _ensure_df(df)
-    if df.empty:
-        out = pd.DataFrame()
-        for c in FEATURES:
-            out[c] = pd.Series(dtype="float64")
-        return out
-
-    out = _normalize_feature_columns(df)
-
-    for c in FEATURES:
-        if c not in out.columns:
-            out[c] = np.nan
-
-        out[c] = (
-            pd.to_numeric(out[c], errors="coerce")
-            .replace([np.inf, -np.inf], np.nan)
-            .fillna(0.0)
-            .astype("float64")
-        )
-    return out[FEATURES].copy()
-
-
-def _sigmoid(x: np.ndarray) -> np.ndarray:
-    x = np.clip(x, -50, 50)
-    return 1.0 / (1.0 + np.exp(-x))
-
-
-def _read_csv_if_exists(p: Path) -> pd.DataFrame:
-    if not p.exists():
-        return pd.DataFrame()
-    try:
-        return pd.read_csv(p, dtype=str, encoding="utf-8")
-    except Exception:
-        try:
-            return pd.read_csv(p, dtype=str, encoding="gbk")
-        except Exception:
-            return pd.DataFrame()
-
-
-def _safe_log1p_pos(x: np.ndarray) -> np.ndarray:
-    """用于金额/成交额等“正值长尾”的压缩：log1p(max(x,0))"""
-    x = np.where(np.isfinite(x), x, 0.0)
-    x = np.maximum(x, 0.0)
-    return np.log1p(x)
 
 
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
+def _first_existing_col(df: pd.DataFrame, cands: Sequence[str]) -> Optional[str]:
+    for c in cands:
+        if c in df.columns:
+            return c
+    return None
+
+
+def _get_ts_code_col(df: pd.DataFrame) -> Optional[str]:
+    return _first_existing_col(df, ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"])
+
+
+def _normalize_id_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = _ensure_df(df).copy()
+    ts_col = _get_ts_code_col(df)
+    if ts_col and ts_col != "ts_code":
+        df["ts_code"] = df[ts_col].astype(str)
+    if "ts_code" in df.columns:
+        df["ts_code"] = df["ts_code"].astype(str).str.strip()
+    return df
+
+
+def _safe_log1p_pos(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=float)
+    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+    x = np.maximum(x, 0.0)
+    return np.log1p(x)
+
+
+def _sigmoid(z: np.ndarray) -> np.ndarray:
+    z = np.asarray(z, dtype=float)
+    z = np.clip(z, -20.0, 20.0)
+    return 1.0 / (1.0 + np.exp(-z))
+
+
+def _ensure_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = _ensure_df(df).copy()
+    for c in FEATURES:
+        if c not in df.columns:
+            df[c] = 0.0
+    # 强制数值
+    for c in FEATURES:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+    return df
+
+
 def _guess_trade_date(df: pd.DataFrame) -> str:
     """
-    推断交易日（YYYYMMDD）优先级：
-    1) df 中常见日期列（trade_date/date/日期 等）
-    2) 环境变量 TRADE_DATE
-    3) 今天日期（workflow TZ 控制；这里直接用本机日期兜底）
+    尽量从 df 或环境变量推断 trade_date；若失败用当天日期。
     """
     df = _ensure_df(df)
-    candidates = ["trade_date", "TRADE_DATE", "date", "日期", "交易日", "dt", "cal_date"]
-    if not df.empty:
-        lower = _lower_map(df)
-        for c in candidates:
-            key = str(c).strip().lower()
-            if key in lower:
-                v = str(df[lower[key]].iloc[0]).strip()
-                v = v.replace("-", "").replace("/", "")
-                if len(v) >= 8:
-                    return v[:8]
+    for c in ["trade_date", "TradeDate", "日期", "交易日期"]:
+        if c in df.columns:
+            v = str(df[c].iloc[0]).strip()
+            if re.match(r"^\d{8}$", v):
+                return v
 
-    env_td = str(os.getenv("TRADE_DATE", "")).strip()
-    env_td = env_td.replace("-", "").replace("/", "")
-    if len(env_td) >= 8:
-        return env_td[:8]
+    env_td = os.getenv("TRADE_DATE", "").strip()
+    if re.match(r"^\d{8}$", env_td):
+        return env_td
 
+    # GitHub Actions 环境里通常没有“交易日”，这里取当天即可（后续 Step0/Step2 也会保证 trade_date 正确）
     return pd.Timestamp.today().strftime("%Y%m%d")
 
 
@@ -298,6 +162,36 @@ def _stable_jitter_from_ts(ts: str) -> float:
     return (v - 0.5) * 2e-4  # -1e-4 ~ +1e-4
 
 
+def _utc_now_iso() -> str:
+    try:
+        return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _read_sampling_state(outputs_dir: Path) -> Dict[str, Any]:
+    """读取 Step7 生成的采样状态。不存在则返回默认值。"""
+    p = outputs_dir / "learning" / "sampling_state.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _get_target_rows_per_day(s=None) -> int:
+    """自动采样：默认 200，若 sampling_state.json 存在则按其 target_rows_per_day。"""
+    outputs_dir = Path(getattr(getattr(s, "io", None), "outputs_dir", "outputs")) if s is not None else Path("outputs")
+    st = _read_sampling_state(outputs_dir)
+    try:
+        v = int(st.get("target_rows_per_day", 200))
+    except Exception:
+        v = 200
+    # 安全夹紧：防止写入过大导致仓库膨胀或 CI 超时
+    return int(max(50, min(2000, v)))
+
+
 def _write_feature_history(
     raw_input_df: pd.DataFrame,
     out_df: pd.DataFrame,
@@ -306,8 +200,13 @@ def _write_feature_history(
 ) -> Dict[str, Any]:
     """
     写入 outputs/learning/feature_history.csv（追加模式）
-    - 必须有 ts_code
-    - 去重策略：同 trade_date + ts_code 去重，保留最新一条
+
+    ✅ 自动采样（Auto-Sampling）：
+    - 默认每天写入 Full Ranking 的前 N 行（N=200/500/1000 由 Step7 输出 sampling_state.json 决定）
+    - 同 trade_date + ts_code 去重，保留最新一条
+    - 仅截断“当日写入的那一批”，历史不动
+
+    ✅ 兼容旧列：run_time_utc/name/_prob_warn 等都保持
     """
     try:
         raw_input_df = _normalize_id_columns(_ensure_df(raw_input_df))
@@ -319,36 +218,63 @@ def _write_feature_history(
         if "ts_code" not in raw_input_df.columns:
             return {"ok": False, "reason": "missing ts_code in raw_input"}
 
-        # 确保 out_df 有 FEATURES/Probability/_prob_src
-        tmp = raw_input_df[["ts_code"]].copy()
+        # 目标写入行数（由 Step7 采样状态控制）
+        target_n = _get_target_rows_per_day(s=s)
+
+        # 基础列
+        tmp = pd.DataFrame()
+        tmp["ts_code"] = raw_input_df["ts_code"].astype(str).str.strip()
+
+        # name（若存在）
+        name_col = None
+        for c in ["name", "stock_name", "名称", "股票简称", "证券名称"]:
+            if c in raw_input_df.columns:
+                name_col = c
+                break
+        tmp["name"] = raw_input_df[name_col].astype(str) if name_col else ""
+
+        # 特征列（确保 FEATURES 都有）
         feat = _ensure_features(raw_input_df)
         for c in FEATURES:
-            tmp[c] = feat[c].values if c in feat.columns else 0.0
+            if c in feat.columns:
+                tmp[c] = pd.to_numeric(feat[c], errors="coerce").fillna(0.0)
+            else:
+                tmp[c] = 0.0
 
-        if "Probability" in out_df.columns:
-            tmp["Probability"] = pd.to_numeric(out_df["Probability"], errors="coerce")
-        else:
-            tmp["Probability"] = np.nan
+        # 概率与来源
+        tmp["Probability"] = pd.to_numeric(out_df.get("Probability", np.nan), errors="coerce")
+        tmp["_prob_src"] = out_df.get("_prob_src", "").astype(str).fillna("") if "_prob_src" in out_df.columns else ""
+        tmp["_prob_warn"] = out_df.get("_prob_warn", "").astype(str).fillna("") if "_prob_warn" in out_df.columns else ""
 
-        tmp["_prob_src"] = out_df["_prob_src"].astype(str).fillna("") if "_prob_src" in out_df.columns else ""
-        tmp["trade_date"] = str(trade_date)
+        # 时间列：必须写入（否则无法追溯）
+        tmp["run_time_utc"] = _utc_now_iso()
+        tmp["trade_date"] = str(trade_date).strip()
 
-        # 输出路径（仓库根目录 outputs/learning）
-        base = Path("outputs") / "learning"
+        # 只保留当日 TopN（Full Ranking by Probability）
+        tmp["_prob_f"] = pd.to_numeric(tmp["Probability"], errors="coerce").fillna(0.0)
+        tmp = tmp.sort_values("_prob_f", ascending=False).drop(columns=["_prob_f"])
+        if target_n > 0:
+            tmp = tmp.head(int(target_n))
+
+        # 输出路径
+        outputs_dir = Path(getattr(getattr(s, "io", None), "outputs_dir", "outputs")) if s is not None else Path("outputs")
+        base = outputs_dir / "learning"
         _ensure_dir(base)
         fp = base / "feature_history.csv"
 
+        # 读旧 + 合并
         if fp.exists():
             old = pd.read_csv(fp, dtype=str, encoding="utf-8")
-            merged = pd.concat([old, tmp.astype(str)], ignore_index=True)
+            merged = pd.concat([old, tmp.astype(str)], ignore_index=True, sort=False)
         else:
             merged = tmp.astype(str)
 
-        merged["trade_date"] = merged["trade_date"].astype(str).str.strip()
-        merged["ts_code"] = merged["ts_code"].astype(str).str.strip()
+        # 统一清洗 + 去重
+        merged["trade_date"] = merged.get("trade_date", "").astype(str).str.strip()
+        merged["ts_code"] = merged.get("ts_code", "").astype(str).str.strip()
         merged = merged.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
 
-        # 排序：按 trade_date，再按 Probability
+        # 排序：trade_date 升序、Probability 降序
         try:
             merged["_prob_f"] = pd.to_numeric(merged.get("Probability", 0), errors="coerce").fillna(0.0)
             merged = merged.sort_values(["trade_date", "_prob_f"], ascending=[True, False]).drop(columns=["_prob_f"])
@@ -356,7 +282,14 @@ def _write_feature_history(
             merged = merged.sort_values(["trade_date"], ascending=[True])
 
         merged.to_csv(fp, index=False, encoding="utf-8")
-        return {"ok": True, "path": str(fp), "rows": int(len(merged)), "trade_date": str(trade_date)}
+        return {
+            "ok": True,
+            "path": str(fp),
+            "rows": int(len(merged)),
+            "trade_date": str(trade_date),
+            "wrote_rows_today": int(len(tmp)),
+            "target_rows_per_day": int(target_n),
+        }
     except Exception as e:
         return {"ok": False, "reason": f"exception: {e}"}
 
@@ -421,224 +354,127 @@ def _save_joblib(obj, path: Path) -> None:
     try:
         joblib.dump(obj, path)
     except Exception:
-        return
+        pass
 
 
-def load_lr(s=None) -> Optional[Pipeline]:
-    paths = _get_model_paths(s)
+def load_lr(s=None):
+    paths = _get_model_paths(s=s)
     return _load_joblib(paths.lr_path)
 
 
-def save_lr(model: Pipeline, s=None) -> None:
-    paths = _get_model_paths(s)
-    _save_joblib(model, paths.lr_path)
-
-
 def load_lgbm(s=None):
-    paths = _get_model_paths(s)
+    paths = _get_model_paths(s=s)
     return _load_joblib(paths.lgbm_path)
 
 
-def save_lgbm(model, s=None) -> None:
-    paths = _get_model_paths(s)
-    _save_joblib(model, paths.lgbm_path)
-
-
 # -------------------------
-# Labeling / Training Data Builder
+# Train
 # -------------------------
-def _label_from_next_day_limit_list(next_snap: Path) -> set:
-    """用 next_day 的 limit_list_d.csv 打标：在涨停列表里 => y=1"""
-    ll = _read_csv_if_exists(next_snap / "limit_list_d.csv")
-    if ll.empty:
-        return set()
-
-    ll = _normalize_id_columns(ll)
-    if "ts_code" not in ll.columns:
-        return set()
-
-    codes = set()
-    for v in ll["ts_code"].astype(str).tolist():
-        v = str(v).strip()
-        if not v:
-            continue
-        codes.add(v)
-        codes.add(_to_nosuffix(v))
-    return codes
-
-
-def _build_xy_from_history(
-    snapshot_dirs: List[Tuple[str, Path]],
-    theme_file_name: str = "step4_theme.csv",
-) -> Tuple[np.ndarray, np.ndarray]:
+def _load_step4_theme_history(s, lookback: int, theme_file_name: str) -> pd.DataFrame:
     """
-    snapshot_dirs: [(trade_date, snap_path)]，按日期升序
-    对每一天 d，用 d 的 step4_theme.csv 作为特征，用 d+1 的涨停列表打标
+    从 outputs/learning/step4_theme.csv 读取历史 step4 输出（训练样本输入）
     """
-    X_rows: List[np.ndarray] = []
-    y_rows: List[np.ndarray] = []
+    outputs_dir = Path(getattr(s.io, "outputs_dir", "outputs"))
+    fp = outputs_dir / "learning" / theme_file_name
+    if not fp.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(fp)
+    except Exception:
+        try:
+            df = pd.read_csv(fp, encoding="gbk")
+        except Exception:
+            return pd.DataFrame()
 
-    for i in range(len(snapshot_dirs) - 1):
-        _, snap = snapshot_dirs[i]
-        _, snap_next = snapshot_dirs[i + 1]
+    # 只保留最近 lookback 天（按 trade_date）
+    if "trade_date" in df.columns:
+        dts = sorted(df["trade_date"].astype(str).unique())
+        use = set(dts[-lookback:]) if len(dts) > lookback else set(dts)
+        df = df[df["trade_date"].astype(str).isin(use)].copy()
+    return df
 
-        df_day = _read_csv_if_exists(snap / theme_file_name)
+
+def _build_X_y_from_theme_history(s, lookback: int, theme_file_name: str) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    简化训练：用 step4_theme.csv 的 FEATURES 做输入，用“是否涨停”做标签。
+    标签来源：下一交易日 limit_list_d.csv
+    """
+    hist = _load_step4_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
+    hist = _normalize_id_columns(hist)
+    if hist.empty or "trade_date" not in hist.columns or "ts_code" not in hist.columns:
+        return np.zeros((0, len(FEATURES))), np.zeros((0,))
+
+    # 构造标签：对每个 trade_date 的样本，用 next_day limit_list 做 y
+    dates = sorted(hist["trade_date"].astype(str).unique())
+    rows = []
+    y = []
+    for i, d in enumerate(dates[:-1]):
+        next_d = dates[i + 1]
+        df_day = hist[hist["trade_date"].astype(str) == str(d)].copy()
         if df_day.empty:
             continue
 
-        df_day = _normalize_id_columns(df_day)
-        if "ts_code" not in df_day.columns:
-            continue
-
-        codes = df_day["ts_code"].astype(str).str.strip().values
-        feat = _ensure_features(df_day)
-        if feat.empty:
-            continue
-
-        limit_set = _label_from_next_day_limit_list(snap_next)
-        y = np.array(
-            [1 if (c in limit_set or _to_nosuffix(c) in limit_set) else 0 for c in codes],
-            dtype=int,
-        )
-        X = feat[FEATURES].astype(float).values
-
-        mask = np.isfinite(X).all(axis=1) & (np.abs(X).sum(axis=1) > 0)
-        X = X[mask]
-        y = y[mask]
-
-        if len(X) == 0:
-            continue
-
-        X_rows.append(X)
-        y_rows.append(y)
-
-    if not X_rows:
-        return np.zeros((0, len(FEATURES))), np.zeros((0,), dtype=int)
-
-    X_all = np.vstack(X_rows)
-    y_all = np.concatenate(y_rows)
-    return X_all, y_all
-
-
-def _resolve_snapshot_dirs_from_settings(s, lookback: int) -> List[Tuple[str, Path]]:
-    """从 s.data_repo 获取最近 lookback+1 天快照目录（+1 用于 next_day 打标）"""
-    if s is None or not hasattr(s, "data_repo"):
-        return []
-
-    dr = s.data_repo
-    dates: List[str] = []
-
-    if hasattr(dr, "list_snapshot_dates"):
         try:
-            dates = list(dr.list_snapshot_dates())
+            df_limit = s.data_repo.read_limit_list(next_d)
         except Exception:
-            dates = []
-    else:
-        root = getattr(dr, "warehouse_root", None)
-        repo_name = getattr(dr, "repo_name", None)
-        raw_dir = getattr(dr, "raw_dir", None)
+            df_limit = pd.DataFrame()
 
-        if root and repo_name and raw_dir:
-            raw_root = Path(root) / repo_name / raw_dir
-            if raw_root.exists():
-                tmp = []
-                for ydir in raw_root.iterdir():
-                    if not ydir.is_dir():
-                        continue
-                    for ddir in ydir.iterdir():
-                        if ddir.is_dir() and len(ddir.name) >= 8:
-                            tmp.append(ddir.name)
-                dates = sorted(tmp)
-        else:
-            base = Path("data_repo/snapshots")
-            if base.exists():
-                dates = sorted([p.name for p in base.iterdir() if p.is_dir()])
+        lim = set()
+        if df_limit is not None and not df_limit.empty:
+            df_limit = _normalize_id_columns(df_limit)
+            if "ts_code" in df_limit.columns:
+                lim = set(df_limit["ts_code"].astype(str).tolist())
 
-    dates = [d for d in dates if isinstance(d, str) and len(d) >= 8]
-    dates = dates[-(lookback + 1):]
+        feat = _ensure_features(df_day)
+        for j in range(len(df_day)):
+            rows.append(feat[FEATURES].iloc[j].astype(float).values)
+            code = str(df_day["ts_code"].iloc[j]).strip()
+            y.append(1 if code in lim else 0)
 
-    out: List[Tuple[str, Path]] = []
-    for d in dates:
-        if hasattr(dr, "snapshot_dir"):
-            try:
-                p = Path(dr.snapshot_dir(d))
-            except Exception:
-                p = Path("data_repo/snapshots") / d
-        else:
-            p = Path("data_repo/snapshots") / d
-        if p.exists():
-            out.append((d, p))
-
-    return out
+    if not rows:
+        return np.zeros((0, len(FEATURES))), np.zeros((0,))
+    return np.asarray(rows, dtype=float), np.asarray(y, dtype=int)
 
 
-# -------------------------
-# Training (LR + LGBM)
-# -------------------------
-def train_step5_lr(
-    s,
-    lookback: int = 90,
-    theme_file_name: str = "step4_theme.csv",
-    min_pos: int = 30,
-    min_samples: int = 300,
-) -> Dict[str, Any]:
-    snapshot_dirs = _resolve_snapshot_dirs_from_settings(s, lookback=lookback)
-    if len(snapshot_dirs) < 10:
-        return {"ok": False, "model": "lr", "reason": "not enough snapshots"}
-
-    X, y = _build_xy_from_history(snapshot_dirs, theme_file_name=theme_file_name)
-
-    pos = int(y.sum()) if len(y) else 0
-    if len(y) < min_samples or pos < min_pos:
-        return {"ok": False, "model": "lr", "reason": f"not enough labeled samples: n={len(y)}, pos={pos}"}
+def train_step5_lr(s, lookback: int = 90, theme_file_name: str = "step4_theme.csv") -> Dict[str, Any]:
+    X, y = _build_X_y_from_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
+    if X.shape[0] < 50 or len(np.unique(y)) < 2:
+        return {"ok": False, "reason": "not enough samples or single class", "n": int(X.shape[0]), "pos": int(y.sum())}
 
     model = Pipeline(
         steps=[
             ("scaler", StandardScaler(with_mean=True, with_std=True)),
-            ("lr", LogisticRegression(max_iter=2000, class_weight="balanced", solver="lbfgs")),
+            ("lr", LogisticRegression(max_iter=200, class_weight="balanced")),
         ]
     )
     model.fit(X, y)
-    save_lr(model, s=s)
-    return {"ok": True, "model": "lr", "n": int(len(y)), "pos": pos, "lookback": lookback}
+
+    paths = _get_model_paths(s=s)
+    _save_joblib(model, paths.lr_path)
+    return {"ok": True, "path": str(paths.lr_path), "n": int(X.shape[0]), "pos": int(y.sum())}
 
 
-def train_step5_lgbm(
-    s,
-    lookback: int = 120,
-    theme_file_name: str = "step4_theme.csv",
-    min_pos: int = 30,
-    min_samples: int = 300,
-) -> Dict[str, Any]:
-    if lgb is None:
-        return {"ok": False, "model": "lgbm", "reason": "lightgbm not installed"}
+def train_step5_lgbm(s, lookback: int = 120, theme_file_name: str = "step4_theme.csv") -> Dict[str, Any]:
+    if LGBMClassifier is None:
+        return {"ok": False, "reason": "lightgbm not installed"}
 
-    snapshot_dirs = _resolve_snapshot_dirs_from_settings(s, lookback=lookback)
-    if len(snapshot_dirs) < 10:
-        return {"ok": False, "model": "lgbm", "reason": "not enough snapshots"}
+    X, y = _build_X_y_from_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
+    if X.shape[0] < 80 or len(np.unique(y)) < 2:
+        return {"ok": False, "reason": "not enough samples or single class", "n": int(X.shape[0]), "pos": int(y.sum())}
 
-    X, y = _build_xy_from_history(snapshot_dirs, theme_file_name=theme_file_name)
-
-    pos = int(y.sum()) if len(y) else 0
-    if len(y) < min_samples or pos < min_pos:
-        return {"ok": False, "model": "lgbm", "reason": f"not enough labeled samples: n={len(y)}, pos={pos}"}
-
-    model = lgb.LGBMClassifier(
-        n_estimators=400,
+    model = LGBMClassifier(
+        n_estimators=300,
         learning_rate=0.05,
         num_leaves=31,
-        max_depth=-1,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        reg_lambda=1.0,
-        min_child_samples=30,
-        class_weight="balanced",
+        subsample=0.85,
+        colsample_bytree=0.85,
         random_state=42,
-        n_jobs=-1,
     )
     model.fit(X, y)
-    save_lgbm(model, s=s)
-    return {"ok": True, "model": "lgbm", "n": int(len(y)), "pos": pos, "lookback": lookback}
+
+    paths = _get_model_paths(s=s)
+    _save_joblib(model, paths.lgbm_path)
+    return {"ok": True, "path": str(paths.lgbm_path), "n": int(X.shape[0]), "pos": int(y.sum())}
 
 
 def train_step5_models(
