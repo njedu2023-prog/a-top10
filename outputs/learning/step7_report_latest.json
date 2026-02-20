@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-20 22:14:47",
+  "ts": "2026-02-20 22:28:28",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -14,7 +14,7 @@
     "feature_history_file": "outputs/learning/feature_history.csv",
     "rows_raw": 488,
     "rows_used": 302,
-    "rows_dropped_allzero": 143,
+    "rows_dropped_allzero": 131,
     "dates_total": 6,
     "dates_used": 6
   },
@@ -49,9 +49,9 @@
       "metrics": {
         "StrengthScore": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.0,
-          "std": 0.0,
-          "unique_count": 1
+          "non_zero_rate": 0.11270491803278689,
+          "std": 18.246173702641478,
+          "unique_count": 55
         },
         "ThemeBoost": {
           "non_null_rate": 1.0,
@@ -61,9 +61,9 @@
         },
         "turnover_rate": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.0,
-          "std": 0.0,
-          "unique_count": 1
+          "non_zero_rate": 0.11270491803278689,
+          "std": 8.428657976560501,
+          "unique_count": 56
         },
         "seal_amount": {
           "non_null_rate": 1.0,
@@ -104,8 +104,8 @@
     },
     "pseudo_ratio": 0.8872950819672131,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-20T14:14:47Z",
-    "model_version": "e141508b032e36da9152e8275cabfd5f9ded965d"
+    "updated_at_utc": "2026-02-20T14:28:28Z",
+    "model_version": "bd87ee901c39b19e5d5feea97e3c6583fbdff585"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
