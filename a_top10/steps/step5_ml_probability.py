@@ -28,12 +28,12 @@ from __future__ import annotations
 
 import os
 import json
-from datetime import datetime
 import re
-mport hashlib
+import hashlib
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence, List, Tuple, Dict, Any
+from typing import Optional, Sequence, Tuple, Dict, Any
 
 import numpy as np
 import pandas as pd
@@ -134,7 +134,7 @@ def _guess_trade_date(df: pd.DataFrame) -> str:
     """
     df = _ensure_df(df)
     for c in ["trade_date", "TradeDate", "日期", "交易日期"]:
-        if c in df.columns:
+        if c in df.columns and len(df) > 0:
             v = str(df[c].iloc[0]).strip()
             if re.match(r"^\d{8}$", v):
                 return v
