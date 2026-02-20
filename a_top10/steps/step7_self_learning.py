@@ -16,11 +16,15 @@ Step7：自学习闭环更新模型权重（命中率滚动提升）
     outputs/learning/step7_report_latest.json
     outputs/learning/step7_report_latest.md
 
-✅ 本版本新增（你确认的工程规范）：
-- Auto-Sampling + Quality Gate v1
-- 每次运行 Step7 都会写：
-    outputs/learning/sampling_state.json
-  Step5 会读取其中 target_rows_per_day，实现 200→500→1000 自动过渡。
+✅ 本版本修复点（关键）：
+- 修复 y 打标数据源缺失：next_trade_date 的 limit_list_d.csv 不一定在本次 _warehouse 内
+  -> 增加 3 段式兜底读取：
+     1) s.data_repo.read_limit_list(next_d)
+     2) GitHub RAW 拉取 a-share-top3-data/data/raw/YYYY/YYYYMMDD/limit_list_d.csv
+     3) tushare pro.limit_list_d(trade_date=next_d)
+- 移除 “days_covered>=30 才训练” 的硬门槛（它会让你永远 trained=False）
+  -> 训练是否执行只由 MIN_SAMPLES / MIN_POS / single_class 决定
+- 报告 3) 训练执行结果：无论训练是否执行，都要写 train_rows、pos/neg、reason
 """
 
 from __future__ import annotations
@@ -88,9 +92,7 @@ def _trade_date_from_output_path(p: Path) -> Optional[str]:
 
 
 def _read_text_best_effort(p: Path) -> str:
-    """
-    ✅ 兜底读取：避免因为编码问题导致 Step7 直接崩溃
-    """
+    """兜底读取：避免编码问题导致 Step7 崩溃"""
     try:
         return p.read_text(encoding="utf-8")
     except Exception:
@@ -104,24 +106,16 @@ def _read_text_best_effort(p: Path) -> str:
 
 
 def _parse_topn_codes(md_path: Path, topn: int) -> List[str]:
-    """
-    从预测报告 md 表格中解析 TopN 代码。
-    ✅ 更稳健：允许列前后空格、允许后缀、允许中间出现非表格行
-    """
+    """从预测报告 md 表格中解析 TopN 代码。"""
     text = _read_text_best_effort(md_path)
     if not text:
         return []
-
     codes: List[str] = []
-    # 典型表格行：| 1 | 000001.SZ | ...
-    # 放宽：第二列抓“看起来像代码”的 token
     pat = re.compile(r"^\s*\|\s*\d+\s*\|\s*([0-9A-Za-z\.\-]+)\s*\|")
-
     for line in text.splitlines():
         m = pat.match(line)
         if m:
             codes.append(m.group(1).strip())
-
     codes = [c for c in codes if c]
     return codes[: int(topn)]
 
@@ -179,15 +173,89 @@ def _infer_next_trade_date(predict_dates: List[str], d: str) -> str:
     return ""
 
 
+# ============================================================
+# Label source (关键修复)
+# ============================================================
+
+def _read_limit_list_from_github_raw(next_d: str, warnings: List[str]) -> pd.DataFrame:
+    """
+    兜底2：直接从 GitHub raw 拉 a-share-top3-data 的 limit_list_d.csv
+    依赖 env：
+      DATA_GITHUB_USER / DATA_REPO / DATA_BRANCH / RAW_DIR
+    """
+    user = str(os.getenv("DATA_GITHUB_USER", "")).strip()
+    repo = str(os.getenv("DATA_REPO", "")).strip()
+    branch = str(os.getenv("DATA_BRANCH", "main")).strip()
+    raw_dir = str(os.getenv("RAW_DIR", "data/raw")).strip()
+
+    if not user or not repo:
+        warnings.append("github_raw: missing DATA_GITHUB_USER/DATA_REPO env; skip.")
+        return pd.DataFrame()
+
+    year = next_d[:4]
+    url = f"https://raw.githubusercontent.com/{user}/{repo}/{branch}/{raw_dir}/{year}/{next_d}/limit_list_d.csv"
+    try:
+        return pd.read_csv(url, dtype=str, encoding="utf-8-sig")
+    except Exception:
+        try:
+            return pd.read_csv(url, dtype=str, encoding="utf-8")
+        except Exception as e:
+            warnings.append(f"github_raw read limit_list_d failed: {e}")
+            return pd.DataFrame()
+
+
+def _read_limit_list_from_tushare(next_d: str, warnings: List[str]) -> pd.DataFrame:
+    """
+    兜底3：直接 tushare 拉下一交易日 limit_list_d
+    """
+    token = str(os.getenv("TUSHARE_TOKEN", "")).strip()
+    if not token:
+        warnings.append("tushare: missing TUSHARE_TOKEN env; skip.")
+        return pd.DataFrame()
+
+    try:
+        import tushare as ts
+    except Exception as e:
+        warnings.append(f"tushare import failed: {e}")
+        return pd.DataFrame()
+
+    try:
+        ts.set_token(token)
+        pro = ts.pro_api()
+        # fields 尽量包含 ts_code
+        df = pro.limit_list_d(trade_date=next_d, fields="trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount")
+        if df is None:
+            return pd.DataFrame()
+        return df
+    except Exception as e:
+        warnings.append(f"tushare pro.limit_list_d failed: {e}")
+        return pd.DataFrame()
+
+
 def _read_limit_list_anyway(s: Settings, trade_date: str, warnings: List[str]) -> pd.DataFrame:
     """
-    主路径：s.data_repo.read_limit_list(trade_date)
+    ✅ 关键修复：确保 next_trade_date 的 limit_list_d 能读到
+    优先级：
+      1) s.data_repo.read_limit_list(trade_date)   （如果本次 _warehouse 有）
+      2) GitHub RAW 拉取                         （与你的架构最一致）
+      3) tushare API 拉取                         （最后兜底）
     """
+    # 1) 本地/warehouse
     try:
-        return s.data_repo.read_limit_list(trade_date)  # type: ignore[attr-defined]
+        df = s.data_repo.read_limit_list(trade_date)  # type: ignore[attr-defined]
+        if df is not None and not df.empty:
+            return df
     except Exception as e:
-        warnings.append(f"read_limit_list failed: {e}")
-        return pd.DataFrame()
+        warnings.append(f"read_limit_list (warehouse) failed: {e}")
+
+    # 2) GitHub raw
+    df2 = _read_limit_list_from_github_raw(trade_date, warnings)
+    if df2 is not None and not df2.empty:
+        return df2
+
+    # 3) tushare
+    df3 = _read_limit_list_from_tushare(trade_date, warnings)
+    return df3 if df3 is not None else pd.DataFrame()
 
 
 # ============================================================
@@ -205,7 +273,7 @@ def _build_train_set_from_feature_history(
     StrengthScore, ThemeBoost, seal_amount, open_times, turnover_rate, _prob_warn
 
     训练样本：
-    - X：StrengthScore/ThemeBoost/seal_amount/open_times/turnover_rate (+ 你后续可加更多)
+    - X：StrengthScore/ThemeBoost/seal_amount/open_times/turnover_rate
     - y：next_day 是否涨停（用 next_trade_date 的 limit_list_d.csv）
     """
     outputs_dir = _get_outputs_dir(s)
@@ -224,17 +292,20 @@ def _build_train_set_from_feature_history(
         warnings.append("feature_history.csv not found: training skipped.")
         return pd.DataFrame(), meta
 
-    try:
-        df = pd.read_csv(fp, dtype=str, encoding="utf-8")
-    except Exception:
+    # robust read
+    df = None
+    for enc in ("utf-8-sig", "utf-8", "gbk"):
         try:
-            df = pd.read_csv(fp, dtype=str, encoding="utf-8", errors="ignore")
+            df = pd.read_csv(fp, dtype=str, encoding=enc)
+            break
         except Exception:
-            try:
-                df = pd.read_csv(fp, dtype=str, encoding="gbk", errors="ignore")
-            except Exception as e:
-                warnings.append(f"read feature_history failed: {e}")
-                return pd.DataFrame(), meta
+            continue
+    if df is None:
+        try:
+            df = pd.read_csv(fp, dtype=str)
+        except Exception as e:
+            warnings.append(f"read feature_history failed: {e}")
+            return pd.DataFrame(), meta
 
     if df is None or df.empty:
         warnings.append("feature_history.csv empty: training skipped.")
@@ -242,7 +313,6 @@ def _build_train_set_from_feature_history(
 
     meta["rows_raw"] = int(len(df))
 
-    # required cols
     for c in ["trade_date", "ts_code"]:
         if c not in df.columns:
             warnings.append(f"feature_history missing col: {c}")
@@ -251,7 +321,6 @@ def _build_train_set_from_feature_history(
     df["trade_date"] = df["trade_date"].astype(str).str.strip()
     df["ts_code"] = df["ts_code"].astype(str).str.strip()
 
-    # last lookback_days dates
     dates = sorted([d for d in df["trade_date"].unique().tolist() if re.match(r"^\d{8}$", str(d))])
     meta["dates_total"] = int(len(dates))
     use_dates = dates[-lookback_days:] if len(dates) > lookback_days else dates
@@ -262,33 +331,32 @@ def _build_train_set_from_feature_history(
         warnings.append("feature_history filtered empty by lookback.")
         return pd.DataFrame(), meta
 
-    # numeric features
     feats = ["StrengthScore", "ThemeBoost", "seal_amount", "open_times", "turnover_rate"]
     for c in feats:
         if c not in dfx.columns:
             dfx[c] = "0"
-
     for c in feats:
         dfx[c] = pd.to_numeric(dfx[c], errors="coerce").fillna(0.0)
 
-    # drop all-zero rows
     allzero = (dfx[feats].abs().sum(axis=1) <= 0.0)
-    dropped = int(allzero.sum())
-    meta["rows_dropped_allzero"] = dropped
+    meta["rows_dropped_allzero"] = int(allzero.sum())
     dfx = dfx[~allzero].copy()
-
     if dfx.empty:
         warnings.append("all rows are all-zero features: training skipped.")
         return pd.DataFrame(), meta
 
-    # label: next_trade_date limit_list
+    # label
     dates2 = sorted([d for d in dfx["trade_date"].unique().tolist() if re.match(r"^\d{8}$", str(d))])
     rows: List[Dict[str, Any]] = []
 
     for i, d in enumerate(dates2[:-1]):
+        # ✅ next_d 用 feature_history 中的下一天（你现有体系）
         next_d = dates2[i + 1]
         lim_df = _read_limit_list_anyway(s, next_d, warnings)
         lim_set = set(_limit_codes_from_df(lim_df))
+
+        if not lim_set:
+            warnings.append(f"label_source_empty: next_trade_date={next_d} limit_list empty (warehouse/raw/tushare all failed)")
 
         df_day = dfx[dfx["trade_date"] == d].copy()
         if df_day.empty:
@@ -376,9 +444,6 @@ def _save_joblib_model(model, path: Path, warnings: List[str]) -> bool:
 
 
 def _train_and_save_models(s: Settings, train_df: pd.DataFrame, warnings: List[str]) -> Dict[str, Any]:
-    """
-    训练并落盘 models/*.joblib
-    """
     res: Dict[str, Any] = {
         "trained": False,
         "lr_saved": False,
@@ -387,21 +452,22 @@ def _train_and_save_models(s: Settings, train_df: pd.DataFrame, warnings: List[s
         "detail": {},
     }
 
+    # 先把基础统计写进去（即使后面 skip，也不会空）
     if train_df is None or train_df.empty:
         warnings.append("train_df empty: training skipped.")
-        res["detail"] = {"reason": "train_df empty"}
+        res["detail"] = {"reason": "train_df empty", "train_rows": 0, "pos": 0, "neg": 0}
         return res
 
-    # basic class check
     pos = int(train_df["label"].astype(int).sum())
     neg = int(len(train_df) - pos)
+    n = int(len(train_df))
 
-    res["detail"]["train_rows"] = int(len(train_df))
+    res["detail"]["train_rows"] = n
     res["detail"]["pos"] = pos
     res["detail"]["neg"] = neg
 
-    if len(train_df) < MIN_SAMPLES:
-        warnings.append(f"not enough samples for cold start: n={len(train_df)} < {MIN_SAMPLES}")
+    if n < MIN_SAMPLES:
+        warnings.append(f"not enough samples for cold start: n={n} < {MIN_SAMPLES}")
         res["detail"]["reason"] = "min_samples"
         return res
     if pos < MIN_POS:
@@ -431,6 +497,7 @@ def _train_and_save_models(s: Settings, train_df: pd.DataFrame, warnings: List[s
     res["trained"] = bool(lr_saved or lgbm_saved)
     res["detail"]["lr_path"] = str(lr_path) if lr_saved else ""
     res["detail"]["lgbm_path"] = str(lgbm_path) if lgbm_saved else ""
+    res["detail"]["reason"] = "ok" if res["trained"] else "save_failed"
     return res
 
 
@@ -456,16 +523,15 @@ def _read_feature_history(outputs_dir: Path) -> Tuple[pd.DataFrame, str]:
     fp = outputs_dir / "learning" / "feature_history.csv"
     if not fp.exists():
         return pd.DataFrame(), str(fp)
-    try:
-        return pd.read_csv(fp, dtype=str, encoding="utf-8"), str(fp)
-    except Exception:
+    for enc in ("utf-8-sig", "utf-8", "gbk"):
         try:
-            return pd.read_csv(fp, dtype=str, encoding="utf-8", errors="ignore"), str(fp)
+            return pd.read_csv(fp, dtype=str, encoding=enc), str(fp)
         except Exception:
-            try:
-                return pd.read_csv(fp, dtype=str, encoding="gbk", errors="ignore"), str(fp)
-            except Exception:
-                return pd.DataFrame(), str(fp)
+            continue
+    try:
+        return pd.read_csv(fp, dtype=str), str(fp)
+    except Exception:
+        return pd.DataFrame(), str(fp)
 
 
 def _rows_per_day_series(df: pd.DataFrame) -> pd.Series:
@@ -528,32 +594,20 @@ def _quality_gate_v1(df: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
     details["rows_in_window"] = int(len(d))
 
     ok = True
-
-    # 非空率 >= 0.90（核心列）
     for c in CORE_FEATURE_COLS_V1:
         if metrics[c]["non_null_rate"] < 0.90:
             ok = False
-
-    # 非恒定（至少这些列得有波动）
     for c in ["StrengthScore", "ThemeBoost", "Probability"]:
         if metrics.get(c, {}).get("std", 0.0) <= 0.0:
             ok = False
-
-    # 非零率（强制列）
     if metrics.get("StrengthScore", {}).get("non_zero_rate", 0.0) < 0.30:
         ok = False
     if metrics.get("turnover_rate", {}).get("non_zero_rate", 0.0) < 0.30:
         ok = False
-
-    # ThemeBoost 离散度（unique_count >= 6）
     if metrics.get("ThemeBoost", {}).get("unique_count", 0) < 6:
         ok = False
-
-    # 稀疏列：不能全 0
     if metrics.get("seal_amount", {}).get("non_zero_rate", 0.0) < 0.05:
         ok = False
-
-    # open_times：至少要有点波动
     if (metrics.get("open_times", {}).get("std", 0.0) <= 0.0) and (metrics.get("open_times", {}).get("non_zero_rate", 0.0) < 0.02):
         ok = False
 
@@ -575,7 +629,6 @@ def _decide_sampling_stage(
     rows = [int(x) for x in (rows_last or []) if x is not None]
     debug: Dict[str, Any] = {"prev_stage": prev, "days_covered": int(days_covered), "rows_last": rows[-20:]}
 
-    # 默认 target（不跳跃）
     stage = prev if prev else "S1_MVP"
     target = 200 if stage.startswith("S1") else 500 if stage.startswith("S2") else 1000
 
@@ -583,19 +636,16 @@ def _decide_sampling_stage(
         debug["reason"] = "quality_gate_fail"
         return stage, target, debug
 
-    # S1 -> S2
     if stage.startswith("S1"):
         w = rows[-10:]
         if days_covered >= 30 and _count_ge(w, 200) >= 7:
             return "S2_STD", 500, {**debug, "upgrade": "S1->S2"}
 
-    # S2 -> S3
     if stage.startswith("S2"):
         w = rows[-15:]
         if days_covered >= 90 and _count_ge(w, 500) >= 10:
             return "S3_STRONG", 1000, {**debug, "upgrade": "S2->S3"}
 
-    # S3：不降级，仅记录
     if stage.startswith("S3"):
         w = rows[-20:]
         debug["keep_check_ge_1000"] = _count_ge(w, 1000)
@@ -616,9 +666,6 @@ def _write_sampling_state(outputs_dir: Path, obj: Dict[str, Any]) -> str:
 # ============================================================
 
 def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    主入口：被 pipeline 调用
-    """
     warnings: List[str] = []
 
     outputs_dir = _get_outputs_dir(s)
@@ -627,20 +674,18 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     _ensure_dir(learning_dir)
 
     # topn / lookback
-    topn = 10
     try:
         topn = int(getattr(s, "topn", 10) or 10)
     except Exception:
         topn = 10
 
-    lookback_days = 150
     try:
         lookback_days = int(getattr(s, "step7_lookback_days", getattr(s, "lookback_days", 150)) or 150)
     except Exception:
         lookback_days = 150
 
     # ---------------------------
-    # 0) Auto-Sampling + Quality Gate（写 sampling_state.json 给 Step5 用）
+    # 0) Auto-Sampling + Quality Gate
     # ---------------------------
     fh_df, fh_path = _read_feature_history(outputs_dir)
     rows_ser = _rows_per_day_series(fh_df)
@@ -648,7 +693,6 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     rows_last = [int(v) for v in rows_ser.tail(120).tolist()] if len(rows_ser) else []
     quality_pass, q_details = _quality_gate_v1(fh_df)
 
-    # 读取上一版 stage
     prev_state: Dict[str, Any] = {}
     prev_p = learning_dir / SAMPLING_STATE_FILE
     if prev_p.exists():
@@ -680,15 +724,13 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     sampling_state_path = _write_sampling_state(outputs_dir, sampling_state)
-    if not quality_pass:
-        warnings.append("quality_gate_fail: sampling_state written but training will be skipped.")
 
     # ---------------------------
-    # 1) 命中率统计（基于历史 predict_top10）
+    # 1) 命中率统计
     # ---------------------------
     predict_files = _list_predict_files(outputs_dir)
     predict_dates = [d for d in [_trade_date_from_output_path(p) for p in predict_files] if d]
-    predict_dates = sorted(list(dict.fromkeys(predict_dates)))  # uniq
+    predict_dates = sorted(list(dict.fromkeys(predict_dates)))
 
     hit_rows: List[Dict[str, Any]] = []
     date_to_file: Dict[str, Path] = {}
@@ -740,7 +782,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         hit_df.to_csv(hit_csv, index=False, encoding="utf-8-sig")
 
     # ---------------------------
-    # 2) 构建训练集（来自 feature_history.csv）并训练落盘模型
+    # 2) 构建训练集 + 训练落盘模型
     # ---------------------------
     train_df, train_meta = _build_train_set_from_feature_history(
         s=s,
@@ -748,21 +790,32 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         warnings=warnings,
     )
 
-    # 训练执行（保证落盘 models/*.joblib）
-    if bool(sampling_state.get("quality_gate_pass")) and int(sampling_state.get("days_covered", 0)) >= 30:
+    # ✅ 修复：不再用 days_covered>=30 卡死训练
+    # 训练是否执行只由 quality_gate + MIN_SAMPLES/MIN_POS 决定
+    if bool(sampling_state.get("quality_gate_pass")):
         train_result = _train_and_save_models(s=s, train_df=train_df, warnings=warnings)
     else:
+        # 仍然把 train_rows/pos/neg 填满，避免报告空
+        if train_df is None or train_df.empty:
+            tr = {"train_rows": 0, "pos": 0, "neg": 0}
+        else:
+            pos = int(train_df["label"].astype(int).sum())
+            neg = int(len(train_df) - pos)
+            tr = {"train_rows": int(len(train_df)), "pos": pos, "neg": neg}
+
         train_result = {
             "trained": False,
             "lr_saved": False,
             "lgbm_saved": False,
             "models_dir": "",
             "detail": {
-                "reason": "skip_train: quality_gate_fail or insufficient_days",
+                **tr,
+                "reason": "skip_train: quality_gate_fail",
                 "quality_gate_pass": bool(sampling_state.get("quality_gate_pass")),
                 "days_covered": int(sampling_state.get("days_covered", 0)),
             },
         }
+        warnings.append("skip_train: quality_gate_fail")
 
     # ---------------------------
     # 3) 输出学习报告
@@ -837,6 +890,8 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         d = train_result["detail"]
         md_lines.append(f"- train_rows：{d.get('train_rows','')}")
         md_lines.append(f"- pos/neg：{d.get('pos','')}/{d.get('neg','')}")
+        if d.get("reason"):
+            md_lines.append(f"- reason：{d.get('reason')}")
         if d.get("lr_path"):
             md_lines.append(f"- lr_path：{d.get('lr_path')}")
         if d.get("lgbm_path"):
