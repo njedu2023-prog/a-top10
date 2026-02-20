@@ -9,16 +9,16 @@ Step3: Strength Score — Engine V2 (基于可用数据的真实量化版)
 2) 自动定位数据仓库快照目录，读取可用 CSV（daily / daily_basic / top_list / moneyflow_hsgt / limit_list_d / limit_break_d）
 3) 用 ts_code(+trade_date) join 补齐字段
 4) 计算 StrengthScore（0~100），并输出调试分项，保证 Step6 能识别 StrengthScore
+5) ✅ 关键：尽可能补齐并透传 Step5/feature_history 需要的核心字段：
+   - turnover_rate
+   - seal_amount
+   - open_times
 
 输出：
 - 返回：带 StrengthScore 的 DataFrame（默认 TopK=50）
 - 旁路落盘（不影响主流程）：
   outputs/debug_step3_report.md
   outputs/step3_strength_YYYYMMDD.csv
-
-注意：
-- 不依赖任何“高阶权限字段”（封板时间/封单金额等）
-- 所有字段缺失时也不会崩溃，但会在 debug 报告里明确提示缺失率
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -109,18 +109,15 @@ def _log1p_safe(s: pd.Series) -> pd.Series:
 
 
 def _resolve_trade_date(s=None) -> str:
-    # 1) ENV 优先
     td = os.getenv("TRADE_DATE", "").strip()
     if td:
         return td
-    # 2) settings 其次
     if s is not None:
         for k in ("trade_date", "TRADE_DATE"):
             if hasattr(s, k):
                 v = str(getattr(s, k) or "").strip()
                 if v:
                     return v
-    # 3) 兜底：当天
     from datetime import datetime
     return datetime.now().strftime("%Y%m%d")
 
@@ -130,13 +127,6 @@ def _resolve_trade_date(s=None) -> str:
 # =========================================================
 
 def _candidate_snapshot_dirs(trade_date: str) -> Sequence[Path]:
-    """
-    兼容多种仓库结构：
-    - _warehouse/a-share-top3-data/data/raw/YYYY/YYYYMMDD/
-    - _warehouse/a-share-top3-data/data/raw/YYYYMMDD/
-    - data_repo/snapshots/YYYYMMDD/ （旧结构兜底）
-    - snapshots/YYYYMMDD/
-    """
     y = trade_date[:4]
     return [
         Path("_warehouse") / "a-share-top3-data" / "data" / "raw" / y / trade_date,
@@ -147,7 +137,6 @@ def _candidate_snapshot_dirs(trade_date: str) -> Sequence[Path]:
 
 
 def _locate_snapshot_dir(trade_date: str, s=None, ctx: Optional[Dict[str, Any]] = None) -> Optional[Path]:
-    # 1) ctx 提供的 snapshot_dir
     if ctx and isinstance(ctx, dict):
         p = ctx.get("snapshot_dir", None)
         if p:
@@ -155,7 +144,6 @@ def _locate_snapshot_dir(trade_date: str, s=None, ctx: Optional[Dict[str, Any]] 
             if pp.exists():
                 return pp
 
-    # 2) settings 提供的 snapshot_dir(trade_date)
     if s is not None and hasattr(s, "snapshot_dir"):
         try:
             pp = s.snapshot_dir(trade_date)
@@ -165,7 +153,6 @@ def _locate_snapshot_dir(trade_date: str, s=None, ctx: Optional[Dict[str, Any]] 
         except Exception:
             pass
 
-    # 3) 常见路径探测
     for p in _candidate_snapshot_dirs(trade_date):
         if p.exists():
             return p
@@ -179,11 +166,13 @@ def _read_csv(p: Path) -> pd.DataFrame:
     try:
         return pd.read_csv(p)
     except Exception:
-        # 兜底：强制 utf-8
         try:
-            return pd.read_csv(p, encoding="utf-8")
+            return pd.read_csv(p, encoding="utf-8", errors="ignore")
         except Exception:
-            return pd.DataFrame()
+            try:
+                return pd.read_csv(p, encoding="gbk", errors="ignore")
+            except Exception:
+                return pd.DataFrame()
 
 
 # =========================================================
@@ -191,13 +180,9 @@ def _read_csv(p: Path) -> pd.DataFrame:
 # =========================================================
 
 def _load_candidates_fallback(trade_date: str) -> pd.DataFrame:
-    """
-    如果上游没传 candidates_df，就从 outputs/step2_candidates_YYYYMMDD.csv 读。
-    """
     p = Path("outputs") / f"step2_candidates_{trade_date}.csv"
     if p.exists():
-        df = _read_csv(p)
-        return df
+        return _read_csv(p)
     return pd.DataFrame()
 
 
@@ -223,7 +208,6 @@ def _ensure_identity(out: pd.DataFrame) -> pd.DataFrame:
     elif "industry" not in out.columns:
         out["industry"] = ""
 
-    # trade_date
     td_col = _first_existing_col(out, ["trade_date", "TRADE_DATE", "日期"])
     if td_col:
         out["trade_date"] = out[td_col].astype(str)
@@ -248,13 +232,36 @@ def _pick_col(df: pd.DataFrame, names: Sequence[str]) -> Optional[str]:
     return _first_existing_col(df, names)
 
 
+def _extract_single_value_by_day(
+    df: pd.DataFrame,
+    prefix: str,
+    value_candidates: Sequence[str],
+) -> pd.DataFrame:
+    """
+    从 df 里提取一个值列（例如 seal_amount/open_times），按 ts_code+trade_date 聚合：
+    - 数值列：sum（同一天多行时）
+    """
+    if df is None or df.empty or ("ts_code" not in df.columns) or ("trade_date" not in df.columns):
+        return pd.DataFrame()
+
+    val_col = _pick_col(df, value_candidates)
+    if not val_col:
+        return pd.DataFrame()
+
+    x = df[["ts_code", "trade_date", val_col]].copy()
+    out_col = f"{prefix}"
+    x = x.rename(columns={val_col: out_col})
+    x[out_col] = pd.to_numeric(x[out_col], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    x = x.groupby(["ts_code", "trade_date"], as_index=False)[out_col].sum()
+    return x
+
+
 def _join_snap_features(cand: pd.DataFrame, snap_dir: Path) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     从快照目录读取多个 csv，并按 ts_code+trade_date 合并到候选池。
     """
-    debug = {"snapshot_dir": str(snap_dir), "files": {}}
+    debug: Dict[str, Any] = {"snapshot_dir": str(snap_dir), "files": {}}
 
-    # 读文件
     daily = _read_csv(snap_dir / "daily.csv")
     daily_basic = _read_csv(snap_dir / "daily_basic.csv")
     top_list = _read_csv(snap_dir / "top_list.csv")
@@ -269,7 +276,6 @@ def _join_snap_features(cand: pd.DataFrame, snap_dir: Path) -> Tuple[pd.DataFram
     debug["files"]["limit_list_d.csv"] = int(len(limit_list))
     debug["files"]["limit_break_d.csv"] = int(len(limit_break))
 
-    # 规范主键
     cand = cand.copy()
     cand = _normalize_ts_code(cand, "ts_code")
 
@@ -277,7 +283,6 @@ def _join_snap_features(cand: pd.DataFrame, snap_dir: Path) -> Tuple[pd.DataFram
         if not df.empty and "ts_code" in df.columns:
             _normalize_ts_code(df, "ts_code")
 
-    # trade_date 列名兼容
     def norm_td(df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
             return df
@@ -295,7 +300,7 @@ def _join_snap_features(cand: pd.DataFrame, snap_dir: Path) -> Tuple[pd.DataFram
     limit_list = norm_td(limit_list)
     limit_break = norm_td(limit_break)
 
-    # 合并 daily
+    # 合并 daily：pct_chg/amount/vol
     if not daily.empty and ("ts_code" in daily.columns) and ("trade_date" in daily.columns):
         pct_col = _pick_col(daily, ["pct_chg", "pct_change", "change_pct", "涨跌幅"])
         amt_col = _pick_col(daily, ["amount", "成交额", "turnover_amount", "amt"])
@@ -310,9 +315,9 @@ def _join_snap_features(cand: pd.DataFrame, snap_dir: Path) -> Tuple[pd.DataFram
             d = d.rename(columns={vol_col: "vol"})
         cand = cand.merge(d, on=["ts_code", "trade_date"], how="left")
 
-    # 合并 daily_basic
+    # 合并 daily_basic：turnover_rate/circ_mv/volume_ratio...
     if not daily_basic.empty and ("ts_code" in daily_basic.columns) and ("trade_date" in daily_basic.columns):
-        trf_col = _pick_col(daily_basic, ["turnover_rate_f", "turnover_rate_f", "turnover_f"])
+        trf_col = _pick_col(daily_basic, ["turnover_rate_f", "turnover_f"])
         tr_col = _pick_col(daily_basic, ["turnover_rate", "turn_rate", "换手率"])
         cmv_col = _pick_col(daily_basic, ["circ_mv", "float_mv", "流通市值"])
         tmv_col = _pick_col(daily_basic, ["total_mv", "总市值"])
@@ -331,19 +336,17 @@ def _join_snap_features(cand: pd.DataFrame, snap_dir: Path) -> Tuple[pd.DataFram
             db = db.rename(columns={vr_col: "volume_ratio"})
         cand = cand.merge(db, on=["ts_code", "trade_date"], how="left")
 
-    # 龙虎榜资金净额（top_list）
+    # 龙虎榜资金净额（top_list）/ 北向（moneyflow_hsgt）：自动找 net_* 字段并聚合
     def extract_net_amount(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
         if df is None or df.empty or ("ts_code" not in df.columns) or ("trade_date" not in df.columns):
             return pd.DataFrame()
-        # 尽量找 net_amount / net_buy / net 之类
         cand_cols = [c for c in df.columns if "net" in str(c).lower()]
         net_col = _pick_col(df, ["net_amount", "net_amt", "net_buy", "net"]) or (cand_cols[0] if cand_cols else None)
         if not net_col:
             return pd.DataFrame()
         x = df[["ts_code", "trade_date", net_col]].copy()
         x = x.rename(columns={net_col: f"{prefix}_net_amount"})
-        x[f"{prefix}_net_amount"] = pd.to_numeric(x[f"{prefix}_net_amount"], errors="coerce")
-        # 同一 ts_code 可能多行：聚合求和
+        x[f"{prefix}_net_amount"] = pd.to_numeric(x[f"{prefix}_net_amount"], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
         x = x.groupby(["ts_code", "trade_date"], as_index=False)[f"{prefix}_net_amount"].sum()
         return x
 
@@ -366,6 +369,28 @@ def _join_snap_features(cand: pd.DataFrame, snap_dir: Path) -> Tuple[pd.DataFram
         lb["limit_break_flag"] = 1
         cand = cand.merge(lb, on=["ts_code", "trade_date"], how="left")
 
+    # ✅ 关键：尝试抽取 seal_amount / open_times（多候选字段名自动适配）
+    # 不保证每个仓库一定有，但只要存在，就能向下游提供“真实非零信息”
+    seal = _extract_single_value_by_day(
+        limit_list,
+        prefix="seal_amount",
+        value_candidates=[
+            "seal_amount", "fd_amount", "fund_amount", "封单额", "封单金额", "封单资金", "order_amount", "amount",
+        ],
+    )
+    if not seal.empty:
+        cand = cand.merge(seal, on=["ts_code", "trade_date"], how="left")
+
+    opens = _extract_single_value_by_day(
+        limit_break,
+        prefix="open_times",
+        value_candidates=[
+            "open_times", "open_num", "break_times", "break_count", "炸板次数", "open_cnt", "times",
+        ],
+    )
+    if not opens.empty:
+        cand = cand.merge(opens, on=["ts_code", "trade_date"], how="left")
+
     return cand, debug
 
 
@@ -377,6 +402,7 @@ def calc_strength_score(df: Any, trade_date: str, s=None, ctx: Optional[Dict[str
     """
     返回：(scored_df, debug_info)
     scored_df 至少包含：ts_code / name / industry / trade_date / StrengthScore
+    且尽可能包含：turnover_rate / seal_amount / open_times（用于 Step5/feature_history）
     """
     debug: Dict[str, Any] = {"trade_date": trade_date}
 
@@ -392,28 +418,27 @@ def calc_strength_score(df: Any, trade_date: str, s=None, ctx: Optional[Dict[str
     cand["trade_date"] = cand["trade_date"].astype(str)
     cand.loc[cand["trade_date"].isin(["", "nan", "None"]), "trade_date"] = trade_date
 
-    # 主键必须有
     if "ts_code" not in cand.columns:
         return cand, {"error": "Step3: candidates 缺少 ts_code，无法计算。"}
 
-    # 快照目录
     snap_dir = _locate_snapshot_dir(trade_date, s=s, ctx=ctx)
     if snap_dir is None:
-        # 没快照也不崩：给一个可解释的弱评分（避免全 0 但会提示缺快照）
         out = cand.copy()
         out["StrengthScore"] = 0.0
+        # ✅ 确保标准列存在，避免下游全缺列
+        out["turnover_rate"] = 0.0
+        out["seal_amount"] = 0.0
+        out["open_times"] = 0.0
         debug["snapshot_dir"] = None
         debug["snapshot_missing"] = True
         return out, debug
 
-    # join 快照特征
     out, join_dbg = _join_snap_features(cand, snap_dir)
     debug.update(join_dbg)
 
-    # 统一数值列
+    # ---------- 统一数值列 ----------
     pct = _to_float_series(out, _first_existing_col(out, ["pct_chg", "pct_change", "change_pct", "涨跌幅"]), 0.0)
     amount = _to_float_series(out, _first_existing_col(out, ["amount", "成交额"]), 0.0)
-    vol = _to_float_series(out, _first_existing_col(out, ["vol", "成交量"]), 0.0)
 
     trf = _to_float_series(out, _first_existing_col(out, ["turnover_rate_f"]), np.nan)
     tr = _to_float_series(out, _first_existing_col(out, ["turnover_rate", "turn_rate", "换手率"]), np.nan)
@@ -428,35 +453,37 @@ def calc_strength_score(df: Any, trade_date: str, s=None, ctx: Optional[Dict[str
     limit_up_flag = _to_float_series(out, _first_existing_col(out, ["limit_up_flag"]), 0.0)
     limit_break_flag = _to_float_series(out, _first_existing_col(out, ["limit_break_flag"]), 0.0)
 
-    # 构造稳健因子（全部 0~1）
-    # 1) 动量：pct 越大越强
+    # ✅ 关键：把 seal_amount/open_times 标准化并确保存在
+    seal_amount = _to_float_series(out, _first_existing_col(out, ["seal_amount", "fd_amount", "封单额", "封单金额"]), 0.0)
+    open_times = _to_float_series(out, _first_existing_col(out, ["open_times", "break_times", "炸板次数"]), 0.0)
+
+    # 把标准列写回（保证下游拿得到）
+    out["turnover_rate"] = turnover
+    out["seal_amount"] = seal_amount
+    out["open_times"] = open_times
+
+    # ---------- 构造稳健因子（0~1） ----------
     f_momo = _robust_rank01(pct, ascending=False)
-
-    # 2) 成交额强度：log(amount) 越大越强
     f_amt = _robust_rank01(_log1p_safe(amount), ascending=False)
-
-    # 3) 换手：turnover 越大越强（但极端高换手不做惩罚，先用 rank 稳健）
     f_turn = _robust_rank01(turnover, ascending=False)
 
-    # 4) 量比：volume_ratio 越大越强（如果没有就全 0）
+    # 量比
     f_vr = _robust_rank01(volume_ratio, ascending=False) if volume_ratio.notna().any() else pd.Series([0.0] * len(out), index=out.index)
 
-    # 5) 资金强度：龙虎榜+北向，按流通市值归一再 rank
+    # 资金强度：龙虎榜+北向 / 流通市值
     denom = circ_mv.replace(0.0, np.nan)
     cap_raw = (lhb_net.fillna(0.0) + hsgt_net.fillna(0.0)) / denom
     cap_raw = cap_raw.replace([np.inf, -np.inf], np.nan).fillna(0.0)
     f_cap = _robust_rank01(cap_raw, ascending=False)
 
-    # 6) 低流通市值偏好：市值越小越强（可弱权重）
+    # 小市值偏好
     mv_raw = circ_mv.replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    f_small = _robust_rank01(mv_raw, ascending=True)  # 小市值=更强
+    f_small = _robust_rank01(mv_raw, ascending=True)
 
-    # 奖惩：涨停小加分，炸板扣分
     bonus = 0.05 * (limit_up_flag > 0.5).astype("float64")
     penalty = 0.07 * (limit_break_flag > 0.5).astype("float64")
 
     # 合成权重（可解释、可调）
-    # 这些权重保证：即使某些文件缺失，也不会让 StrengthScore 全部归零
     w_momo = 0.18
     w_amt = 0.26
     w_turn = 0.20
@@ -477,7 +504,7 @@ def calc_strength_score(df: Any, trade_date: str, s=None, ctx: Optional[Dict[str
 
     score01 = _clip01(score01)
 
-    # 写回
+    # 写回分项（便于调试/回测）
     out["_f_momo"] = f_momo
     out["_f_amt"] = f_amt
     out["_f_turn"] = f_turn
@@ -489,26 +516,34 @@ def calc_strength_score(df: Any, trade_date: str, s=None, ctx: Optional[Dict[str
 
     out["StrengthScore"] = (score01 * 100.0).round(6)
 
-    # Debug：缺失率
+    # ---------- Debug：缺失率 + 非零率 ----------
     def miss_rate(x: pd.Series) -> float:
         x = pd.to_numeric(x, errors="coerce")
         return float(1.0 - x.notna().mean()) if len(x) else 1.0
 
+    def nonzero_rate(x: pd.Series) -> float:
+        x = pd.to_numeric(x, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        return float((x != 0.0).mean()) if len(x) else 0.0
+
     debug["missing_rate"] = {
         "pct_chg": miss_rate(pct),
         "amount": miss_rate(amount),
-        "turnover": miss_rate(turnover),
+        "turnover_rate": miss_rate(turnover),
         "circ_mv": miss_rate(circ_mv),
         "volume_ratio": miss_rate(volume_ratio),
         "lhb_net_amount": miss_rate(lhb_net),
         "hsgt_net_amount": miss_rate(hsgt_net),
-        "limit_up_flag": miss_rate(limit_up_flag),
-        "limit_break_flag": miss_rate(limit_break_flag),
+        "seal_amount": miss_rate(seal_amount),
+        "open_times": miss_rate(open_times),
+    }
+    debug["nonzero_rate"] = {
+        "StrengthScore": nonzero_rate(out["StrengthScore"]),
+        "turnover_rate": nonzero_rate(turnover),
+        "seal_amount": nonzero_rate(seal_amount),
+        "open_times": nonzero_rate(open_times),
     }
 
-    # 排序
     out = out.sort_values("StrengthScore", ascending=False).reset_index(drop=True)
-
     return out, debug
 
 
@@ -516,13 +551,9 @@ def _write_debug_outputs(trade_date: str, scored: pd.DataFrame, debug: Dict[str,
     out_dir = Path("outputs")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # CSV
-    (out_dir / f"step3_strength_{trade_date}.csv").write_text(
-        scored.to_csv(index=False), encoding="utf-8"
-    )
+    scored.to_csv(out_dir / f"step3_strength_{trade_date}.csv", index=False, encoding="utf-8")
 
-    # Markdown report
-    lines = []
+    lines: List[str] = []
     lines.append("# Step3 Debug Report")
     lines.append("")
     lines.append(f"- trade_date: `{trade_date}`")
@@ -530,15 +561,30 @@ def _write_debug_outputs(trade_date: str, scored: pd.DataFrame, debug: Dict[str,
     lines.append(f"- snapshot_dir: `{debug.get('snapshot_dir')}`")
     lines.append(f"- snapshot_missing: `{debug.get('snapshot_missing', False)}`")
     lines.append("")
+
     lines.append("## Files rows")
     files = debug.get("files", {}) or {}
     for k, v in files.items():
         lines.append(f"- {k}: {v}")
+
     lines.append("")
     lines.append("## Missing rate")
     mr = debug.get("missing_rate", {}) or {}
     for k, v in mr.items():
-        lines.append(f"- {k}: {v:.4f}")
+        try:
+            lines.append(f"- {k}: {float(v):.4f}")
+        except Exception:
+            lines.append(f"- {k}: {v}")
+
+    lines.append("")
+    lines.append("## Nonzero rate (关键验收)")
+    nz = debug.get("nonzero_rate", {}) or {}
+    for k, v in nz.items():
+        try:
+            lines.append(f"- {k}: {float(v):.4f}")
+        except Exception:
+            lines.append(f"- {k}: {v}")
+
     lines.append("")
     lines.append("```json")
     lines.append(json.dumps(debug, ensure_ascii=False, indent=2))
