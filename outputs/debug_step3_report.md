@@ -27,8 +27,8 @@
 ## Nonzero rate (关键验收)
 - StrengthScore: 1.0000
 - turnover_rate: 1.0000
-- seal_amount: 0.0000
-- open_times: 0.0000
+- seal_amount: 0.8000
+- open_times: 0.6364
 
 ```json
 {
@@ -56,8 +56,8 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "turnover_rate": 1.0,
-    "seal_amount": 0.0,
-    "open_times": 0.0
+    "seal_amount": 0.8,
+    "open_times": 0.6363636363636364
   }
 }
 ```

@@ -47,15 +47,15 @@
       },
       "seal_amount": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.0,
-        "std": 0.0,
-        "unique_count": 1
+        "non_zero_rate": 0.09016393442622951,
+        "std": 107947372.4801474,
+        "unique_count": 45
       },
       "open_times": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.0,
-        "std": 0.0,
-        "unique_count": 1
+        "non_zero_rate": 0.07172131147540983,
+        "std": 2.2792321843817214,
+        "unique_count": 10
       },
       "Probability": {
         "non_null_rate": 1.0,
@@ -84,6 +84,6 @@
   },
   "pseudo_ratio": 0.8872950819672131,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-02-20T14:28:28Z",
-  "model_version": "bd87ee901c39b19e5d5feea97e3c6583fbdff585"
+  "updated_at_utc": "2026-02-20T15:39:34Z",
+  "model_version": "60b3c72c2f7f74e91e1ac65ca05f87732894a13d"
 }
