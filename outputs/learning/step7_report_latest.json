@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-21 00:44:39",
+  "ts": "2026-02-21 01:07:37",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -103,19 +103,22 @@
     },
     "pseudo_ratio": 0.6987704918032787,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-20T16:44:39Z",
-    "model_version": "9852d7bbe1459448da81364b8975f7f3809e415b"
+    "updated_at_utc": "2026-02-20T17:07:37Z",
+    "model_version": "eed58acce906a6015aff7bcf4973fa2d6c0c9244"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
-    "trained": false,
-    "lr_saved": false,
-    "lgbm_saved": false,
-    "models_dir": "",
+    "trained": true,
+    "lr_saved": true,
+    "lgbm_saved": true,
+    "models_dir": "models",
     "detail": {
-      "reason": "skip_train: quality_gate_fail or insufficient_days",
-      "quality_gate_pass": true,
-      "days_covered": 6
+      "train_rows": 328,
+      "pos": 81,
+      "neg": 247,
+      "lr_path": "models/step5_lr.joblib",
+      "lgbm_path": "models/step5_lgbm.joblib",
+      "reason": "ok"
     }
   },
   "warnings": []

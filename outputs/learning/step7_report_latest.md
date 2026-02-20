@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-02-21 00:44:39
+- 生成时间：2026-02-21 01:07:37
 - TopN：10
 - Lookback：150 天
 
@@ -30,9 +30,12 @@
 
 ## 3) 训练执行结果
 
-- trained：False
-- lr_saved：False
-- lgbm_saved：False
-- models_dir：
-- train_rows：
-- pos/neg：/
+- trained：True
+- lr_saved：True
+- lgbm_saved：True
+- models_dir：models
+- train_rows：328
+- pos/neg：81/247
+- reason：ok
+- lr_path：models/step5_lr.joblib
+- lgbm_path：models/step5_lgbm.joblib
