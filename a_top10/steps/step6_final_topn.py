@@ -11,6 +11,10 @@ Step6: Final Selector (TopN + Full Ranking) — Quant/Production Edition (Enhanc
    - 用于报告《所有涨停股票的强度列表》字段对齐 Top10 表：
      排名序号 / Probability / 强度得分 / 题材加成 / 板块
    - 需要 Step6 的输入是 dict 且包含当日涨停列表 DataFrame（例如 keys: limit_list_d/limit_up/limit_df 等）
+
+【本次新增：目标B-1（只改Step6）】
+- 将 Step1 的 regime_weight（市场状态因子）作为 FinalScore 的最终校准因子
+- 不改变原有主链结构/输出字段，只在 meta 里增加 regime 信息，便于追踪
 """
 
 from __future__ import annotations
@@ -235,6 +239,63 @@ def _find_limit_up_df(src: Optional[Mapping[str, Any]]) -> Optional[pd.DataFrame
     return None
 
 
+def _extract_regime_weight(src: Optional[Mapping[str, Any]], s: Any, warnings: List[str]) -> Tuple[float, Dict[str, Any]]:
+    """
+    从 ctx/src 中提取 regime_weight，用于 Step6 最终校准。
+    优先级：
+      1) src["regime"]["calib"]["final_score_scale"]
+      2) src["regime"]["weight"]
+      3) src["EmotionWeight"] / src["emotion_weight"]
+      4) settings(s) 里的 final_score_scale / regime_weight / EmotionWeight
+    """
+    info: Dict[str, Any] = {"used": "default", "raw": None, "state": None}
+    w = 1.0
+
+    try:
+        # 1) src['regime']['calib']['final_score_scale']
+        if src and isinstance(src.get("regime", None), dict):
+            rg = src.get("regime") or {}
+            info["state"] = rg.get("state", None)
+
+            calib = rg.get("calib", None)
+            if isinstance(calib, dict) and ("final_score_scale" in calib):
+                w = float(calib.get("final_score_scale"))
+                info["used"] = "src.regime.calib.final_score_scale"
+                info["raw"] = w
+                return float(np.clip(w, 0.2, 3.0)), info
+
+            # 2) src['regime']['weight']
+            if "weight" in rg:
+                w = float(rg.get("weight"))
+                info["used"] = "src.regime.weight"
+                info["raw"] = w
+                return float(np.clip(w, 0.2, 3.0)), info
+
+        # 3) src EmotionWeight
+        if src:
+            for k in ("EmotionWeight", "emotion_weight"):
+                if k in src:
+                    w = float(src.get(k))
+                    info["used"] = f"src.{k}"
+                    info["raw"] = w
+                    return float(np.clip(w, 0.2, 3.0)), info
+
+        # 4) settings fallback
+        w2 = _get_setting(s, ["final_score_scale", "FINAL_SCORE_SCALE", "regime_weight", "REGIME_WEIGHT", "EmotionWeight", "emotion_weight"], None)
+        if w2 is not None:
+            w = float(w2)
+            info["used"] = "settings"
+            info["raw"] = w
+            return float(np.clip(w, 0.2, 3.0)), info
+
+    except Exception as e:
+        warnings.append(f"regime_weight: failed to parse, fallback 1.0 ({e})")
+        return 1.0, {"used": "error_fallback", "raw": None, "state": None}
+
+    # default
+    return 1.0, info
+
+
 def _try_enrich_strength_from_step3(
     out: pd.DataFrame,
     ts_col: str,
@@ -392,7 +453,7 @@ class Step6Config:
     min_score: Optional[float] = None
 
     st_penalty: float = 0.85
-    emotion_factor: float = 1.0
+    emotion_factor: float = 1.0  # 兼容旧字段（不会删）
 
     strength_scale: float = 100.0
     theme_cap: float = 1.3
@@ -525,6 +586,12 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         return {"topN": empty, "topn": empty, "full": empty, "meta": {"empty": True}, "warnings": warnings}
 
     out = df.copy()
+
+    # -------- 0) Regime weight (from ctx/src) --------
+    regime_weight, regime_info = _extract_regime_weight(src_mapping, s, warnings)
+    # 仅提示一次（不刷屏）
+    if regime_info.get("used") == "default":
+        warnings.append("regime_weight: not found in ctx; used default 1.0 (no regime calibration).")
 
     # -------- 1) Column identification --------
     ts_col = _first_existing_col(out, [
@@ -739,11 +806,18 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         )
         base_score = pd.Series(base_score, index=out.index, dtype="float64")
 
+    # 原有 final_score：base_score * st_penalty * emotion_factor
     final_score = base_score * out["_st_penalty"] * float(cfg.emotion_factor)
+
+    # ✅ 新增：regime_weight 作为 FinalScore 校准因子（目标B-1）
+    final_score = final_score * float(regime_weight)
 
     out["_base_score"] = pd.Series(base_score, index=out.index, dtype="float64")
     out["_score"] = pd.Series(final_score, index=out.index, dtype="float64")
     out["_emotion_factor"] = float(cfg.emotion_factor)
+
+    # 仅用于调试/追踪（不影响外部结构）
+    out["_regime_weight"] = float(regime_weight)
 
     if cfg.min_score is not None:
         before = len(out)
@@ -899,6 +973,13 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         },
         "enrich_strength": enrich_meta,
         "limit_up_table_rows": int(len(limit_up_table)) if isinstance(limit_up_table, pd.DataFrame) else 0,
+
+        # ✅ 新增：regime 信息（便于 run_meta/step_health 追踪）
+        "regime": {
+            "weight": float(regime_weight),
+            "state": regime_info.get("state", None),
+            "source": regime_info.get("used", "default"),
+        },
     }
 
     # ✅ 主返回结构不变，只新增 limit_up_table
@@ -917,4 +998,4 @@ def run(df: Any, s=None) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    print("Step6 FinalTopN Quant/Production Edition (Enhanced + Strength Enrich + limit_up_table) ready.")
+    print("Step6 FinalTopN Quant/Production Edition (Enhanced + Strength Enrich + limit_up_table + regime calib) ready.")
