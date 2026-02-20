@@ -339,6 +339,141 @@ def _apply_industry_map(universe: pd.DataFrame, src: pd.DataFrame, src_tag: str)
 
 
 # -------------------------
+# Market metrics helpers (E1/E2/E3 robust)
+# -------------------------
+def _calc_e1_from_limit_list(limit_list_d: pd.DataFrame) -> Tuple[int, Dict[str, Any]]:
+    info: Dict[str, Any] = {"src": "limit_list_d", "ok": False, "reason": "", "rows": 0}
+    if not isinstance(limit_list_d, pd.DataFrame) or limit_list_d.empty:
+        info["reason"] = "limit_list_d empty"
+        return 0, info
+    info["rows"] = int(len(limit_list_d))
+    if "ts_code" in limit_list_d.columns:
+        n = int(_normalize_ts_code_series(limit_list_d["ts_code"]).nunique())
+        info["ok"] = True
+        return n, info
+    info["reason"] = "limit_list_d missing ts_code"
+    return int(len(limit_list_d)), {**info, "ok": True, "reason": "fallback len(df)"}
+
+
+def _calc_e1_from_stk_limit(stk_limit: pd.DataFrame) -> Tuple[int, Dict[str, Any]]:
+    """
+    Try to infer limit-up count from stk_limit table.
+    Different data providers name columns differently; we do best-effort.
+    """
+    info: Dict[str, Any] = {"src": "stk_limit", "ok": False, "reason": "", "rows": 0, "col_used": None}
+    if not isinstance(stk_limit, pd.DataFrame) or stk_limit.empty:
+        info["reason"] = "stk_limit empty"
+        return 0, info
+    info["rows"] = int(len(stk_limit))
+
+    df = stk_limit.copy()
+    if "ts_code" in df.columns:
+        df["ts_code"] = _normalize_ts_code_series(df["ts_code"])
+    else:
+        code_col = _first_existing_col(df, ["code", "TS_CODE", "股票代码", "证券代码"])
+        if code_col:
+            df["ts_code"] = _normalize_ts_code_series(df[code_col])
+        else:
+            info["reason"] = "stk_limit missing code"
+            return 0, info
+
+    # possible flags
+    # common: limit_type == 'U'/'D' ; or 'up'/'down'
+    lt = _first_existing_col(df, ["limit_type", "limit", "type", "板类型", "涨跌停类型"])
+    if lt:
+        info["col_used"] = lt
+        s = _safe_str_series(df[lt]).str.upper()
+        # accept U / UP / 1 / '涨停'
+        mask = s.isin(["U", "UP", "1", "ZT", "涨停", "UP_LIMIT", "LIMIT_UP"])
+        n = int(df.loc[mask, "ts_code"].nunique())
+        info["ok"] = True
+        if n == 0:
+            info["reason"] = "limit_type present but parsed 0"
+        return n, info
+
+    # alternative: has 'up_limit'/'down_limit' and 'close' to compare (rare in stk_limit)
+    # fallback: treat all unique codes as "limit related"
+    info["reason"] = "no recognizable limit_type column; fallback unique ts_code"
+    n = int(df["ts_code"].nunique())
+    info["ok"] = True
+    return n, info
+
+
+def _calc_e3_from_any(df: pd.DataFrame, src: str) -> Tuple[int, Dict[str, Any]]:
+    info: Dict[str, Any] = {"src": src, "ok": False, "reason": "", "col_used": None}
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        info["reason"] = f"{src} empty"
+        return 0, info
+    lb_col = _first_existing_col(df, ["lbc", "lb", "consecutive", "连续涨停", "连板数", "连板高度", "max_lb", "最高连板"])
+    if not lb_col:
+        info["reason"] = "no lb column"
+        return 0, info
+    info["col_used"] = lb_col
+    try:
+        val = int(pd.to_numeric(df[lb_col], errors="coerce").fillna(0).max())
+        info["ok"] = True
+        return val, info
+    except Exception as e:
+        info["reason"] = f"parse error: {e}"
+        return 0, info
+
+
+def _calc_e2_from_break(limit_break_d: pd.DataFrame, e1: int) -> Tuple[float, Dict[str, Any]]:
+    info: Dict[str, Any] = {"src": "limit_break_d", "ok": False, "reason": "", "brk": 0, "denom": 0}
+    if not isinstance(limit_break_d, pd.DataFrame) or limit_break_d.empty:
+        info["reason"] = "limit_break_d empty"
+        return 0.0, info
+
+    if "ts_code" in limit_break_d.columns:
+        brk = int(_normalize_ts_code_series(limit_break_d["ts_code"]).nunique())
+    else:
+        brk = int(len(limit_break_d))
+        info["reason"] = "limit_break_d missing ts_code; fallback len(df)"
+
+    denom = max(1, (int(e1) + int(brk)))
+    e2 = round(100.0 * brk / denom, 4)
+
+    info["brk"] = int(brk)
+    info["denom"] = int(denom)
+    info["ok"] = True
+    return float(e2), info
+
+
+def _calc_e2_from_stk_limit(stk_limit: pd.DataFrame, e1: int) -> Tuple[float, Dict[str, Any]]:
+    """
+    Fallback estimator for break ratio using stk_limit if it has open_times/break_times-like column.
+    If no such column, return 0 with reason.
+    """
+    info: Dict[str, Any] = {"src": "stk_limit", "ok": False, "reason": "", "col_used": None}
+    if not isinstance(stk_limit, pd.DataFrame) or stk_limit.empty:
+        info["reason"] = "stk_limit empty"
+        return 0.0, info
+
+    df = stk_limit.copy()
+
+    # open/break count candidates
+    ot_col = _first_existing_col(df, ["open_times", "break_times", "开板次数", "炸板次数", "open_cnt", "break_cnt"])
+    if not ot_col:
+        info["reason"] = "no open/break column"
+        return 0.0, info
+
+    info["col_used"] = ot_col
+    try:
+        ot = pd.to_numeric(df[ot_col], errors="coerce").fillna(0)
+        # approximate: if open_times > 0, treat as "had break"
+        brk = int((ot > 0).sum())
+        denom = max(1, (int(e1) + int(brk)))
+        e2 = round(100.0 * brk / denom, 4)
+        info["ok"] = True
+        info["brk"] = int(brk)
+        info["denom"] = int(denom)
+        return float(e2), info
+    except Exception as e:
+        info["reason"] = f"parse error: {e}"
+        return 0.0, info
+
+
+# -------------------------
 # Step0 Core
 # -------------------------
 def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
@@ -373,6 +508,9 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     top_list_raw = _read_csv_if_exists(snap / "top_list.csv")
     stock_basic_raw = _read_csv_if_exists(snap / "stock_basic.csv")
 
+    # optional table for market metrics fallback (NOT required)
+    stk_limit_raw = _read_csv_if_exists(snap / "stk_limit.csv")
+
     # 3) normalize tables
     daily, dbg_daily_code = _normalize_table_ts_code(daily_raw)
     limit_list_d, dbg_limit_list_code = _normalize_table_ts_code(limit_list_d_raw)
@@ -381,6 +519,8 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
 
     stock_basic, dbg_stock_basic = _normalize_industry_table(stock_basic_raw, "stock_basic")
     daily_basic, dbg_daily_basic = _normalize_industry_table(daily_basic_raw, "daily_basic")
+
+    stk_limit, dbg_stk_limit_code = _normalize_table_ts_code(stk_limit_raw)
 
     # hot_boards: keep as-is (it is industry-centric table); still record basic shape
     hot_boards = hot_boards_raw.copy() if isinstance(hot_boards_raw, pd.DataFrame) else pd.DataFrame()
@@ -445,33 +585,50 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     if isinstance(daily_basic, pd.DataFrame) and not daily_basic.empty:
         dbg_industry_apply["daily_basic"] = _apply_industry_map(universe, daily_basic, "daily_basic")
 
-    # 7) market (E1/E2/E3)
-    e1 = 0
-    if isinstance(limit_list_d, pd.DataFrame) and not limit_list_d.empty:
-        if "ts_code" in limit_list_d.columns:
-            e1 = int((_normalize_ts_code_series(limit_list_d["ts_code"]) != "").sum())
-            # better: unique count
-            e1 = int(_normalize_ts_code_series(limit_list_d["ts_code"]).nunique())
-        else:
-            e1 = int(len(limit_list_d))
+    # 7) market (E1/E2/E3) — robust with fallbacks
+    market_calc: Dict[str, Any] = {"E1": {}, "E2": {}, "E3": {}}
 
-    e2 = 0.0
-    if isinstance(limit_break_d, pd.DataFrame) and not limit_break_d.empty:
-        if "ts_code" in limit_break_d.columns:
-            brk = int(_normalize_ts_code_series(limit_break_d["ts_code"]).nunique())
+    # E1
+    e1, info_e1 = _calc_e1_from_limit_list(limit_list_d)
+    market_calc["E1"]["primary"] = info_e1
+    if e1 <= 0:
+        e1_fb, info_e1_fb = _calc_e1_from_stk_limit(stk_limit)
+        market_calc["E1"]["fallback"] = info_e1_fb
+        if e1_fb > 0:
+            e1 = e1_fb
+            market_calc["E1"]["used"] = "fallback:stk_limit"
         else:
-            brk = int(len(limit_break_d))
-        denom = max(1, (e1 + brk))
-        e2 = round(100.0 * brk / denom, 4)
+            market_calc["E1"]["used"] = "primary:limit_list_d"
+    else:
+        market_calc["E1"]["used"] = "primary:limit_list_d"
 
-    e3 = 0
-    if isinstance(limit_list_d, pd.DataFrame) and not limit_list_d.empty:
-        lb_col = _first_existing_col(limit_list_d, ["lbc", "lb", "consecutive", "连续涨停", "连板数", "连板高度"])
-        if lb_col:
-            try:
-                e3 = int(pd.to_numeric(limit_list_d[lb_col], errors="coerce").fillna(0).max())
-            except Exception:
-                e3 = 0
+    # E2
+    e2, info_e2 = _calc_e2_from_break(limit_break_d, e1=int(e1))
+    market_calc["E2"]["primary"] = info_e2
+    if (not info_e2.get("ok")) or (info_e2.get("brk", 0) == 0 and (isinstance(limit_break_d, pd.DataFrame) and limit_break_d.empty)):
+        e2_fb, info_e2_fb = _calc_e2_from_stk_limit(stk_limit, e1=int(e1))
+        market_calc["E2"]["fallback"] = info_e2_fb
+        if info_e2_fb.get("ok"):
+            e2 = e2_fb
+            market_calc["E2"]["used"] = "fallback:stk_limit"
+        else:
+            market_calc["E2"]["used"] = "primary:limit_break_d"
+    else:
+        market_calc["E2"]["used"] = "primary:limit_break_d"
+
+    # E3
+    e3, info_e3 = _calc_e3_from_any(limit_list_d, "limit_list_d")
+    market_calc["E3"]["primary"] = info_e3
+    if e3 <= 0:
+        e3_fb, info_e3_fb = _calc_e3_from_any(stk_limit, "stk_limit")
+        market_calc["E3"]["fallback"] = info_e3_fb
+        if e3_fb > 0:
+            e3 = e3_fb
+            market_calc["E3"]["used"] = "fallback:stk_limit"
+        else:
+            market_calc["E3"]["used"] = "primary:limit_list_d"
+    else:
+        market_calc["E3"]["used"] = "primary:limit_list_d"
 
     market = {"E1": int(e1), "E2": float(e2), "E3": int(e3)}
 
@@ -491,6 +648,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
             "hot_boards": int(len(hot_boards)) if isinstance(hot_boards, pd.DataFrame) else 0,
             "top_list": int(len(top_list)) if isinstance(top_list, pd.DataFrame) else 0,
             "stock_basic": int(len(stock_basic)) if isinstance(stock_basic, pd.DataFrame) else 0,
+            "stk_limit": int(len(stk_limit)) if isinstance(stk_limit, pd.DataFrame) else 0,
             "universe": int(len(universe)) if isinstance(universe, pd.DataFrame) else 0,
         },
 
@@ -509,8 +667,12 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
             "top_list": dbg_top_list_code,
             "stock_basic": dbg_stock_basic,
             "daily_basic": dbg_daily_basic,
+            "stk_limit": dbg_stk_limit_code,
         },
         "industry_apply": dbg_industry_apply,
+
+        # ✅ new: market calc trace
+        "market_calc": market_calc,
     }
 
     # 9) ctx
@@ -527,6 +689,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         "daily_basic": daily_basic,
         "limit_list_d": limit_list_d,
         "limit_break_d": limit_break_d,
+        "stk_limit": stk_limit,  # ✅ optional, safe to expose for later use/debug
 
         # compatibility keys
         "boards": hot_boards,
