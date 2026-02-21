@@ -29,42 +29,42 @@
     "metrics": {
       "StrengthScore": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.5286885245901639,
-        "std": 30.12669796317619,
-        "unique_count": 257
+        "non_zero_rate": 0.7049180327868853,
+        "std": 28.401999907809063,
+        "unique_count": 342
       },
       "ThemeBoost": {
         "non_null_rate": 1.0,
         "non_zero_rate": 0.7151639344262295,
-        "std": 0.3650453013476279,
+        "std": 0.36558771559396164,
         "unique_count": 19
       },
       "turnover_rate": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.5286885245901639,
-        "std": 13.188222735283663,
-        "unique_count": 259
+        "non_zero_rate": 0.7049180327868853,
+        "std": 13.541185290870134,
+        "unique_count": 345
       },
       "seal_amount": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.4672131147540984,
-        "std": 215975314.35629874,
-        "unique_count": 229
+        "non_zero_rate": 0.6372950819672131,
+        "std": 220333570.95899582,
+        "unique_count": 312
       },
       "open_times": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.2725409836065574,
-        "std": 2.899289700744367,
-        "unique_count": 16
+        "non_zero_rate": 0.35450819672131145,
+        "std": 3.294725983838484,
+        "unique_count": 18
       },
       "Probability": {
         "non_null_rate": 1.0,
         "non_zero_rate": 1.0,
-        "std": 0.23436297086997807,
-        "unique_count": 298
+        "std": 0.2259810654931212,
+        "unique_count": 382
       }
     },
-    "pseudo_ratio": 0.4713114754098361,
+    "pseudo_ratio": 0.29508196721311475,
     "window_days": 6,
     "rows_in_window": 488,
     "pass": true
@@ -81,8 +81,8 @@
       55
     ]
   },
-  "pseudo_ratio": 0.4713114754098361,
+  "pseudo_ratio": 0.29508196721311475,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-02-21T16:17:40Z",
-  "model_version": "cf6fcdcf148f8f83fb8a3d6a02a90e773e0b90a3"
+  "updated_at_utc": "2026-02-21T16:20:06Z",
+  "model_version": "e9637f15db9401a68c32b3f86daa50b7207a14b7"
 }
