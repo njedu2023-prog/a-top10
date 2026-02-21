@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-22 00:45:03",
+  "ts": "2026-02-22 00:46:34",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -12,17 +12,18 @@
   },
   "train_meta": {
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "rows_raw": 705,
-    "rows_used": 621,
+    "rows_raw": 753,
+    "rows_used": 669,
     "rows_dropped_allzero": 29,
-    "dates_total": 10,
-    "dates_used": 10
+    "dates_total": 11,
+    "dates_used": 11
   },
   "sampling_state": {
     "sampling_stage": "S1_MVP",
     "target_rows_per_day": 200,
-    "days_covered": 10,
+    "days_covered": 11,
     "rows_per_day_last_N": [
+      48,
       36,
       69,
       68,
@@ -53,50 +54,51 @@
       "metrics": {
         "StrengthScore": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.8765957446808511,
-          "std": 22.651730769242192,
-          "unique_count": 607
+          "non_zero_rate": 0.8844621513944223,
+          "std": 22.232500058680674,
+          "unique_count": 653
         },
         "ThemeBoost": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.7304964539007093,
-          "std": 0.37869251943094684,
+          "non_zero_rate": 0.7370517928286853,
+          "std": 0.3764046565519925,
           "unique_count": 19
         },
         "turnover_rate": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.8765957446808511,
-          "std": 13.008226330101017,
-          "unique_count": 619
+          "non_zero_rate": 0.8844621513944223,
+          "std": 13.102771346481317,
+          "unique_count": 667
         },
         "seal_amount": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.826950354609929,
-          "std": 189049482.78977486,
-          "unique_count": 584
+          "non_zero_rate": 0.8379814077025233,
+          "std": 183509485.2409223,
+          "unique_count": 632
         },
         "open_times": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.39858156028368796,
-          "std": 3.1709996145963926,
+          "non_zero_rate": 0.399734395750332,
+          "std": 3.1470207580064966,
           "unique_count": 20
         },
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.22750140493219068,
-          "unique_count": 653
+          "std": 0.22658803565963215,
+          "unique_count": 701
         }
       },
-      "pseudo_ratio": 0.12340425531914893,
-      "window_days": 10,
-      "rows_in_window": 705,
+      "pseudo_ratio": 0.11553784860557768,
+      "window_days": 11,
+      "rows_in_window": 753,
       "pass": true
     },
     "stage_debug": {
       "prev_stage": "S1_MVP",
-      "days_covered": 10,
+      "days_covered": 11,
       "rows_last": [
+        48,
         36,
         69,
         68,
@@ -109,10 +111,10 @@
         55
       ]
     },
-    "pseudo_ratio": 0.12340425531914893,
+    "pseudo_ratio": 0.11553784860557768,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-21T16:45:03Z",
-    "model_version": "4523bbdbf30b497d6509ddd36b810a6de0e7c0c4"
+    "updated_at_utc": "2026-02-21T16:46:34Z",
+    "model_version": "ae6d3f745fad9b921f21e748909e5b615dd1004d"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
@@ -121,9 +123,9 @@
     "lgbm_saved": true,
     "models_dir": "models",
     "detail": {
-      "train_rows": 621,
-      "pos": 114,
-      "neg": 507,
+      "train_rows": 669,
+      "pos": 124,
+      "neg": 545,
       "lr_path": "models/step5_lr.joblib",
       "lgbm_path": "models/step5_lgbm.joblib",
       "reason": "ok"
