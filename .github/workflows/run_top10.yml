@@ -69,7 +69,7 @@ jobs:
         top_list.csv
         limit_up_tags.csv
 
-      # ---- 自动回溯天数（找最近一个有数据的交易日目录）----
+      # ---- 自动回溯天数（找最近一个“可用”的交易日目录）----
       LOOKBACK_DAYS: "20"
 
       # ---- 用于探测数据是否存在的哨兵文件 ----
@@ -103,8 +103,8 @@ jobs:
 
       # ============================================================
       # ✅ Resolve trade_date: P0 gate moved here (open_times & seal_amount required)
-      # - manual: respect user input (if fails later, fail)
-      # - auto: find the latest date that passes P0 gate
+      # - manual: respect user input
+      # - auto: find latest date that passes P0 gate
       # ============================================================
       - name: Resolve trade_date (manual or auto, with P0 gate)
         id: resolve_date
@@ -145,7 +145,8 @@ jobs:
               continue
             fi
 
-            python - <<'PY' "$tmp" && ok="1" || ok="0"
+            ok="0"
+            if python - "$tmp" <<'PY'
 import sys
 import pandas as pd
 
@@ -168,6 +169,11 @@ if bad:
 
 print("[probe] PASS open_times & seal_amount")
 PY
+            then
+              ok="1"
+            else
+              ok="0"
+            fi
 
             rm -f "$tmp" || true
 
@@ -239,8 +245,6 @@ PY
 
       # ============================================================
       # ✅ Quality gate for resolved trade_date (P0 hard gate)
-      # - REQUIRED_FILES must exist & non-empty
-      # - limit_list_d must contain key columns and not all-empty
       # ============================================================
       - name: Quality gate (required files + key columns)
         shell: bash
@@ -271,7 +275,7 @@ PY
             exit 21
           fi
 
-          python - <<'PY' "$snap_dir"
+          python - "$snap_dir" <<'PY'
 import sys
 import os
 import pandas as pd
