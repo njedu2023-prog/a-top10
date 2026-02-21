@@ -11,13 +11,15 @@
   <style>
     :root{
       --bg:#ffffff; --fg:#111827; --muted:#6b7280; --line:#e5e7eb;
-      --card:#f9fafb; --btn:#111827; --btnfg:#fff;
+      --card:#f9fafb;
     }
-    body{font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-      margin:0; background:var(--bg); color:var(--fg);}
+    body{
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+      margin:0; background:var(--bg); color:var(--fg);
+    }
     .wrap{max-width: 980px; margin: 0 auto; padding: 24px 16px 60px;}
     header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px;}
-    h1{font-size:32px; margin:0; letter-spacing: .5px;}
+    h1{font-size:32px; margin:0; letter-spacing:.5px;}
     .sub{color:var(--muted); font-size:14px; margin-top:6px;}
     .nav{display:flex; gap:10px; align-items:center;}
     button{
@@ -45,11 +47,10 @@
     .topbar{
       display:flex; justify-content:space-between; align-items:center;
       margin: 14px 0 6px;
+      gap: 12px;
+      flex-wrap: wrap;
     }
-    .datebox{
-      display:flex; align-items:center; gap:8px;
-      color:var(--muted); font-size:14px;
-    }
+    .datebox{display:flex; align-items:center; gap:8px; color:var(--muted); font-size:14px;}
     input[type="date"]{
       border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:14px;
       background:#fff;
@@ -57,7 +58,9 @@
   </style>
 
   <script>
-    // --------- utils ----------
+    // =============== 基础工具 ===============
+    const LOOKBACK_DAYS = 60; // 没有日报时，最多向前回退多少天去找“最近可用日报”
+
     function yyyymmdd(date){
       const y = date.getFullYear();
       const m = String(date.getMonth()+1).padStart(2,'0');
@@ -71,7 +74,6 @@
       return `${y}-${m}-${d}`;
     }
     function fromDateInputValue(v){
-      // v: YYYY-MM-DD
       const [y,m,d] = v.split('-').map(x=>parseInt(x,10));
       return new Date(y, m-1, d);
     }
@@ -92,56 +94,83 @@
       url.searchParams.set('d', d);
       location.href = url.toString();
     }
+    function stripTitleBrackets(s){
+      return s.replaceAll('《','').replaceAll('》','').trim();
+    }
+    function mdPathFor(date){
+      return `outputs/predict_top10_${yyyymmdd(date)}.md`;
+    }
 
     async function fetchText(path){
       const res = await fetch(path, { cache: "no-store" });
-      if(!res.ok) throw new Error(`${res.status} ${res.statusText} -> ${path}`);
+      if(!res.ok) throw new Error(`${res.status} -> ${path}`);
       return await res.text();
     }
 
-    function stripTitleBrackets(s){
-      // 去掉《》但保留原标题内容：例如 《每日Top10报告》 -> 每日Top10报告
-      return s.replaceAll('《','').replaceAll('》','').trim();
+    // =============== 核心：找“最近存在的日报” ===============
+    async function findNearestExistingReportDate(startDate){
+      // 从 startDate 开始向前找，最多 LOOKBACK_DAYS
+      for(let i=0; i<=LOOKBACK_DAYS; i++){
+        const d = new Date(startDate);
+        d.setDate(d.getDate() - i);
+        const path = mdPathFor(d);
+        const res = await fetch(path, { method: "GET", cache: "no-store" });
+        if(res.ok) return d;
+      }
+      return null;
     }
 
-    // --------- main loaders ----------
-    async function loadDailyReport(date){
-      const dateStr = yyyymmdd(date);
-      const mdPath = `outputs/predict_top10_${dateStr}.md`;
-
+    // =============== 加载日报 ===============
+    async function loadDailyReport(targetDate){
       const titleEl = document.getElementById('title');
       const reportEl = document.getElementById('report');
       const errEl = document.getElementById('report_err');
+      const picker = document.getElementById('date_picker');
+      const navHint = document.getElementById('nav_hint');
 
       errEl.textContent = "";
-      reportEl.innerHTML = `<div class="hint">正在加载：${mdPath}</div>`;
+      reportEl.innerHTML = `<div class="hint">正在定位可用日报（最多回退 ${LOOKBACK_DAYS} 天）...</div>`;
+
+      // 1) 找最近存在的日报日期
+      const useDate = await findNearestExistingReportDate(targetDate);
+      if(!useDate){
+        titleEl.textContent = `每日 Top10 报告`;
+        reportEl.innerHTML = "";
+        errEl.textContent =
+          `在 ${yyyymmdd(targetDate)} 往前 ${LOOKBACK_DAYS} 天内，都没有找到 outputs/predict_top10_YYYYMMDD.md。\n` +
+          `请确认日报文件已提交到仓库 outputs/ 目录，并能通过 Pages 访问。`;
+        return;
+      }
+
+      // 2) 更新日期选择器/提示（如果发生回退，给用户明确提示）
+      picker.value = toDateInputValue(useDate);
+      const targetStr = yyyymmdd(targetDate);
+      const useStr = yyyymmdd(useDate);
+      navHint.textContent = (useStr !== targetStr)
+        ? `提示：你选择的 ${targetStr} 无日报，已自动回退到最近可用日报 ${useStr}`
+        : `提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告`;
+
+      // 3) 拉取并渲染 markdown
+      const path = mdPathFor(useDate);
+      reportEl.innerHTML = `<div class="hint">正在加载：${path}</div>`;
 
       try{
-        const md = await fetchText(mdPath);
-
-        // 1) 解析第一行标题（如果存在），用于更“像原报告”
-        //   - 同时去掉《》符号
-        const lines = md.split(/\r?\n/);
-        let first = lines[0] || "";
-        let headerTitle = "";
-        if(first.trim().startsWith("#")){
-          headerTitle = stripTitleBrackets(first.replace(/^#+\s*/,''));
-        }else{
-          headerTitle = "每日 Top10 报告";
+        const md = await fetchText(path);
+        const firstLine = (md.split(/\r?\n/)[0] || "").trim();
+        let headerTitle = "每日 Top10 报告";
+        if(firstLine.startsWith("#")){
+          headerTitle = stripTitleBrackets(firstLine.replace(/^#+\s*/,''));
         }
-
-        titleEl.textContent = `${headerTitle} - ${dateStr}`;
-
-        // 2) 整体 Markdown 渲染
+        titleEl.textContent = `${headerTitle} - ${useStr}`;
         reportEl.innerHTML = marked.parse(md);
-
       }catch(e){
-        titleEl.textContent = `每日 Top10 报告 - ${dateStr}`;
+        titleEl.textContent = `每日 Top10 报告 - ${useStr}`;
         reportEl.innerHTML = "";
-        errEl.textContent = `未能读取日报内容。\n原因：${e.message}\n\n请先在浏览器打开：\n- outputs/predict_top10_${dateStr}.md\n确认该文件在仓库中存在且 Pages 可访问。`;
+        errEl.textContent = `读取日报失败：${e.message}`;
       }
     }
 
+    // =============== 加载学习状态 ===============
     async function loadLearningStatus(){
       const mdPath = `outputs/learning/step7_report_latest.md`;
       const box = document.getElementById('learning');
@@ -155,24 +184,41 @@
         box.innerHTML = marked.parse(md);
       }catch(e){
         box.innerHTML = "";
-        err.textContent = `未能读取学习状态：${e.message}\n请确认 outputs/learning/step7_report_latest.md 在仓库存在且 Pages 可访问。`;
+        err.textContent = `未能读取学习状态：${e.message}\n请确认 ${mdPath} 在仓库存在且 Pages 可访问。`;
       }
     }
 
-    function bindNav(date){
-      document.getElementById('btn_prev').onclick = () => {
-        const d = new Date(date);
-        d.setDate(d.getDate()-1);
-        setQueryDate(d);
-      };
-      document.getElementById('btn_next').onclick = () => {
-        const d = new Date(date);
-        d.setDate(d.getDate()+1);
-        setQueryDate(d);
+    // =============== 导航：跳过缺失日报 ===============
+    async function jumpByDaysSkippingMissing(currentDate, delta){
+      // 从 currentDate + delta 开始，向 delta 方向继续找，直到找到存在日报或超出 LOOKBACK_DAYS
+      for(let i=1; i<=LOOKBACK_DAYS; i++){
+        const d = new Date(currentDate);
+        d.setDate(d.getDate() + delta * i);
+        const path = mdPathFor(d);
+        const res = await fetch(path, { method: "GET", cache: "no-store" });
+        if(res.ok) return d;
+      }
+      return null;
+    }
+
+    function bindNav(initialDate){
+      const picker = document.getElementById('date_picker');
+
+      document.getElementById('btn_prev').onclick = async () => {
+        const base = fromDateInputValue(picker.value);
+        const next = await jumpByDaysSkippingMissing(base, -1);
+        if(next) setQueryDate(next);
+        else alert(`向前 ${LOOKBACK_DAYS} 天内没有找到更早的日报文件`);
       };
 
-      const picker = document.getElementById('date_picker');
-      picker.value = toDateInputValue(date);
+      document.getElementById('btn_next').onclick = async () => {
+        const base = fromDateInputValue(picker.value);
+        const next = await jumpByDaysSkippingMissing(base, +1);
+        if(next) setQueryDate(next);
+        else alert(`向后 ${LOOKBACK_DAYS} 天内没有找到更新的日报文件`);
+      };
+
+      picker.value = toDateInputValue(initialDate);
       picker.onchange = () => {
         const d = fromDateInputValue(picker.value);
         setQueryDate(d);
@@ -183,7 +229,6 @@
       const date = getQueryDate();
       bindNav(date);
 
-      // 先加载日报，再加载学习状态
       await loadDailyReport(date);
       await loadLearningStatus();
     };
@@ -195,11 +240,11 @@
     <header>
       <div>
         <h1 id="title">每日 Top10 报告</h1>
-        <div class="sub">GitHub Pages 外部阅读版 · 支持上一日/下一日/日期选择</div>
+        <div class="sub">GitHub Pages 外部阅读版 · 支持上一日/下一日/日期选择（自动跳过缺失日报）</div>
       </div>
       <div class="nav">
-        <button id="btn_prev">← 上一日</button>
-        <button id="btn_next">下一日 →</button>
+        <button id="btn_prev">← </button>
+        <button id="btn_next">→ </button>
       </div>
     </header>
 
@@ -208,7 +253,7 @@
         <span>选择日期：</span>
         <input id="date_picker" type="date" />
       </div>
-      <div class="hint">提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告</div>
+      <div id="nav_hint" class="hint">提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告</div>
     </div>
 
     <div class="card">
@@ -220,7 +265,7 @@
     <div class="card">
       <h2>近10日 Top10 命中率</h2>
       <div class="hint">
-        这一块建议后续由脚本生成一份 outputs/hit_rate_10d.md 或 .json 再在这里读取渲染。
+        这一块后续建议由脚本生成 outputs/hit_rate_10d.md 或 .json 再在这里读取渲染。
         目前先保留位置（不影响读日报与学习状态）。
       </div>
     </div>
