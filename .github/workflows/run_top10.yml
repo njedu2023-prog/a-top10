@@ -27,19 +27,19 @@ jobs:
       TZ: Asia/Shanghai
       PYTHONUTF8: "1"
 
-      # ✅ secret 名为 A_TOP10_TOKEN，这里桥接到程序读取的 TUSHARE_TOKEN
+      # secret 名为 A_TOP10_TOKEN，这里桥接到程序读取的 TUSHARE_TOKEN
       TUSHARE_TOKEN: ${{ secrets.A_TOP10_TOKEN }}
 
-      # ---- TOP3 数据仓库 ----
+      # TOP3 数据仓库
       DATA_GITHUB_USER: njedu2023-prog
       DATA_REPO: a-share-top3-data
       DATA_BRANCH: main
 
-      # ---- 与 configs/default.yml 对齐 ----
+      # 与 configs/default.yml 对齐
       WAREHOUSE_ROOT: _warehouse
       RAW_DIR: data/raw
 
-      # ---- 必须存在的关键文件（缺任何一个都失败）----
+      # 必须存在的关键文件（缺任何一个都失败）
       REQUIRED_FILES: >-
         daily.csv
         daily_basic.csv
@@ -73,11 +73,7 @@ jobs:
           pip install -U tabulate
           pip install -U lightgbm
 
-      # ============================================================
       # Resolve trade_date (P0 gate: open_times & seal_amount required)
-      # - manual: respect user input
-      # - auto: find latest date that passes P0 gate
-      # ============================================================
       - name: Resolve trade_date (manual or auto, with P0 gate)
         id: resolve_date
         shell: bash
@@ -96,7 +92,6 @@ jobs:
           base="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}"
 
           found=""
-
           for i in $(seq 0 "$LOOKBACK_DAYS"); do
             d="$(date -d "${today} -${i} day" +%Y%m%d)"
             y="${d:0:4}"
@@ -119,8 +114,6 @@ jobs:
             ok="0"
             if python -c "import pandas as pd,sys; df=pd.read_csv(sys.argv[1]); must=['open_times','seal_amount']; miss=[c for c in must if c not in df.columns]; assert not miss, f'missing cols {miss}'; all_empty=lambda s: s.isna().all() or (s.astype(str).str.strip()=='').all(); bad=[c for c in must if all_empty(df[c])]; assert not bad, f'cols all-empty {bad}'" "$tmp"; then
               ok="1"
-            else
-              ok="0"
             fi
 
             rm -f "$tmp" || true
@@ -142,10 +135,8 @@ jobs:
           echo "Resolved trade_date=$found"
           echo "trade_date=$found" >> "$GITHUB_OUTPUT"
 
-      # ============================================================
-      # Sync ONLY the resolved trade_date directory via sparse checkout
-      # ============================================================
-      - name: Sync TOP3 snapshot (ONLY trade_date dir)
+      # Sync ONLY the resolved trade_date directory into _warehouse (system contract)
+      - name: Sync TOP3 snapshot to _warehouse (ONLY trade_date dir)
         id: sync_top3
         shell: bash
         run: |
@@ -156,10 +147,6 @@ jobs:
 
           src_dir="${RAW_DIR}/${year}/${trade_date}"
           dest_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"
-
-          echo "[sync] trade_date=$trade_date"
-          echo "[sync] src_dir=$src_dir"
-          echo "[sync] dest_dir=$dest_dir"
 
           rm -rf _tmp_top3
           git clone --depth 1 --filter=blob:none --sparse \
@@ -179,25 +166,12 @@ jobs:
 
           SRC_SHA="$(git -C _tmp_top3 rev-parse HEAD)"
           mkdir -p outputs
-          cat > outputs/warehouse_sync_meta.json <<EOF
-          {
-            "source_repo": "${DATA_GITHUB_USER}/${DATA_REPO}",
-            "source_branch": "${DATA_BRANCH}",
-            "source_sha": "${SRC_SHA}",
-            "trade_date": "${trade_date}",
-            "synced_dir": "${src_dir}",
-            "synced_at_utc": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-          }
-          EOF
+          echo "{\"source_repo\":\"${DATA_GITHUB_USER}/${DATA_REPO}\",\"source_branch\":\"${DATA_BRANCH}\",\"source_sha\":\"${SRC_SHA}\",\"trade_date\":\"${trade_date}\",\"synced_dir\":\"${src_dir}\",\"synced_at_utc\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"}" > outputs/warehouse_sync_meta.json
 
           echo "synced_dir=$dest_dir" >> "$GITHUB_OUTPUT"
           echo "src_sha=$SRC_SHA" >> "$GITHUB_OUTPUT"
 
-          echo "[sync] done, source_sha=${SRC_SHA}"
-
-      # ============================================================
       # Debug: print header/columns for limit_list_d.csv (proof of sync)
-      # ============================================================
       - name: Debug synced limit_list_d (header + columns)
         shell: bash
         run: |
@@ -206,14 +180,10 @@ jobs:
           y="${td:0:4}"
           f="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${y}/${td}/limit_list_d.csv"
           echo "[debug] file=$f"
-          echo "[debug] head:"
           head -n 2 "$f" || true
-          echo "[debug] columns:"
           python -c "import pandas as pd; df=pd.read_csv(r'$f'); print(df.columns.tolist()); print('rows=', len(df))"
 
-      # ============================================================
-      # Quality gate for resolved trade_date (P0 hard gate)
-      # ============================================================
+      # Quality gate (required files + key columns)
       - name: Quality gate (required files + key columns)
         shell: bash
         run: |
@@ -223,12 +193,6 @@ jobs:
           year="${trade_date:0:4}"
           snap_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"
 
-          echo "[gate] snapshot dir: $snap_dir"
-          if [ ! -d "$snap_dir" ]; then
-            echo "ERROR: snapshot dir missing: $snap_dir"
-            exit 20
-          fi
-
           missing_required=""
           for rf in $REQUIRED_FILES; do
             p="${snap_dir}/${rf}"
@@ -237,7 +201,6 @@ jobs:
               missing_required="${missing_required} ${rf}"
             fi
           done
-
           if [ -n "$missing_required" ]; then
             echo "ERROR: required snapshot files missing:${missing_required}"
             exit 21
@@ -245,11 +208,7 @@ jobs:
 
           python -c "import pandas as pd,os,sys; snap=sys.argv[1]; df=pd.read_csv(os.path.join(snap,'limit_list_d.csv')); must=['limit_type','up_limit','down_limit','open_times','seal_amount']; miss=[c for c in must if c not in df.columns]; assert not miss, f'missing cols {miss}'; all_empty=lambda s: s.isna().all() or (s.astype(str).str.strip()=='').all(); bad=[c for c in must if all_empty(df[c])]; assert not bad, f'cols all-empty {bad}'" "$snap_dir"
 
-          echo "[gate] PASS"
-
-      # ============================================================
-      # Upload snapshot dir as artifact (so you can compare with TOP3)
-      # ============================================================
+      # Upload snapshot dir as artifact (optional but recommended as audit proof)
       - name: Upload synced snapshot dir (artifact)
         if: always()
         uses: actions/upload-artifact@v4
@@ -257,7 +216,7 @@ jobs:
           name: top3_snapshot_${{ steps.resolve_date.outputs.trade_date }}_${{ github.run_id }}
           path: ${{ steps.sync_top3.outputs.synced_dir }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
       - name: Run Top10 Engine + Step7
         shell: bash
@@ -265,14 +224,11 @@ jobs:
           TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
         run: |
           set -euo pipefail
-          echo "Running engine with TRADE_DATE=$TRADE_DATE"
-
           if [ -f "run.py" ]; then
             python run.py
           else
             python -m a_top10
           fi
-
           python -m a_top10.steps.step7_self_learning
 
       - name: Step7 artifacts check + stamp (always)
@@ -282,33 +238,35 @@ jobs:
           set -euo pipefail
           td="${{ steps.resolve_date.outputs.trade_date }}"
           rid="${{ github.run_id }}"
-
-          ls -la outputs || true
-          ls -la outputs/learning || true
-          ls -la models || true
-
           mkdir -p outputs/learning
           echo "run_id=${rid} trade_date=${td} utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "outputs/learning/_last_run_${td}_${rid}.txt"
 
-      - name: Commit & push outputs + models (always)
+      # ✅ Commit & push: outputs + models + _warehouse(today)
+      - name: Commit & push outputs + models + _warehouse(today) (always)
         if: always()
         shell: bash
         run: |
           set -euo pipefail
 
+          td="${{ steps.resolve_date.outputs.trade_date }}"
+          y="${td:0:4}"
+          rid="${{ github.run_id }}"
+          year_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${y}"
+          snap_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${y}/${td}"
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          rm -rf _tmp_top3 || true
+
           git add -A outputs models
+          git add -A "$snap_dir"
 
           if [ -z "$(git status --porcelain)" ]; then
             echo "No changes to commit."
             exit 0
           fi
 
-          td="${{ steps.resolve_date.outputs.trade_date }}"
-          rid="${{ github.run_id }}"
-
-          git commit -m "auto: run top10 ${td} (run=${rid})" || true
+          git commit -m "auto: sync top3 snapshot into _warehouse ${td} (run=${rid})" || true
           git pull --rebase origin main || true
           git push || true
