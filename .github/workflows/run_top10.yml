@@ -101,7 +101,12 @@ jobs:
           # ✅ Step7 需要 lightgbm（否则永远无法生成 step5_lgbm.joblib）
           pip install -U lightgbm
 
-      - name: Resolve trade_date (manual or auto)
+      # ============================================================
+      # ✅ Resolve trade_date: P0 gate moved here (open_times & seal_amount required)
+      # - manual: respect user input (if fails later, fail)
+      # - auto: find the latest date that passes P0 gate
+      # ============================================================
+      - name: Resolve trade_date (manual or auto, with P0 gate)
         id: resolve_date
         shell: bash
         run: |
@@ -114,27 +119,69 @@ jobs:
             exit 0
           fi
 
-          echo "Auto resolve latest snapshot trade_date"
+          echo "Auto resolve latest snapshot trade_date (P0 gate: open_times & seal_amount required)"
           today="$(date +%Y%m%d)"
           base="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}"
 
           found=""
+
           for i in $(seq 0 "$LOOKBACK_DAYS"); do
             d="$(date -d "${today} -${i} day" +%Y%m%d)"
             y="${d:0:4}"
-            url="${base}/${y}/${d}/${PROBE_FILE}"
 
-            code="$(curl -s -o /dev/null -w "%{http_code}" -I "$url" || true)"
-            echo "[probe] ${d} => ${code}"
+            url_probe="${base}/${y}/${d}/${PROBE_FILE}"
+            code="$(curl -s -o /dev/null -w "%{http_code}" -I "$url_probe" || true)"
+            echo "[probe] ${d} daily => ${code}"
+            if [ "$code" != "200" ]; then
+              continue
+            fi
 
-            if [ "$code" = "200" ]; then
+            # P0 gate: limit_list_d must contain open_times & seal_amount and not all-empty
+            tmp="$(mktemp -t limit_list_${d}_XXXX.csv)"
+            url_ll="${base}/${y}/${d}/limit_list_d.csv"
+            if ! curl -fsSL --retry 2 --retry-delay 1 -o "$tmp" "$url_ll"; then
+              echo "[probe] ${d} limit_list_d.csv download FAIL"
+              rm -f "$tmp" || true
+              continue
+            fi
+
+            python - <<'PY' "$tmp" && ok="1" || ok="0"
+import sys
+import pandas as pd
+
+p = sys.argv[1]
+df = pd.read_csv(p)
+
+must = ["open_times", "seal_amount"]
+miss = [c for c in must if c not in df.columns]
+if miss:
+    raise SystemExit(f"[probe] missing cols {miss}")
+
+def all_empty(s):
+    if s.isna().all():
+        return True
+    return (s.astype(str).str.strip() == "").all()
+
+bad = [c for c in must if all_empty(df[c])]
+if bad:
+    raise SystemExit(f"[probe] cols all-empty {bad}")
+
+print("[probe] PASS open_times & seal_amount")
+PY
+
+            rm -f "$tmp" || true
+
+            if [ "$ok" = "1" ]; then
               found="$d"
+              echo "[pick] trade_date=$found (P0 gate PASS)"
               break
+            else
+              echo "[probe] ${d} P0 gate FAIL -> fallback"
             fi
           done
 
           if [ -z "$found" ]; then
-            echo "ERROR: cannot find any snapshot within last ${LOOKBACK_DAYS} days"
+            echo "ERROR: cannot find any snapshot within last ${LOOKBACK_DAYS} days that passes P0 gate (open_times/seal_amount)"
             exit 2
           fi
 
@@ -173,7 +220,6 @@ jobs:
           fi
 
           mkdir -p "$dest_dir"
-          # 只覆盖当天目录，避免动其它日期目录
           rsync -a --delete "_tmp_top3/$src_dir/" "$dest_dir/"
 
           SRC_SHA="$(git -C _tmp_top3 rev-parse HEAD)"
@@ -192,7 +238,9 @@ jobs:
           echo "[sync] done, source_sha=${SRC_SHA}"
 
       # ============================================================
-      # ✅ Quality gate for resolved trade_date
+      # ✅ Quality gate for resolved trade_date (P0 hard gate)
+      # - REQUIRED_FILES must exist & non-empty
+      # - limit_list_d must contain key columns and not all-empty
       # ============================================================
       - name: Quality gate (required files + key columns)
         shell: bash
@@ -223,32 +271,31 @@ jobs:
             exit 21
           fi
 
-          python - <<'PY'
-          import os
-          import pandas as pd
+          python - <<'PY' "$snap_dir"
+import sys
+import os
+import pandas as pd
 
-          snap_dir = os.environ["SNAP_DIR"]
-          f = os.path.join(snap_dir, "limit_list_d.csv")
-          df = pd.read_csv(f)
+snap_dir = sys.argv[1]
+f = os.path.join(snap_dir, "limit_list_d.csv")
+df = pd.read_csv(f)
 
-          must_cols = ["limit_type", "up_limit", "down_limit", "open_times", "seal_amount"]
-          miss = [c for c in must_cols if c not in df.columns]
-          if miss:
-            raise SystemExit(f"[gate] limit_list_d.csv missing columns: {miss}")
+must_cols = ["limit_type", "up_limit", "down_limit", "open_times", "seal_amount"]
+miss = [c for c in must_cols if c not in df.columns]
+if miss:
+    raise SystemExit(f"[gate] limit_list_d.csv missing columns: {miss}")
 
-          for c in must_cols:
-            s = df[c]
-            # 不允许整列空（允许局部空）
-            all_empty = s.isna().all()
-            if not all_empty:
-              all_empty = (s.astype(str).str.strip() == "").all()
-            if all_empty:
-              raise SystemExit(f"[gate] limit_list_d.csv column all-empty: {c}")
+def all_empty(s):
+    if s.isna().all():
+        return True
+    return (s.astype(str).str.strip() == "").all()
 
-          print("[gate] limit_list_d.csv key columns OK")
-          PY
-        env:
-          SNAP_DIR: ${{ env.WAREHOUSE_ROOT }}/${{ env.DATA_REPO }}/${{ env.RAW_DIR }}/${{ steps.resolve_date.outputs.trade_date && format('{0}', steps.resolve_date.outputs.trade_date) }}
+bad = [c for c in must_cols if all_empty(df[c])]
+if bad:
+    raise SystemExit(f"[gate] limit_list_d.csv columns all-empty: {bad}")
+
+print("[gate] PASS: required files + limit_list_d key columns OK")
+PY
 
       - name: Debug warehouse (list)
         shell: bash
