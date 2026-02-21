@@ -1,7 +1,7 @@
 {
   "trade_date": "20260212",
   "base_source": "limit_list_d/stk_limit",
-  "base_rows": 92,
+  "base_rows": 61,
   "code_norm": {
     "found_code_col": "ts_code",
     "normalized_ratio": 1.0
@@ -21,7 +21,7 @@
     "drop_st": 0,
     "drop_delist": 0
   },
-  "final_rows": 92,
+  "final_rows": 61,
   "final_cols": [
     "ts_code",
     "name",

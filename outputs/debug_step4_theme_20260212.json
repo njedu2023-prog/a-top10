@@ -33,21 +33,21 @@
         0.7946272018253463
       ],
       [
-        "专用机械",
+        "软件服务",
         0.6230854212758787
       ],
       [
-        "汽车配件",
+        "专用机械",
         0.479801681970459
       ],
       [
-        "通信设备",
+        "小金属",
         0.36012104274902346
       ]
     ]
   },
   "candidate": {
-    "rows": 92,
+    "rows": 61,
     "code_col": "ts_code",
     "industry_col_before": "industry",
     "industry_col_final": "industry",
@@ -56,14 +56,14 @@
     "stock_basic_rows": 5484,
     "top_list_rows": 80
   },
-  "matched_industry_count": 53,
-  "dragon_hits": 37,
-  "theme_boost_nonzero": 66,
+  "matched_industry_count": 39,
+  "dragon_hits": 25,
+  "theme_boost_nonzero": 46,
   "apply_reason": "",
   "matched_industry_detail": {
-    "exact": 50,
+    "exact": 37,
     "normalized": 0,
-    "fuzzy_contains": 3
+    "fuzzy_contains": 2
   },
   "diagnosis": "industry heat applied (ok)",
   "step5_feature_passthrough": {
@@ -76,7 +76,7 @@
   "theme_df_feature_nonzero_rate": {
     "StrengthScore": 0.0,
     "turnover_rate": 0.0,
-    "seal_amount": 0.7934782608695652,
-    "open_times": 0.5543478260869565
+    "seal_amount": 0.9836065573770492,
+    "open_times": 0.4098360655737705
   }
 }

@@ -1,13 +1,13 @@
 {
-  "ts": "2026-02-21 23:39:56",
+  "ts": "2026-02-22 00:07:11",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
     "trade_date": "20260212",
     "next_trade_date": "20260213",
     "topn": 10,
-    "hit": 0,
-    "hit_rate": 0.0,
+    "hit": 4,
+    "hit_rate": 0.4,
     "note": ""
   },
   "train_meta": {
@@ -50,13 +50,13 @@
         "StrengthScore": {
           "non_null_rate": 1.0,
           "non_zero_rate": 0.3012295081967213,
-          "std": 26.882567449270972,
-          "unique_count": 145
+          "std": 27.326931246971537,
+          "unique_count": 148
         },
         "ThemeBoost": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.7069672131147541,
-          "std": 0.3653544161625294,
+          "non_zero_rate": 0.7090163934426229,
+          "std": 0.3657548939163051,
           "unique_count": 19
         },
         "turnover_rate": {
@@ -68,20 +68,20 @@
         "seal_amount": {
           "non_null_rate": 1.0,
           "non_zero_rate": 0.23975409836065573,
-          "std": 199227654.47261223,
+          "std": 199227654.47261226,
           "unique_count": 118
         },
         "open_times": {
           "non_null_rate": 1.0,
           "non_zero_rate": 0.1762295081967213,
-          "std": 2.7157865372618417,
+          "std": 2.715786537261842,
           "unique_count": 15
         },
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.16146489932787716,
-          "unique_count": 239
+          "std": 0.20187335846570878,
+          "unique_count": 238
         }
       },
       "pseudo_ratio": 0.6987704918032787,
@@ -103,8 +103,8 @@
     },
     "pseudo_ratio": 0.6987704918032787,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-21T15:39:56Z",
-    "model_version": "950a5cb7f2357272c60dc8863d187e70bb5f6159"
+    "updated_at_utc": "2026-02-21T16:07:10Z",
+    "model_version": "fe70455fde94b10ef180648ca84483180c1d7b36"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
@@ -114,8 +114,8 @@
     "models_dir": "models",
     "detail": {
       "train_rows": 328,
-      "pos": 71,
-      "neg": 257,
+      "pos": 63,
+      "neg": 265,
       "lr_path": "models/step5_lr.joblib",
       "lgbm_path": "models/step5_lgbm.joblib",
       "reason": "ok"
