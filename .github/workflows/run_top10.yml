@@ -36,7 +36,7 @@ jobs:
       # ✅ 关键：secret 名为 A_TOP10_TOKEN，这里桥接到程序读取的 TUSHARE_TOKEN
       TUSHARE_TOKEN: ${{ secrets.A_TOP10_TOKEN }}
 
-      # ---- 数据仓库信息（方案二：只用 raw，不用 GitHub API）----
+      # ---- 数据仓库信息（TOP3 数据仓库）----
       DATA_GITHUB_USER: njedu2023-prog
       DATA_REPO: a-share-top3-data
       DATA_BRANCH: main
@@ -141,40 +141,62 @@ jobs:
           echo "Resolved trade_date=$found"
           echo "trade_date=$found" >> "$GITHUB_OUTPUT"
 
-      - name: Download snapshot files to warehouse (raw, full)
+      # ============================================================
+      # ✅ NEW: Full mirror sync TOP3 data/raw to a-top10 _warehouse
+      # ============================================================
+      - name: Sync TOP3 snapshots (FULL MIRROR data/raw)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "[sync] cloning ${DATA_GITHUB_USER}/${DATA_REPO}@${DATA_BRANCH} ..."
+          rm -rf _tmp_top3
+          git clone --depth 1 --branch "${DATA_BRANCH}" \
+            "https://github.com/${DATA_GITHUB_USER}/${DATA_REPO}.git" _tmp_top3
+
+          if [ ! -d "_tmp_top3/${RAW_DIR}" ]; then
+            echo "ERROR: source raw dir not found: _tmp_top3/${RAW_DIR}"
+            exit 10
+          fi
+
+          echo "[sync] mirror _tmp_top3/${RAW_DIR}/ -> ${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/"
+          mkdir -p "${WAREHOUSE_ROOT}/${DATA_REPO}/data"
+          rsync -a --delete "_tmp_top3/${RAW_DIR}/" "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/"
+
+          SRC_SHA="$(git -C _tmp_top3 rev-parse HEAD)"
+          mkdir -p outputs
+          cat > outputs/warehouse_sync_meta.json <<EOF
+          {
+            "source_repo": "${DATA_GITHUB_USER}/${DATA_REPO}",
+            "source_branch": "${DATA_BRANCH}",
+            "source_sha": "${SRC_SHA}",
+            "synced_at_utc": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          }
+          EOF
+
+          echo "[sync] done, source_sha=${SRC_SHA}"
+
+      # ============================================================
+      # ✅ NEW: Quality gate for resolved trade_date (must be healthy)
+      # ============================================================
+      - name: Quality gate (required files + key columns)
         shell: bash
         run: |
           set -euo pipefail
 
           trade_date="${{ steps.resolve_date.outputs.trade_date }}"
           year="${trade_date:0:4}"
+          snap_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"
 
-          dest="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"
-          mkdir -p "$dest"
-
-          base="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}/${year}/${trade_date}"
-
-          echo "Downloading to: $dest"
-          echo "Base URL: $base"
-          echo "FILES: $FILES"
-          echo "REQUIRED_FILES: $REQUIRED_FILES"
+          echo "[gate] snapshot dir: $snap_dir"
+          if [ ! -d "$snap_dir" ]; then
+            echo "ERROR: snapshot dir missing: $snap_dir"
+            exit 20
+          fi
 
           missing_required=""
-
-          for f in $FILES; do
-            url="${base}/${f}"
-            out="${dest}/${f}"
-            echo "[get] $url"
-            if curl -fL --retry 3 --retry-delay 1 -o "$out" "$url"; then
-              ls -lh "$out" || true
-            else
-              echo "WARN: missing or cannot download: $f"
-              rm -f "$out" || true
-            fi
-          done
-
           for rf in $REQUIRED_FILES; do
-            p="${dest}/${rf}"
+            p="${snap_dir}/${rf}"
             if [ ! -s "$p" ]; then
               echo "ERROR: required snapshot file missing/empty: $rf"
               missing_required="${missing_required} ${rf}"
@@ -183,11 +205,43 @@ jobs:
 
           if [ -n "$missing_required" ]; then
             echo "ERROR: required snapshot files missing:${missing_required}"
-            echo "HINT: 如果数据仓库当天确实存在这些文件，说明 raw URL 或路径配置有误。"
-            exit 3
+            exit 21
           fi
 
-          echo "OK: downloaded FULL snapshots for ${trade_date}"
+          # ---- key CSV column gate: limit_list_d must contain open_times/seal_amount etc.
+          python - <<'PY'
+          import os
+          import pandas as pd
+
+          trade_date = os.environ.get("TRADE_DATE")
+          snap_dir   = os.environ.get("SNAP_DIR")
+
+          f = os.path.join(snap_dir, "limit_list_d.csv")
+          df = pd.read_csv(f)
+
+          must_cols = ["limit_type", "up_limit", "down_limit", "open_times", "seal_amount"]
+          miss = [c for c in must_cols if c not in df.columns]
+          if miss:
+            raise SystemExit(f"[gate] limit_list_d.csv missing columns: {miss}")
+
+          # 不允许关键列整列空（允许局部空）
+          for c in must_cols:
+            s = df[c]
+            all_empty = s.isna().all()
+            if not all_empty:
+              # 有些列是字符串空值
+              try:
+                all_empty = (s.astype(str).str.strip() == "").all()
+              except Exception:
+                all_empty = False
+            if all_empty:
+              raise SystemExit(f"[gate] limit_list_d.csv column all-empty: {c}")
+
+          print("[gate] limit_list_d.csv key columns OK")
+          PY
+        env:
+          TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
+          SNAP_DIR: ${{ env.WAREHOUSE_ROOT }}/${{ env.DATA_REPO }}/${{ env.RAW_DIR }}/${{ steps.resolve_date.outputs.trade_date && format('{0}', steps.resolve_date.outputs.trade_date) }}
 
       - name: Debug warehouse (list)
         shell: bash
