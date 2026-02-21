@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>每日 Top10 报告</title>
+  <title>A-Share TOP10</title>
 
   <!-- Markdown 渲染库（前端直接把 .md 转成 HTML） -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -19,7 +19,7 @@
     }
     .wrap{max-width: 980px; margin: 0 auto; padding: 24px 16px 60px;}
     header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px;}
-    h1{font-size:32px; margin:0; letter-spacing:.5px;}
+    h1{font-size:24px; margin:0; letter-spacing:.5px;}
     .sub{color:var(--muted); font-size:14px; margin-top:6px;}
     .nav{display:flex; gap:10px; align-items:center;}
     button{
@@ -67,6 +67,14 @@
       const d = String(date.getDate()).padStart(2,'0');
       return `${y}${m}${d}`;
     }
+
+    function yyyy_mm_dd(date){
+      const y = date.getFullYear();
+      const m = String(date.getMonth()+1).padStart(2,'0');
+      const d = String(date.getDate()).padStart(2,'0');
+      return `${y}-${m}-${d}`;
+    }
+
     function toDateInputValue(date){
       const y = date.getFullYear();
       const m = String(date.getMonth()+1).padStart(2,'0');
@@ -94,9 +102,6 @@
       url.searchParams.set('d', d);
       location.href = url.toString();
     }
-    function stripTitleBrackets(s){
-      return s.replaceAll('《','').replaceAll('》','').trim();
-    }
     function mdPathFor(date){
       return `outputs/predict_top10_${yyyymmdd(date)}.md`;
     }
@@ -109,7 +114,6 @@
 
     // =============== 核心：找“最近存在的日报” ===============
     async function findNearestExistingReportDate(startDate){
-      // 从 startDate 开始向前找，最多 LOOKBACK_DAYS
       for(let i=0; i<=LOOKBACK_DAYS; i++){
         const d = new Date(startDate);
         d.setDate(d.getDate() - i);
@@ -134,7 +138,7 @@
       // 1) 找最近存在的日报日期
       const useDate = await findNearestExistingReportDate(targetDate);
       if(!useDate){
-        titleEl.textContent = `每日 Top10 报告`;
+        titleEl.textContent = `A-Share TOP10`;
         reportEl.innerHTML = "";
         errEl.textContent =
           `在 ${yyyymmdd(targetDate)} 往前 ${LOOKBACK_DAYS} 天内，都没有找到 outputs/predict_top10_YYYYMMDD.md。\n` +
@@ -150,21 +154,19 @@
         ? `提示：你选择的 ${targetStr} 无日报，已自动回退到最近可用日报 ${useStr}`
         : `提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告`;
 
-      // 3) 拉取并渲染 markdown
+      // 3) 标题强制使用统一格式（动态日期）
+      const niceDate = yyyy_mm_dd(useDate);
+      titleEl.textContent = `A-Share TOP10 - ${niceDate}`;
+      document.title = `A-Share TOP10 - ${niceDate}`;
+
+      // 4) 拉取并渲染 markdown
       const path = mdPathFor(useDate);
       reportEl.innerHTML = `<div class="hint">正在加载：${path}</div>`;
 
       try{
         const md = await fetchText(path);
-        const firstLine = (md.split(/\r?\n/)[0] || "").trim();
-        let headerTitle = "每日 Top10 报告";
-        if(firstLine.startsWith("#")){
-          headerTitle = stripTitleBrackets(firstLine.replace(/^#+\s*/,''));
-        }
-        titleEl.textContent = `${headerTitle} - ${useStr}`;
         reportEl.innerHTML = marked.parse(md);
       }catch(e){
-        titleEl.textContent = `每日 Top10 报告 - ${useStr}`;
         reportEl.innerHTML = "";
         errEl.textContent = `读取日报失败：${e.message}`;
       }
@@ -190,7 +192,6 @@
 
     // =============== 导航：跳过缺失日报 ===============
     async function jumpByDaysSkippingMissing(currentDate, delta){
-      // 从 currentDate + delta 开始，向 delta 方向继续找，直到找到存在日报或超出 LOOKBACK_DAYS
       for(let i=1; i<=LOOKBACK_DAYS; i++){
         const d = new Date(currentDate);
         d.setDate(d.getDate() + delta * i);
@@ -239,12 +240,11 @@
   <div class="wrap">
     <header>
       <div>
-        <h1 id="title">每日 Top10 报告</h1>
-        <div class="sub">GitHub Pages 外部阅读版 · 支持上一日/下一日/日期选择（自动跳过缺失日报）</div>
+        <h1 id="title">A-Share TOP10</h1>
       </div>
       <div class="nav">
-        <button id="btn_prev">← </button>
-        <button id="btn_next">→ </button>
+        <button id="btn_prev">←</button>
+        <button id="btn_next">→</button>
       </div>
     </header>
 
