@@ -2,19 +2,13 @@ name: Run Top10 Engine (Auto Daily)
 
 on:
   schedule:
-    # ✅ GitHub Actions 的 cron 使用 UTC 时区
-    # ✅ 北京时间 Asia/Shanghai = UTC+8
-    # ✅ 周一至周五（1-5）：
-    #    - 19:05 北京时间  => 11:05 UTC
-    #    - 19:35 北京时间  => 11:35 UTC
     - cron: "5 11 * * 1-5"
     - cron: "35 11 * * 1-5"
 
-  # 手动运行：可指定 trade_date
   workflow_dispatch:
     inputs:
       trade_date:
-        description: "指定交易日 YYYYMMDD（留空=自动寻找最新）"
+        description: "指定交易日 YYYYMMDD（留空=自动寻找最新合格日期）"
         required: false
         type: string
 
@@ -33,34 +27,19 @@ jobs:
       TZ: Asia/Shanghai
       PYTHONUTF8: "1"
 
-      # ✅ 关键：secret 名为 A_TOP10_TOKEN，这里桥接到程序读取的 TUSHARE_TOKEN
+      # ✅ secret 名为 A_TOP10_TOKEN，这里桥接到程序读取的 TUSHARE_TOKEN
       TUSHARE_TOKEN: ${{ secrets.A_TOP10_TOKEN }}
 
-      # ---- 数据仓库信息（TOP3 数据仓库）----
+      # ---- TOP3 数据仓库 ----
       DATA_GITHUB_USER: njedu2023-prog
       DATA_REPO: a-share-top3-data
       DATA_BRANCH: main
 
-      # ---- 与 configs/default.yml 对齐（warehouse_root / repo_name / raw_dir）----
+      # ---- 与 configs/default.yml 对齐 ----
       WAREHOUSE_ROOT: _warehouse
       RAW_DIR: data/raw
 
-      # ---- ✅ 全量快照文件清单（按 data/raw/YYYY/YYYYMMDD/ 内实际文件名）----
-      FILES: >-
-        _meta.json
-        daily.csv
-        daily_basic.csv
-        hot_boards.csv
-        limit_break_d.csv
-        limit_list_d.csv
-        limit_up_tags.csv
-        moneyflow_hsgt.csv
-        namechange.csv
-        stk_limit.csv
-        stock_basic.csv
-        top_list.csv
-
-      # ---- ✅ 必须存在的关键文件（缺任何一个都直接失败）----
+      # ---- 必须存在的关键文件（缺任何一个都失败）----
       REQUIRED_FILES: >-
         daily.csv
         daily_basic.csv
@@ -69,10 +48,7 @@ jobs:
         top_list.csv
         limit_up_tags.csv
 
-      # ---- 自动回溯天数（找最近一个“可用”的交易日目录）----
       LOOKBACK_DAYS: "20"
-
-      # ---- 用于探测数据是否存在的哨兵文件 ----
       PROBE_FILE: "daily.csv"
 
     steps:
@@ -94,15 +70,11 @@ jobs:
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
-
-          # ✅ writers 需要 tabulate
           pip install -U tabulate
-
-          # ✅ Step7 需要 lightgbm（否则永远无法生成 step5_lgbm.joblib）
           pip install -U lightgbm
 
       # ============================================================
-      # ✅ Resolve trade_date: P0 gate moved here (open_times & seal_amount required)
+      # Resolve trade_date (P0 gate moved here: open_times & seal_amount required)
       # - manual: respect user input
       # - auto: find latest date that passes P0 gate
       # ============================================================
@@ -136,8 +108,7 @@ jobs:
               continue
             fi
 
-            # P0 gate: limit_list_d must contain open_times & seal_amount and not all-empty
-            tmp="$(mktemp -t limit_list_${d}_XXXX.csv)"
+            tmp="$(mktemp)"
             url_ll="${base}/${y}/${d}/limit_list_d.csv"
             if ! curl -fsSL --retry 2 --retry-delay 1 -o "$tmp" "$url_ll"; then
               echo "[probe] ${d} limit_list_d.csv download FAIL"
@@ -146,30 +117,15 @@ jobs:
             fi
 
             ok="0"
-            if python - "$tmp" <<'PY'
-import sys
-import pandas as pd
-
-p = sys.argv[1]
-df = pd.read_csv(p)
-
-must = ["open_times", "seal_amount"]
-miss = [c for c in must if c not in df.columns]
-if miss:
-    raise SystemExit(f"[probe] missing cols {miss}")
-
+            if python -c "import pandas as pd,sys
+df=pd.read_csv(sys.argv[1])
+must=['open_times','seal_amount']
+miss=[c for c in must if c not in df.columns]
+assert not miss, f'missing cols {miss}'
 def all_empty(s):
-    if s.isna().all():
-        return True
-    return (s.astype(str).str.strip() == "").all()
-
-bad = [c for c in must if all_empty(df[c])]
-if bad:
-    raise SystemExit(f"[probe] cols all-empty {bad}")
-
-print("[probe] PASS open_times & seal_amount")
-PY
-            then
+  return s.isna().all() or (s.astype(str).str.strip()=='').all()
+bad=[c for c in must if all_empty(df[c])]
+assert not bad, f'cols all-empty {bad}'" "$tmp"; then
               ok="1"
             else
               ok="0"
@@ -195,7 +151,7 @@ PY
           echo "trade_date=$found" >> "$GITHUB_OUTPUT"
 
       # ============================================================
-      # ✅ Sync ONLY the resolved trade_date directory via sparse checkout
+      # Sync ONLY the resolved trade_date directory via sparse checkout
       # ============================================================
       - name: Sync TOP3 snapshot (ONLY trade_date dir)
         shell: bash
@@ -244,7 +200,7 @@ PY
           echo "[sync] done, source_sha=${SRC_SHA}"
 
       # ============================================================
-      # ✅ Quality gate for resolved trade_date (P0 hard gate)
+      # Quality gate for resolved trade_date (P0 hard gate)
       # ============================================================
       - name: Quality gate (required files + key columns)
         shell: bash
@@ -275,31 +231,18 @@ PY
             exit 21
           fi
 
-          python - "$snap_dir" <<'PY'
-import sys
-import os
-import pandas as pd
-
-snap_dir = sys.argv[1]
-f = os.path.join(snap_dir, "limit_list_d.csv")
-df = pd.read_csv(f)
-
-must_cols = ["limit_type", "up_limit", "down_limit", "open_times", "seal_amount"]
-miss = [c for c in must_cols if c not in df.columns]
-if miss:
-    raise SystemExit(f"[gate] limit_list_d.csv missing columns: {miss}")
-
+          python -c "import pandas as pd,os,sys
+snap=sys.argv[1]
+df=pd.read_csv(os.path.join(snap,'limit_list_d.csv'))
+must=['limit_type','up_limit','down_limit','open_times','seal_amount']
+miss=[c for c in must if c not in df.columns]
+assert not miss, f'missing cols {miss}'
 def all_empty(s):
-    if s.isna().all():
-        return True
-    return (s.astype(str).str.strip() == "").all()
+  return s.isna().all() or (s.astype(str).str.strip()=='').all()
+bad=[c for c in must if all_empty(df[c])]
+assert not bad, f'cols all-empty {bad}'" "$snap_dir"
 
-bad = [c for c in must_cols if all_empty(df[c])]
-if bad:
-    raise SystemExit(f"[gate] limit_list_d.csv columns all-empty: {bad}")
-
-print("[gate] PASS: required files + limit_list_d key columns OK")
-PY
+          echo "[gate] PASS"
 
       - name: Debug warehouse (list)
         shell: bash
@@ -309,14 +252,8 @@ PY
           trade_date="${{ steps.resolve_date.outputs.trade_date }}"
           year="${trade_date:0:4}"
 
-          echo "====== LIST _warehouse (top) ======"
-          ls -la _warehouse || true
-
           echo "====== LIST snapshot dir ======"
           ls -la "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}" || true
-
-          echo "====== CHECK key files (size) ======"
-          du -h "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"/* || true
 
       - name: Run Top10 Engine + Step7
         shell: bash
@@ -332,7 +269,6 @@ PY
             python -m a_top10
           fi
 
-          # ✅ Step7：自学习闭环（会写 outputs/learning 报告 + models/*.joblib）
           python -m a_top10.steps.step7_self_learning
 
       - name: Step7 artifacts check + stamp (always)
@@ -343,19 +279,12 @@ PY
           td="${{ steps.resolve_date.outputs.trade_date }}"
           rid="${{ github.run_id }}"
 
-          echo "====== LIST outputs (top) ======"
           ls -la outputs || true
-
-          echo "====== LIST outputs/learning ======"
           ls -la outputs/learning || true
-
-          echo "====== LIST models (repo root) ======"
           ls -la models || true
 
-          # ✅ 关键：写一个每次必变的哨兵文件，保证你在仓库“看得见 Step7 跑过”
           mkdir -p outputs/learning
           echo "run_id=${rid} trade_date=${td} utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "outputs/learning/_last_run_${td}_${rid}.txt"
-          echo "STAMP written: outputs/learning/_last_run_${td}_${rid}.txt"
 
       - name: Commit & push outputs + models (always)
         if: always()
@@ -366,11 +295,7 @@ PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # ✅ 只提交 outputs + models（避免把 _warehouse 等目录误提交）
           git add -A outputs models
-
-          echo "====== git status (after add outputs+models) ======"
-          git status --porcelain
 
           if [ -z "$(git status --porcelain)" ]; then
             echo "No changes to commit."
