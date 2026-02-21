@@ -142,26 +142,39 @@ jobs:
           echo "trade_date=$found" >> "$GITHUB_OUTPUT"
 
       # ============================================================
-      # ✅ NEW: Full mirror sync TOP3 data/raw to a-top10 _warehouse
+      # ✅ Sync ONLY the resolved trade_date directory via sparse checkout
       # ============================================================
-      - name: Sync TOP3 snapshots (FULL MIRROR data/raw)
+      - name: Sync TOP3 snapshot (ONLY trade_date dir)
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "[sync] cloning ${DATA_GITHUB_USER}/${DATA_REPO}@${DATA_BRANCH} ..."
+          trade_date="${{ steps.resolve_date.outputs.trade_date }}"
+          year="${trade_date:0:4}"
+
+          src_dir="${RAW_DIR}/${year}/${trade_date}"
+          dest_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"
+
+          echo "[sync] trade_date=$trade_date"
+          echo "[sync] src_dir=$src_dir"
+          echo "[sync] dest_dir=$dest_dir"
+
           rm -rf _tmp_top3
-          git clone --depth 1 --branch "${DATA_BRANCH}" \
+          git clone --depth 1 --filter=blob:none --sparse \
+            --branch "${DATA_BRANCH}" \
             "https://github.com/${DATA_GITHUB_USER}/${DATA_REPO}.git" _tmp_top3
 
-          if [ ! -d "_tmp_top3/${RAW_DIR}" ]; then
-            echo "ERROR: source raw dir not found: _tmp_top3/${RAW_DIR}"
+          git -C _tmp_top3 sparse-checkout init --cone
+          git -C _tmp_top3 sparse-checkout set "$src_dir"
+
+          if [ ! -d "_tmp_top3/$src_dir" ]; then
+            echo "ERROR: source snapshot dir missing in TOP3 repo: _tmp_top3/$src_dir"
             exit 10
           fi
 
-          echo "[sync] mirror _tmp_top3/${RAW_DIR}/ -> ${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/"
-          mkdir -p "${WAREHOUSE_ROOT}/${DATA_REPO}/data"
-          rsync -a --delete "_tmp_top3/${RAW_DIR}/" "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/"
+          mkdir -p "$dest_dir"
+          # 只覆盖当天目录，避免动其它日期目录
+          rsync -a --delete "_tmp_top3/$src_dir/" "$dest_dir/"
 
           SRC_SHA="$(git -C _tmp_top3 rev-parse HEAD)"
           mkdir -p outputs
@@ -170,6 +183,8 @@ jobs:
             "source_repo": "${DATA_GITHUB_USER}/${DATA_REPO}",
             "source_branch": "${DATA_BRANCH}",
             "source_sha": "${SRC_SHA}",
+            "trade_date": "${trade_date}",
+            "synced_dir": "${src_dir}",
             "synced_at_utc": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           }
           EOF
@@ -177,7 +192,7 @@ jobs:
           echo "[sync] done, source_sha=${SRC_SHA}"
 
       # ============================================================
-      # ✅ NEW: Quality gate for resolved trade_date (must be healthy)
+      # ✅ Quality gate for resolved trade_date
       # ============================================================
       - name: Quality gate (required files + key columns)
         shell: bash
@@ -208,14 +223,11 @@ jobs:
             exit 21
           fi
 
-          # ---- key CSV column gate: limit_list_d must contain open_times/seal_amount etc.
           python - <<'PY'
           import os
           import pandas as pd
 
-          trade_date = os.environ.get("TRADE_DATE")
-          snap_dir   = os.environ.get("SNAP_DIR")
-
+          snap_dir = os.environ["SNAP_DIR"]
           f = os.path.join(snap_dir, "limit_list_d.csv")
           df = pd.read_csv(f)
 
@@ -224,23 +236,18 @@ jobs:
           if miss:
             raise SystemExit(f"[gate] limit_list_d.csv missing columns: {miss}")
 
-          # 不允许关键列整列空（允许局部空）
           for c in must_cols:
             s = df[c]
+            # 不允许整列空（允许局部空）
             all_empty = s.isna().all()
             if not all_empty:
-              # 有些列是字符串空值
-              try:
-                all_empty = (s.astype(str).str.strip() == "").all()
-              except Exception:
-                all_empty = False
+              all_empty = (s.astype(str).str.strip() == "").all()
             if all_empty:
               raise SystemExit(f"[gate] limit_list_d.csv column all-empty: {c}")
 
           print("[gate] limit_list_d.csv key columns OK")
           PY
         env:
-          TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
           SNAP_DIR: ${{ env.WAREHOUSE_ROOT }}/${{ env.DATA_REPO }}/${{ env.RAW_DIR }}/${{ steps.resolve_date.outputs.trade_date && format('{0}', steps.resolve_date.outputs.trade_date) }}
 
       - name: Debug warehouse (list)
