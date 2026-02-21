@@ -1,13 +1,13 @@
 {
-  "ts": "2026-02-21 19:24:34",
+  "ts": "2026-02-21 21:46:31",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
     "trade_date": "20260212",
     "next_trade_date": "20260213",
     "topn": 10,
-    "hit": 2,
-    "hit_rate": 0.2,
+    "hit": 0,
+    "hit_rate": 0.0,
     "note": ""
   },
   "train_meta": {
@@ -50,13 +50,13 @@
         "StrengthScore": {
           "non_null_rate": 1.0,
           "non_zero_rate": 0.3012295081967213,
-          "std": 26.645291586155142,
-          "unique_count": 144
+          "std": 26.882567449270972,
+          "unique_count": 145
         },
         "ThemeBoost": {
           "non_null_rate": 1.0,
           "non_zero_rate": 0.7069672131147541,
-          "std": 0.36465105197349135,
+          "std": 0.3653544161625294,
           "unique_count": 19
         },
         "turnover_rate": {
@@ -68,19 +68,19 @@
         "seal_amount": {
           "non_null_rate": 1.0,
           "non_zero_rate": 0.23975409836065573,
-          "std": 199227654.47261226,
+          "std": 199227654.47261223,
           "unique_count": 118
         },
         "open_times": {
           "non_null_rate": 1.0,
           "non_zero_rate": 0.1762295081967213,
-          "std": 2.7157865372618417,
+          "std": 2.715786537261842,
           "unique_count": 15
         },
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.1627018319554723,
+          "std": 0.16201442826308943,
           "unique_count": 239
         }
       },
@@ -103,8 +103,8 @@
     },
     "pseudo_ratio": 0.6987704918032787,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-21T11:24:33Z",
-    "model_version": "c4fba23959d8497a04e46b7624591eb377e54062"
+    "updated_at_utc": "2026-02-21T13:46:31Z",
+    "model_version": "800b1a31591cf2df838070bc8e916d849759abbf"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
@@ -114,8 +114,8 @@
     "models_dir": "models",
     "detail": {
       "train_rows": 328,
-      "pos": 81,
-      "neg": 247,
+      "pos": 71,
+      "neg": 257,
       "lr_path": "models/step5_lr.joblib",
       "lgbm_path": "models/step5_lgbm.joblib",
       "reason": "ok"

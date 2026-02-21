@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-02-21 19:24:34
+- 生成时间：2026-02-21 21:46:31
 - TopN：10
 - Lookback：150 天
 
@@ -8,8 +8,8 @@
 
 - trade_date：20260212
 - next_trade_date：20260213
-- hit/topn：2/10
-- hit_rate：0.2
+- hit/topn：0/10
+- hit_rate：0.0
 
 ## 1.5) Auto-Sampling 状态
 
@@ -35,7 +35,7 @@
 - lgbm_saved：True
 - models_dir：models
 - train_rows：328
-- pos/neg：81/247
+- pos/neg：71/257
 - reason：ok
 - lr_path：models/step5_lr.joblib
 - lgbm_path：models/step5_lgbm.joblib

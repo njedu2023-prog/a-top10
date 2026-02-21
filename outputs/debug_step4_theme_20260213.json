@@ -25,29 +25,29 @@
     "score_max": 1.0,
     "top5": [
       [
-        "建筑工程",
+        "汽车配件",
         1.0
       ],
       [
-        "汽车配件",
+        "建筑工程",
         0.7946272018253463
       ],
       [
-        "电气设备",
+        "专用机械",
         0.6230854212758787
       ],
       [
-        "专用机械",
+        "工程机械",
         0.479801681970459
       ],
       [
-        "互联网",
+        "电气设备",
         0.36012104274902346
       ]
     ]
   },
   "candidate": {
-    "rows": 55,
+    "rows": 32,
     "code_col": "ts_code",
     "industry_col_before": "industry",
     "industry_col_final": "industry",
@@ -56,14 +56,14 @@
     "stock_basic_rows": 5484,
     "top_list_rows": 57
   },
-  "matched_industry_count": 33,
-  "dragon_hits": 32,
-  "theme_boost_nonzero": 43,
+  "matched_industry_count": 20,
+  "dragon_hits": 17,
+  "theme_boost_nonzero": 24,
   "apply_reason": "",
   "matched_industry_detail": {
-    "exact": 31,
+    "exact": 19,
     "normalized": 0,
-    "fuzzy_contains": 2
+    "fuzzy_contains": 1
   },
   "diagnosis": "industry heat applied (ok)",
   "step5_feature_passthrough": {
@@ -76,7 +76,7 @@
   "theme_df_feature_nonzero_rate": {
     "StrengthScore": 0.0,
     "turnover_rate": 0.0,
-    "seal_amount": 0.8,
-    "open_times": 0.6363636363636364
+    "seal_amount": 1.0,
+    "open_times": 0.53125
   }
 }

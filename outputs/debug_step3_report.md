@@ -1,7 +1,7 @@
 # Step3 Debug Report
 
 - trade_date: `20260213`
-- rows: 55
+- rows: 32
 - snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260213`
 - snapshot_missing: `False`
 
@@ -10,7 +10,7 @@
 - daily_basic.csv: 5474
 - top_list.csv: 57
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 55
+- limit_list_d.csv: 32
 - limit_break_d.csv: 0
 
 ## Missing rate
@@ -27,8 +27,8 @@
 ## Nonzero rate (关键验收)
 - StrengthScore: 1.0000
 - turnover_rate: 1.0000
-- seal_amount: 0.8000
-- open_times: 0.6364
+- seal_amount: 1.0000
+- open_times: 0.5312
 
 ```json
 {
@@ -39,7 +39,7 @@
     "daily_basic.csv": 5474,
     "top_list.csv": 57,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 55,
+    "limit_list_d.csv": 32,
     "limit_break_d.csv": 0
   },
   "missing_rate": {
@@ -56,8 +56,8 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "turnover_rate": 1.0,
-    "seal_amount": 0.8,
-    "open_times": 0.6363636363636364
+    "seal_amount": 1.0,
+    "open_times": 0.53125
   }
 }
 ```
