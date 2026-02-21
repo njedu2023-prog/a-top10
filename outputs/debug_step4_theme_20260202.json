@@ -1,0 +1,82 @@
+{
+  "trade_date": "20260202",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260202",
+  "snapshot_files": {},
+  "params": {
+    "rank_decay_k": 0.18,
+    "topk_industry": 40,
+    "dragon_bonus": 0.08,
+    "fuzzy_max_rows": 300
+  },
+  "hot_boards_rows": 10,
+  "hot_boards_cols": [
+    "trade_date",
+    "industry",
+    "limit_up_count",
+    "rank"
+  ],
+  "industry_score_map": {
+    "ok": true,
+    "reason": "",
+    "industry_col": "industry",
+    "rank_col": "rank",
+    "size": 10,
+    "score_min": 0.0,
+    "score_max": 1.0,
+    "top5": [
+      [
+        "电气设备",
+        1.0
+      ],
+      [
+        "文教休闲",
+        0.7946272018253463
+      ],
+      [
+        "汽车配件",
+        0.6230854212758787
+      ],
+      [
+        "白酒",
+        0.479801681970459
+      ],
+      [
+        "百货",
+        0.36012104274902346
+      ]
+    ]
+  },
+  "candidate": {
+    "rows": 36,
+    "code_col": "ts_code",
+    "industry_col_before": "industry",
+    "industry_col_final": "industry",
+    "industry_nonblank_ratio_before": 1.0,
+    "industry_nonblank_ratio_final": 1.0,
+    "stock_basic_rows": 5484,
+    "top_list_rows": 80
+  },
+  "matched_industry_count": 30,
+  "dragon_hits": 21,
+  "theme_boost_nonzero": 33,
+  "apply_reason": "",
+  "matched_industry_detail": {
+    "exact": 29,
+    "normalized": 0,
+    "fuzzy_contains": 1
+  },
+  "diagnosis": "industry heat applied (ok)",
+  "step5_feature_passthrough": {
+    "mapped": {},
+    "missing": [
+      "StrengthScore",
+      "turnover_rate"
+    ]
+  },
+  "theme_df_feature_nonzero_rate": {
+    "StrengthScore": 0.0,
+    "turnover_rate": 0.0,
+    "seal_amount": 1.0,
+    "open_times": 0.3055555555555556
+  }
+}
