@@ -37,33 +37,46 @@
         0.6230854212758787
       ],
       [
-        "中成药",
+        "染料涂料",
         0.479801681970459
       ],
       [
-        "元器件",
+        "中成药",
         0.36012104274902346
       ]
     ]
   },
   "candidate": {
-    "rows": 86,
+    "rows": 57,
     "code_col": "ts_code",
     "industry_col_before": "industry",
     "industry_col_final": "industry",
     "industry_nonblank_ratio_before": 1.0,
     "industry_nonblank_ratio_final": 1.0,
-    "stock_basic_rows": 5479,
+    "stock_basic_rows": 5484,
     "top_list_rows": 57
   },
-  "matched_industry_count": 49,
-  "dragon_hits": 28,
-  "theme_boost_nonzero": 56,
+  "matched_industry_count": 33,
+  "dragon_hits": 18,
+  "theme_boost_nonzero": 35,
   "apply_reason": "",
   "matched_industry_detail": {
-    "exact": 46,
+    "exact": 31,
     "normalized": 0,
-    "fuzzy_contains": 3
+    "fuzzy_contains": 2
   },
-  "diagnosis": "industry heat applied (ok)"
+  "diagnosis": "industry heat applied (ok)",
+  "step5_feature_passthrough": {
+    "mapped": {},
+    "missing": [
+      "StrengthScore",
+      "turnover_rate"
+    ]
+  },
+  "theme_df_feature_nonzero_rate": {
+    "StrengthScore": 0.0,
+    "turnover_rate": 0.0,
+    "seal_amount": 0.9649122807017544,
+    "open_times": 0.5087719298245614
+  }
 }

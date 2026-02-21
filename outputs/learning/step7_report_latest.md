@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-02-22 00:20:07
+- 生成时间：2026-02-22 00:23:36
 - TopN：10
 - Lookback：150 天
 
@@ -17,14 +17,14 @@
 - target_rows_per_day：200
 - days_covered：6
 - quality_gate_pass：True
-- pseudo_ratio：0.29508196721311475
+- pseudo_ratio：0.17827868852459017
 
 ## 2) 训练数据概况
 
 - 特征历史文件：outputs/learning/feature_history.csv
 - 原始行数：488
-- 过滤后行数：382
-- 丢弃全零特征行：51
+- 过滤后行数：404
+- 丢弃全零特征行：29
 - 日期总数：6
 - 使用日期：6
 
@@ -34,8 +34,8 @@
 - lr_saved：True
 - lgbm_saved：True
 - models_dir：models
-- train_rows：382
-- pos/neg：70/312
+- train_rows：404
+- pos/neg：74/330
 - reason：ok
 - lr_path：models/step5_lr.joblib
 - lgbm_path：models/step5_lgbm.joblib

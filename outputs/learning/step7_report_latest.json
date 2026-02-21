@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-22 00:20:07",
+  "ts": "2026-02-22 00:23:36",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -13,8 +13,8 @@
   "train_meta": {
     "feature_history_file": "outputs/learning/feature_history.csv",
     "rows_raw": 488,
-    "rows_used": 382,
-    "rows_dropped_allzero": 51,
+    "rows_used": 404,
+    "rows_dropped_allzero": 29,
     "dates_total": 6,
     "dates_used": 6
   },
@@ -49,42 +49,42 @@
       "metrics": {
         "StrengthScore": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.7049180327868853,
-          "std": 28.401999907809063,
-          "unique_count": 342
+          "non_zero_rate": 0.8217213114754098,
+          "std": 25.12976693676752,
+          "unique_count": 397
         },
         "ThemeBoost": {
           "non_null_rate": 1.0,
           "non_zero_rate": 0.7151639344262295,
-          "std": 0.36558771559396164,
+          "std": 0.36539900210447895,
           "unique_count": 19
         },
         "turnover_rate": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.7049180327868853,
-          "std": 13.541185290870134,
-          "unique_count": 345
+          "non_zero_rate": 0.8217213114754098,
+          "std": 13.319947071225537,
+          "unique_count": 402
         },
         "seal_amount": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.6372950819672131,
-          "std": 220333570.95899582,
-          "unique_count": 312
+          "non_zero_rate": 0.75,
+          "std": 219381903.16545063,
+          "unique_count": 367
         },
         "open_times": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.35450819672131145,
-          "std": 3.294725983838484,
+          "non_zero_rate": 0.4139344262295082,
+          "std": 3.3682418788484076,
           "unique_count": 18
         },
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.2259810654931212,
-          "unique_count": 382
+          "std": 0.2049353393701158,
+          "unique_count": 436
         }
       },
-      "pseudo_ratio": 0.29508196721311475,
+      "pseudo_ratio": 0.17827868852459017,
       "window_days": 6,
       "rows_in_window": 488,
       "pass": true
@@ -101,10 +101,10 @@
         55
       ]
     },
-    "pseudo_ratio": 0.29508196721311475,
+    "pseudo_ratio": 0.17827868852459017,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-21T16:20:06Z",
-    "model_version": "e9637f15db9401a68c32b3f86daa50b7207a14b7"
+    "updated_at_utc": "2026-02-21T16:23:35Z",
+    "model_version": "ff3f4b77661db205ab29ab24631d017746d56b08"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
@@ -113,9 +113,9 @@
     "lgbm_saved": true,
     "models_dir": "models",
     "detail": {
-      "train_rows": 382,
-      "pos": 70,
-      "neg": 312,
+      "train_rows": 404,
+      "pos": 74,
+      "neg": 330,
       "lr_path": "models/step5_lr.joblib",
       "lgbm_path": "models/step5_lgbm.joblib",
       "reason": "ok"
