@@ -1,8 +1,9 @@
 {
   "sampling_stage": "S1_MVP",
   "target_rows_per_day": 200,
-  "days_covered": 7,
+  "days_covered": 8,
   "rows_per_day_last_N": [
+    68,
     44,
     86,
     112,
@@ -30,50 +31,51 @@
     "metrics": {
       "StrengthScore": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.8364661654135338,
-        "std": 24.59151595877424,
-        "unique_count": 441
+        "non_zero_rate": 0.855,
+        "std": 23.711323418546982,
+        "unique_count": 506
       },
       "ThemeBoost": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.7161654135338346,
-        "std": 0.3624822830946424,
+        "non_zero_rate": 0.7233333333333334,
+        "std": 0.3692968541070768,
         "unique_count": 19
       },
       "turnover_rate": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.8364661654135338,
-        "std": 13.418727318780999,
-        "unique_count": 446
+        "non_zero_rate": 0.855,
+        "std": 12.998791296433541,
+        "unique_count": 514
       },
       "seal_amount": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.7706766917293233,
-        "std": 211636689.98037064,
-        "unique_count": 411
+        "non_zero_rate": 0.7966666666666666,
+        "std": 201219144.08853644,
+        "unique_count": 479
       },
       "open_times": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.3966165413533835,
-        "std": 3.3036248857637385,
+        "non_zero_rate": 0.3933333333333333,
+        "std": 3.2507757731708615,
         "unique_count": 18
       },
       "Probability": {
         "non_null_rate": 1.0,
         "non_zero_rate": 1.0,
-        "std": 0.21375904959769407,
-        "unique_count": 480
+        "std": 0.22645651196718228,
+        "unique_count": 548
       }
     },
-    "pseudo_ratio": 0.16353383458646617,
-    "window_days": 7,
-    "rows_in_window": 532,
+    "pseudo_ratio": 0.145,
+    "window_days": 8,
+    "rows_in_window": 600,
     "pass": true
   },
   "stage_debug": {
     "prev_stage": "S1_MVP",
-    "days_covered": 7,
+    "days_covered": 8,
     "rows_last": [
+      68,
       44,
       86,
       112,
@@ -83,8 +85,8 @@
       55
     ]
   },
-  "pseudo_ratio": 0.16353383458646617,
+  "pseudo_ratio": 0.145,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-02-21T16:26:28Z",
-  "model_version": "1bfe87c0d38f47ecf653506dd6846643ac2d7f19"
+  "updated_at_utc": "2026-02-21T16:30:12Z",
+  "model_version": "5a472de09e5c84b5153383b6f1342a8f560f4c9b"
 }
