@@ -1,53 +1,235 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<title>每日 Top10 报告</title>
-<style>
-body { font-family: sans-serif; margin: 20px; }
-header { text-align:center; margin-bottom:20px; }
-nav { display:flex; justify-content:space-between; margin-bottom:20px; }
-button { padding:8px 12px; }
-table { width:100%; border-collapse: collapse; margin-top:20px; }
-th, td { border:1px solid #ddd; padding:8px; text-align:left; }
-</style>
-<script>
-function formatDate(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth()+1).padStart(2,'0');
-  const d = String(date.getDate()).padStart(2,'0');
-  return y + m + d;
-}
-function loadReport(offset) {
-  const today = new Date();
-  today.setDate(today.getDate()+offset);
-  const dateStr = formatDate(today);
-  window.location.href = 'predict_top10_' + dateStr + '.html';
-}
-window.onload = function() {
-  const today = new Date();
-  document.getElementById('title').innerText = '每日 Top10 报告 - ' + formatDate(today);
-};
-</script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>每日 Top10 报告</title>
+
+  <!-- Markdown 渲染库（前端直接把 .md 转成 HTML） -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <style>
+    :root{
+      --bg:#ffffff; --fg:#111827; --muted:#6b7280; --line:#e5e7eb;
+      --card:#f9fafb; --btn:#111827; --btnfg:#fff;
+    }
+    body{font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+      margin:0; background:var(--bg); color:var(--fg);}
+    .wrap{max-width: 980px; margin: 0 auto; padding: 24px 16px 60px;}
+    header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px;}
+    h1{font-size:32px; margin:0; letter-spacing: .5px;}
+    .sub{color:var(--muted); font-size:14px; margin-top:6px;}
+    .nav{display:flex; gap:10px; align-items:center;}
+    button{
+      border:1px solid var(--line);
+      background:#fff; color:var(--fg);
+      padding:10px 12px; border-radius:10px;
+      cursor:pointer; font-size:14px;
+    }
+    button:hover{background:var(--card);}
+    .card{
+      border:1px solid var(--line);
+      background: var(--card);
+      border-radius: 14px;
+      padding: 16px;
+      margin-top: 14px;
+    }
+    .card h2{margin:0 0 10px; font-size:20px;}
+    .md{line-height:1.65;}
+    .md h1,.md h2,.md h3{margin-top:18px;}
+    .md table{border-collapse: collapse; width:100%; overflow:auto; display:block;}
+    .md th,.md td{border:1px solid var(--line); padding:8px 10px; font-size:14px; white-space:nowrap;}
+    .md blockquote{border-left:3px solid var(--line); margin:10px 0; padding:0 12px; color:var(--muted);}
+    .hint{color:var(--muted); font-size:13px;}
+    .err{color:#b91c1c; font-size:13px; white-space:pre-wrap;}
+    .topbar{
+      display:flex; justify-content:space-between; align-items:center;
+      margin: 14px 0 6px;
+    }
+    .datebox{
+      display:flex; align-items:center; gap:8px;
+      color:var(--muted); font-size:14px;
+    }
+    input[type="date"]{
+      border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:14px;
+      background:#fff;
+    }
+  </style>
+
+  <script>
+    // --------- utils ----------
+    function yyyymmdd(date){
+      const y = date.getFullYear();
+      const m = String(date.getMonth()+1).padStart(2,'0');
+      const d = String(date.getDate()).padStart(2,'0');
+      return `${y}${m}${d}`;
+    }
+    function toDateInputValue(date){
+      const y = date.getFullYear();
+      const m = String(date.getMonth()+1).padStart(2,'0');
+      const d = String(date.getDate()).padStart(2,'0');
+      return `${y}-${m}-${d}`;
+    }
+    function fromDateInputValue(v){
+      // v: YYYY-MM-DD
+      const [y,m,d] = v.split('-').map(x=>parseInt(x,10));
+      return new Date(y, m-1, d);
+    }
+    function getQueryDate(){
+      const p = new URLSearchParams(location.search);
+      const d = p.get('d');
+      if(d && /^\d{8}$/.test(d)){
+        const y = parseInt(d.slice(0,4),10);
+        const m = parseInt(d.slice(4,6),10);
+        const dd = parseInt(d.slice(6,8),10);
+        return new Date(y, m-1, dd);
+      }
+      return new Date(); // 默认今天
+    }
+    function setQueryDate(date){
+      const d = yyyymmdd(date);
+      const url = new URL(location.href);
+      url.searchParams.set('d', d);
+      location.href = url.toString();
+    }
+
+    async function fetchText(path){
+      const res = await fetch(path, { cache: "no-store" });
+      if(!res.ok) throw new Error(`${res.status} ${res.statusText} -> ${path}`);
+      return await res.text();
+    }
+
+    function stripTitleBrackets(s){
+      // 去掉《》但保留原标题内容：例如 《每日Top10报告》 -> 每日Top10报告
+      return s.replaceAll('《','').replaceAll('》','').trim();
+    }
+
+    // --------- main loaders ----------
+    async function loadDailyReport(date){
+      const dateStr = yyyymmdd(date);
+      const mdPath = `outputs/predict_top10_${dateStr}.md`;
+
+      const titleEl = document.getElementById('title');
+      const reportEl = document.getElementById('report');
+      const errEl = document.getElementById('report_err');
+
+      errEl.textContent = "";
+      reportEl.innerHTML = `<div class="hint">正在加载：${mdPath}</div>`;
+
+      try{
+        const md = await fetchText(mdPath);
+
+        // 1) 解析第一行标题（如果存在），用于更“像原报告”
+        //   - 同时去掉《》符号
+        const lines = md.split(/\r?\n/);
+        let first = lines[0] || "";
+        let headerTitle = "";
+        if(first.trim().startsWith("#")){
+          headerTitle = stripTitleBrackets(first.replace(/^#+\s*/,''));
+        }else{
+          headerTitle = "每日 Top10 报告";
+        }
+
+        titleEl.textContent = `${headerTitle} - ${dateStr}`;
+
+        // 2) 整体 Markdown 渲染
+        reportEl.innerHTML = marked.parse(md);
+
+      }catch(e){
+        titleEl.textContent = `每日 Top10 报告 - ${dateStr}`;
+        reportEl.innerHTML = "";
+        errEl.textContent = `未能读取日报内容。\n原因：${e.message}\n\n请先在浏览器打开：\n- outputs/predict_top10_${dateStr}.md\n确认该文件在仓库中存在且 Pages 可访问。`;
+      }
+    }
+
+    async function loadLearningStatus(){
+      const mdPath = `outputs/learning/step7_report_latest.md`;
+      const box = document.getElementById('learning');
+      const err = document.getElementById('learning_err');
+
+      err.textContent = "";
+      box.innerHTML = `<div class="hint">正在加载：${mdPath}</div>`;
+
+      try{
+        const md = await fetchText(mdPath);
+        box.innerHTML = marked.parse(md);
+      }catch(e){
+        box.innerHTML = "";
+        err.textContent = `未能读取学习状态：${e.message}\n请确认 outputs/learning/step7_report_latest.md 在仓库存在且 Pages 可访问。`;
+      }
+    }
+
+    function bindNav(date){
+      document.getElementById('btn_prev').onclick = () => {
+        const d = new Date(date);
+        d.setDate(d.getDate()-1);
+        setQueryDate(d);
+      };
+      document.getElementById('btn_next').onclick = () => {
+        const d = new Date(date);
+        d.setDate(d.getDate()+1);
+        setQueryDate(d);
+      };
+
+      const picker = document.getElementById('date_picker');
+      picker.value = toDateInputValue(date);
+      picker.onchange = () => {
+        const d = fromDateInputValue(picker.value);
+        setQueryDate(d);
+      };
+    }
+
+    window.onload = async () => {
+      const date = getQueryDate();
+      bindNav(date);
+
+      // 先加载日报，再加载学习状态
+      await loadDailyReport(date);
+      await loadLearningStatus();
+    };
+  </script>
 </head>
+
 <body>
-<header>
-<h1 id="title">每日 Top10 报告</h1>
-</header>
-<nav>
-<button onclick="loadReport(-1)">← 上一日</button>
-<button onclick="loadReport(1)">下一日 →</button>
-</nav>
-<section id="report-content">
-<p>此处展示每日 Top10 报告内容，对应 markdown 转换的内容。</p>
-</section>
-<section>
-<h2>近10日 Top10 命中率</h2>
-<!-- 这里插入近10日 Top10 命中率的表格 -->
-</section>
-<section>
-<h2>学习状态</h2>
-<p>这里插入 outputs/learning/step7_report_latest.md 的内容。</p>
-</section>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1 id="title">每日 Top10 报告</h1>
+        <div class="sub">GitHub Pages 外部阅读版 · 支持上一日/下一日/日期选择</div>
+      </div>
+      <div class="nav">
+        <button id="btn_prev">← 上一日</button>
+        <button id="btn_next">下一日 →</button>
+      </div>
+    </header>
+
+    <div class="topbar">
+      <div class="datebox">
+        <span>选择日期：</span>
+        <input id="date_picker" type="date" />
+      </div>
+      <div class="hint">提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告</div>
+    </div>
+
+    <div class="card">
+      <h2>今日报告</h2>
+      <div id="report_err" class="err"></div>
+      <div id="report" class="md"></div>
+    </div>
+
+    <div class="card">
+      <h2>近10日 Top10 命中率</h2>
+      <div class="hint">
+        这一块建议后续由脚本生成一份 outputs/hit_rate_10d.md 或 .json 再在这里读取渲染。
+        目前先保留位置（不影响读日报与学习状态）。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>学习状态</h2>
+      <div id="learning_err" class="err"></div>
+      <div id="learning" class="md"></div>
+    </div>
+  </div>
 </body>
 </html>
