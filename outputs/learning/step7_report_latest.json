@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-22 00:51:16",
+  "ts": "2026-02-22 00:55:02",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -12,17 +12,18 @@
   },
   "train_meta": {
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "rows_raw": 917,
-    "rows_used": 833,
+    "rows_raw": 988,
+    "rows_used": 904,
     "rows_dropped_allzero": 29,
-    "dates_total": 13,
-    "dates_used": 13
+    "dates_total": 14,
+    "dates_used": 14
   },
   "sampling_state": {
     "sampling_stage": "S1_MVP",
     "target_rows_per_day": 200,
-    "days_covered": 13,
+    "days_covered": 14,
     "rows_per_day_last_N": [
+      71,
       80,
       84,
       48,
@@ -56,50 +57,51 @@
       "metrics": {
         "StrengthScore": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.9051254089422028,
-          "std": 20.959244750824915,
-          "unique_count": 812
+          "non_zero_rate": 0.9119433198380567,
+          "std": 20.55158463705452,
+          "unique_count": 881
         },
         "ThemeBoost": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.7339149400218102,
-          "std": 0.3771143153545444,
+          "non_zero_rate": 0.7358299595141701,
+          "std": 0.37576596551420216,
           "unique_count": 19
         },
         "turnover_rate": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.9051254089422028,
-          "std": 12.857128392936575,
-          "unique_count": 831
+          "non_zero_rate": 0.9119433198380567,
+          "std": 12.749001608843846,
+          "unique_count": 901
         },
         "seal_amount": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.8647764449291166,
-          "std": 201938729.99015278,
-          "unique_count": 794
+          "non_zero_rate": 0.8734817813765182,
+          "std": 241696973.77753335,
+          "unique_count": 864
         },
         "open_times": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.4351145038167939,
-          "std": 3.2328593120783977,
-          "unique_count": 20
+          "non_zero_rate": 0.4342105263157895,
+          "std": 3.3422113700766056,
+          "unique_count": 22
         },
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.22510515493292776,
-          "unique_count": 865
+          "std": 0.22779804236832502,
+          "unique_count": 936
         }
       },
-      "pseudo_ratio": 0.09487459105779716,
-      "window_days": 13,
-      "rows_in_window": 917,
+      "pseudo_ratio": 0.08805668016194332,
+      "window_days": 14,
+      "rows_in_window": 988,
       "pass": true
     },
     "stage_debug": {
       "prev_stage": "S1_MVP",
-      "days_covered": 13,
+      "days_covered": 14,
       "rows_last": [
+        71,
         80,
         84,
         48,
@@ -115,10 +117,10 @@
         55
       ]
     },
-    "pseudo_ratio": 0.09487459105779716,
+    "pseudo_ratio": 0.08805668016194332,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-21T16:51:16Z",
-    "model_version": "1eafbddd7d9e5112c745d6f4f8d8338d96c36b33"
+    "updated_at_utc": "2026-02-21T16:55:02Z",
+    "model_version": "a613e3b67e6eedc42ae4c685ff2f73818198adae"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
@@ -127,9 +129,9 @@
     "lgbm_saved": true,
     "models_dir": "models",
     "detail": {
-      "train_rows": 833,
-      "pos": 150,
-      "neg": 683,
+      "train_rows": 904,
+      "pos": 172,
+      "neg": 732,
       "lr_path": "models/step5_lr.joblib",
       "lgbm_path": "models/step5_lgbm.joblib",
       "reason": "ok"
