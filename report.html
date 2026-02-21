@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>每日 Top10 报告</title>
+<style>
+body { font-family: sans-serif; margin: 20px; }
+header { text-align:center; margin-bottom:20px; }
+nav { display:flex; justify-content:space-between; margin-bottom:20px; }
+button { padding:8px 12px; }
+table { width:100%; border-collapse: collapse; margin-top:20px; }
+th, td { border:1px solid #ddd; padding:8px; text-align:left; }
+</style>
+<script>
+function formatDate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth()+1).padStart(2,'0');
+  const d = String(date.getDate()).padStart(2,'0');
+  return y + m + d;
+}
+function loadReport(offset) {
+  const today = new Date();
+  today.setDate(today.getDate()+offset);
+  const dateStr = formatDate(today);
+  window.location.href = 'predict_top10_' + dateStr + '.html';
+}
+window.onload = function() {
+  const today = new Date();
+  document.getElementById('title').innerText = '每日 Top10 报告 - ' + formatDate(today);
+};
+</script>
+</head>
+<body>
+<header>
+<h1 id="title">每日 Top10 报告</h1>
+</header>
+<nav>
+<button onclick="loadReport(-1)">← 上一日</button>
+<button onclick="loadReport(1)">下一日 →</button>
+</nav>
+<section id="report-content">
+<p>此处展示每日 Top10 报告内容，对应 markdown 转换的内容。</p>
+</section>
+<section>
+<h2>近10日 Top10 命中率</h2>
+<!-- 这里插入近10日 Top10 命中率的表格 -->
+</section>
+<section>
+<h2>学习状态</h2>
+<p>这里插入 outputs/learning/step7_report_latest.md 的内容。</p>
+</section>
+</body>
+</html>
