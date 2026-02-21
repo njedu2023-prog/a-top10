@@ -1,10 +1,11 @@
 {
   "sampling_stage": "S1_MVP",
   "target_rows_per_day": 200,
-  "days_covered": 15,
+  "days_covered": 16,
   "rows_per_day_last_N": [
     104,
     71,
+    53,
     80,
     84,
     48,
@@ -38,52 +39,53 @@
     "metrics": {
       "StrengthScore": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.9203296703296703,
-        "std": 20.021042324978346,
-        "unique_count": 984
+        "non_zero_rate": 0.9240174672489083,
+        "std": 19.759283878186018,
+        "unique_count": 1035
       },
       "ThemeBoost": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.7234432234432234,
-        "std": 0.37641898941774166,
+        "non_zero_rate": 0.7240174672489083,
+        "std": 0.37536864558958344,
         "unique_count": 19
       },
       "turnover_rate": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.9203296703296703,
-        "std": 12.411047958401076,
-        "unique_count": 1005
+        "non_zero_rate": 0.9240174672489083,
+        "std": 12.378405528767594,
+        "unique_count": 1058
       },
       "seal_amount": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.8855311355311355,
-        "std": 235286362.17615634,
-        "unique_count": 968
+        "non_zero_rate": 0.8908296943231441,
+        "std": 247735051.71998233,
+        "unique_count": 1021
       },
       "open_times": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.43864468864468864,
-        "std": 3.3517624267516,
+        "non_zero_rate": 0.4393013100436681,
+        "std": 3.3666906931690135,
         "unique_count": 24
       },
       "Probability": {
         "non_null_rate": 1.0,
         "non_zero_rate": 1.0,
-        "std": 0.2274066226194334,
-        "unique_count": 1040
+        "std": 0.2299636457221801,
+        "unique_count": 1093
       }
     },
-    "pseudo_ratio": 0.07967032967032966,
-    "window_days": 15,
-    "rows_in_window": 1092,
+    "pseudo_ratio": 0.07598253275109171,
+    "window_days": 16,
+    "rows_in_window": 1145,
     "pass": true
   },
   "stage_debug": {
     "prev_stage": "S1_MVP",
-    "days_covered": 15,
+    "days_covered": 16,
     "rows_last": [
       104,
       71,
+      53,
       80,
       84,
       48,
@@ -99,8 +101,8 @@
       55
     ]
   },
-  "pseudo_ratio": 0.07967032967032966,
+  "pseudo_ratio": 0.07598253275109171,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-02-21T16:57:56Z",
-  "model_version": "8a5295d3270cc67b0271a1b80894445c45abac82"
+  "updated_at_utc": "2026-02-21T17:23:07Z",
+  "model_version": "2ddf46f4c5777c629c29cc62623de1f68d8b5944"
 }
