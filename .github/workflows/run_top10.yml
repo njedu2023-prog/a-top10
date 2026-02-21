@@ -116,7 +116,6 @@ jobs:
               continue
             fi
 
-            # ✅ 关键：python 脚本必须写成“一行”，避免 YAML/缩进被破坏
             ok="0"
             if python -c "import pandas as pd,sys; df=pd.read_csv(sys.argv[1]); must=['open_times','seal_amount']; miss=[c for c in must if c not in df.columns]; assert not miss, f'missing cols {miss}'; all_empty=lambda s: s.isna().all() or (s.astype(str).str.strip()=='').all(); bad=[c for c in must if all_empty(df[c])]; assert not bad, f'cols all-empty {bad}'" "$tmp"; then
               ok="1"
@@ -147,6 +146,7 @@ jobs:
       # Sync ONLY the resolved trade_date directory via sparse checkout
       # ============================================================
       - name: Sync TOP3 snapshot (ONLY trade_date dir)
+        id: sync_top3
         shell: bash
         run: |
           set -euo pipefail
@@ -190,7 +190,26 @@ jobs:
           }
           EOF
 
+          echo "synced_dir=$dest_dir" >> "$GITHUB_OUTPUT"
+          echo "src_sha=$SRC_SHA" >> "$GITHUB_OUTPUT"
+
           echo "[sync] done, source_sha=${SRC_SHA}"
+
+      # ============================================================
+      # Debug: print header/columns for limit_list_d.csv (proof of sync)
+      # ============================================================
+      - name: Debug synced limit_list_d (header + columns)
+        shell: bash
+        run: |
+          set -euo pipefail
+          td="${{ steps.resolve_date.outputs.trade_date }}"
+          y="${td:0:4}"
+          f="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${y}/${td}/limit_list_d.csv"
+          echo "[debug] file=$f"
+          echo "[debug] head:"
+          head -n 2 "$f" || true
+          echo "[debug] columns:"
+          python -c "import pandas as pd; df=pd.read_csv(r'$f'); print(df.columns.tolist()); print('rows=', len(df))"
 
       # ============================================================
       # Quality gate for resolved trade_date (P0 hard gate)
@@ -224,19 +243,21 @@ jobs:
             exit 21
           fi
 
-          # ✅ 同样必须“一行”
           python -c "import pandas as pd,os,sys; snap=sys.argv[1]; df=pd.read_csv(os.path.join(snap,'limit_list_d.csv')); must=['limit_type','up_limit','down_limit','open_times','seal_amount']; miss=[c for c in must if c not in df.columns]; assert not miss, f'missing cols {miss}'; all_empty=lambda s: s.isna().all() or (s.astype(str).str.strip()=='').all(); bad=[c for c in must if all_empty(df[c])]; assert not bad, f'cols all-empty {bad}'" "$snap_dir"
 
           echo "[gate] PASS"
 
-      - name: Debug warehouse (list)
-        shell: bash
-        run: |
-          set -euo pipefail
-          trade_date="${{ steps.resolve_date.outputs.trade_date }}"
-          year="${trade_date:0:4}"
-          echo "====== LIST snapshot dir ======"
-          ls -la "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}" || true
+      # ============================================================
+      # Upload snapshot dir as artifact (so you can compare with TOP3)
+      # ============================================================
+      - name: Upload synced snapshot dir (artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: top3_snapshot_${{ steps.resolve_date.outputs.trade_date }}_${{ github.run_id }}
+          path: ${{ steps.sync_top3.outputs.synced_dir }}
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run Top10 Engine + Step7
         shell: bash
