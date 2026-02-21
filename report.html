@@ -159,13 +159,23 @@
       titleEl.textContent = `A-Share TOP10 - ${niceDate}`;
       document.title = `A-Share TOP10 - ${niceDate}`;
 
-      // 4) 拉取并渲染 markdown
+      // 4) 拉取并渲染 markdown（先删掉 md 第一行标题）
       const path = mdPathFor(useDate);
       reportEl.innerHTML = `<div class="hint">正在加载：${path}</div>`;
 
       try{
         const md = await fetchText(path);
-        reportEl.innerHTML = marked.parse(md);
+
+        // 去掉 md 的第一行标题（例如：# 20260213 预测报告）
+        let md2 = md;
+        const lines = md2.split(/\r?\n/);
+        if (lines.length > 0 && lines[0].trim().startsWith('#')) {
+          lines.shift();
+          while (lines.length > 0 && lines[0].trim() === '') lines.shift();
+          md2 = lines.join('\n');
+        }
+
+        reportEl.innerHTML = marked.parse(md2);
       }catch(e){
         reportEl.innerHTML = "";
         errEl.textContent = `读取日报失败：${e.message}`;
@@ -257,11 +267,9 @@
     </div>
 
     <div class="card">
-      <h2>今日报告</h2>
       <div id="report_err" class="err"></div>
       <div id="report" class="md"></div>
     </div>
-
 
     <div class="card">
       <h2>学习状态</h2>
