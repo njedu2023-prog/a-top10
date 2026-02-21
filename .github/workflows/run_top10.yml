@@ -74,7 +74,7 @@ jobs:
           pip install -U lightgbm
 
       # ============================================================
-      # Resolve trade_date (P0 gate moved here: open_times & seal_amount required)
+      # Resolve trade_date (P0 gate: open_times & seal_amount required)
       # - manual: respect user input
       # - auto: find latest date that passes P0 gate
       # ============================================================
@@ -91,7 +91,7 @@ jobs:
             exit 0
           fi
 
-          echo "Auto resolve latest snapshot trade_date (P0 gate: open_times & seal_amount required)"
+          echo "Auto resolve latest snapshot trade_date (P0: open_times & seal_amount required)"
           today="$(date +%Y%m%d)"
           base="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}"
 
@@ -116,16 +116,9 @@ jobs:
               continue
             fi
 
+            # ✅ 关键：python 脚本必须写成“一行”，避免 YAML/缩进被破坏
             ok="0"
-            if python -c "import pandas as pd,sys
-df=pd.read_csv(sys.argv[1])
-must=['open_times','seal_amount']
-miss=[c for c in must if c not in df.columns]
-assert not miss, f'missing cols {miss}'
-def all_empty(s):
-  return s.isna().all() or (s.astype(str).str.strip()=='').all()
-bad=[c for c in must if all_empty(df[c])]
-assert not bad, f'cols all-empty {bad}'" "$tmp"; then
+            if python -c "import pandas as pd,sys; df=pd.read_csv(sys.argv[1]); must=['open_times','seal_amount']; miss=[c for c in must if c not in df.columns]; assert not miss, f'missing cols {miss}'; all_empty=lambda s: s.isna().all() or (s.astype(str).str.strip()=='').all(); bad=[c for c in must if all_empty(df[c])]; assert not bad, f'cols all-empty {bad}'" "$tmp"; then
               ok="1"
             else
               ok="0"
@@ -231,16 +224,8 @@ assert not bad, f'cols all-empty {bad}'" "$tmp"; then
             exit 21
           fi
 
-          python -c "import pandas as pd,os,sys
-snap=sys.argv[1]
-df=pd.read_csv(os.path.join(snap,'limit_list_d.csv'))
-must=['limit_type','up_limit','down_limit','open_times','seal_amount']
-miss=[c for c in must if c not in df.columns]
-assert not miss, f'missing cols {miss}'
-def all_empty(s):
-  return s.isna().all() or (s.astype(str).str.strip()=='').all()
-bad=[c for c in must if all_empty(df[c])]
-assert not bad, f'cols all-empty {bad}'" "$snap_dir"
+          # ✅ 同样必须“一行”
+          python -c "import pandas as pd,os,sys; snap=sys.argv[1]; df=pd.read_csv(os.path.join(snap,'limit_list_d.csv')); must=['limit_type','up_limit','down_limit','open_times','seal_amount']; miss=[c for c in must if c not in df.columns]; assert not miss, f'missing cols {miss}'; all_empty=lambda s: s.isna().all() or (s.astype(str).str.strip()=='').all(); bad=[c for c in must if all_empty(df[c])]; assert not bad, f'cols all-empty {bad}'" "$snap_dir"
 
           echo "[gate] PASS"
 
@@ -248,10 +233,8 @@ assert not bad, f'cols all-empty {bad}'" "$snap_dir"
         shell: bash
         run: |
           set -euo pipefail
-
           trade_date="${{ steps.resolve_date.outputs.trade_date }}"
           year="${trade_date:0:4}"
-
           echo "====== LIST snapshot dir ======"
           ls -la "${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}" || true
 
