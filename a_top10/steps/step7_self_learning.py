@@ -12,8 +12,9 @@ Step7：自学习闭环更新模型权重（命中率滚动提升）
   -> 不读 warehouse / 不拉 github raw / 不 forward 扫未来
   -> 彻底消灭 github_raw_try + 404 噪音
 
-✅ 新增修复：
-- 统计 TopN 命中数时先对预测股票列表按去掉后缀去重，避免重复股票被多次计数。
+✅ 本次新增修复（你指出的命中6/7不一致）：
+- Step7 命中统计对 TopN 预测 codes 先按“去后缀代码”去重，再计算 hit。
+  避免同一股票重复出现导致 hit 被重复计数。
 """
 
 from __future__ import annotations
@@ -125,6 +126,25 @@ def _to_nosuffix(ts: str) -> str:
     if not ts:
         return ts
     return ts.split(".")[0]
+
+
+def _dedupe_codes_by_nosuffix(codes: List[str]) -> List[str]:
+    """
+    ✅ 新增：按去掉后缀后的“基础代码”去重，保持原顺序
+    用于命中统计口径统一（避免重复股票导致 hit 多算）
+    """
+    out: List[str] = []
+    seen: set[str] = set()
+    for c in (codes or []):
+        c = str(c).strip()
+        if not c:
+            continue
+        key = _to_nosuffix(c)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
 
 
 def _trade_date_from_output_path(p: Path) -> Optional[str]:
@@ -296,7 +316,6 @@ def _resolve_next_trade_date_by_snapshot(
     if pd.isna(d0):
         return "", "bad_expected_next_d"
 
-    # 上界最多扫到 upper_bound（避免扫到仓库不存在的日期）
     d_ub = pd.to_datetime(upper_bound, format="%Y%m%d", errors="coerce")
     max_days_until_ub = int((d_ub - d0).days) if (not pd.isna(d_ub)) else int(max_forward_days)
     max_i = min(int(max_forward_days), max(0, max_days_until_ub))
@@ -304,7 +323,6 @@ def _resolve_next_trade_date_by_snapshot(
     for i in range(0, int(max_i) + 1):
         di = (d0 + pd.Timedelta(days=i)).strftime("%Y%m%d")
 
-        # 1) warehouse
         try:
             dfw = s.data_repo.read_limit_list(di)  # type: ignore[attr-defined]
             if dfw is not None and not dfw.empty:
@@ -314,7 +332,6 @@ def _resolve_next_trade_date_by_snapshot(
         except Exception:
             pass
 
-        # 2) github raw
         dfr = _read_limit_list_from_github_raw(di, warnings)
         if dfr is not None and not dfr.empty:
             if i > 0:
@@ -416,7 +433,7 @@ def _build_train_set_from_feature_history(
     for c in feats:
         dfx[c] = pd.to_numeric(dfx[c], errors="coerce").fillna(0.0)
 
-    allzero = (dfx[feats].abs().sum(axis-1) <= 0.0)
+    allzero = (dfx[feats].abs().sum(axis=1) <= 0.0)
     meta["rows_dropped_allzero"] = int(allzero.sum())
     dfx = dfx[~allzero].copy()
     if dfx.empty:
@@ -817,6 +834,9 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 
         codes = _parse_topn_codes(md_path, topn=topn)
 
+        # ✅ 新增：命中统计口径去重（按去后缀代码）
+        codes = _dedupe_codes_by_nosuffix(codes)
+
         if (not expected_nd) or (not codes):
             hit_rows.append({
                 "trade_date": trade_date,
@@ -829,7 +849,6 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             })
             continue
 
-        # ✅ 上界闸门：超过 upper_bound 就直接 pending（不读取、不 404）
         if str(expected_nd) > str(upper_bound):
             hit_rows.append({
                 "trade_date": trade_date,
@@ -855,29 +874,17 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             })
             continue
 
-        # ✅ 改动点：对预测 codes 去重（按去掉后缀的股票代码）再计算命中
-        seen_codes = set()
-        unique_codes: List[str] = []
-        for c in codes:
-            base = _to_nosuffix(c)
-            if base not in seen_codes:
-                seen_codes.add(base)
-                unique_codes.append(c)
-
         lim_set = _limit_codes_from_df(lim_df)
         hit = 0
-        for c in unique_codes:
+        for c in codes:
             if (c in lim_set) or (_to_nosuffix(c) in lim_set):
                 hit += 1
-
-        # 用去重后的 unique_codes 长度作为分母
-        total = len(unique_codes) if unique_codes else len(codes)
-        hit_rate = hit / max(1, total)
+        hit_rate = hit / max(1, len(codes))
         hit_rows.append({
             "trade_date": trade_date,
             "expected_next_trade_date": expected_nd,
             "actual_next_trade_date": actual_nd,
-            "topn": total,  # ✅ 改为去重后的 topn 数量
+            "topn": len(codes),
             "hit": hit,
             "hit_rate": round(hit_rate, 4),
             "note": "",
