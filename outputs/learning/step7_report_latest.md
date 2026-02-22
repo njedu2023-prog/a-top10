@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-02-23 06:27:56
+- 生成时间：2026-02-23 06:45:15
 - Today：20260223
 - LatestSnapshot：20260213
 - LabelUpperBound：20260213
@@ -9,11 +9,18 @@
 
 ## 1) 最新命中
 
-- 暂无可验证命中（对照日快照尚未产生/同步，或尚未形成有效对照）
+- trade_date：20260211
+- expected_next_trade_date：20260212
+- actual_next_trade_date：20260212
+- hit/topn：7/10
+- hit_rate：0.7
+- note：src=pred_top10_history
 
 ## 1.1) 近10日 Top10 命中率（done-only）
 
-- 暂无近10日可统计数据（可能全部为 pending，或尚未形成有效对照）
+| trade_date | actual_next_trade_date | topn | hit | hit_rate |
+| --- | --- | --- | --- | --- |
+| 20260211 | 20260212 | 10 | 7 | 0.7 |
 
 ## 2) 训练数据概况
 
