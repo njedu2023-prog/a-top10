@@ -15,6 +15,12 @@ Step6: Final Selector (TopN + Full Ranking) — Quant/Production Edition (Enhanc
 【本次新增：目标B-1（只改Step6）】
 - 将 Step1 的 regime_weight（市场状态因子）作为 FinalScore 的最终校准因子
 - 不改变原有主链结构/输出字段，只在 meta 里增加 regime 信息，便于追踪
+
+【本次新增：结构化“预测表”落库（解决 Step7 扫 MD 不一致的根因）】
+- 每次 Step6 产出 TopN 后，将 Top10 结构化落库：
+  1) outputs/learning/pred_top10_{trade_date}.csv
+  2) outputs/learning/pred_top10_history.csv（按 trade_date 覆盖 upsert）
+- 该落库不影响主返回结构，不影响排序/训练，只提供稳定审计数据源
 """
 
 from __future__ import annotations
@@ -203,6 +209,104 @@ def _detect_trade_date(df: pd.DataFrame, s: Any) -> Optional[str]:
         if len(vals) > 0:
             return vals.value_counts().index[0]
     return None
+
+
+def _detect_target_trade_date(src: Optional[Mapping[str, Any]], s: Any) -> str:
+    """
+    Step6 本身未必知道“下一交易日”，这里做 best-effort：
+    1) src mapping 常见 key
+    2) settings(s) 常见字段
+    取不到则返回空字符串（不影响主流程）
+    """
+    # 1) ctx/src
+    if src:
+        for k in (
+            "target_trade_date", "TARGET_TRADE_DATE",
+            "next_trade_date", "NEXT_TRADE_DATE",
+            "expected_next_trade_date", "EXPECTED_NEXT_TRADE_DATE",
+            "label_trade_date", "LABEL_TRADE_DATE",
+        ):
+            if k in src:
+                v = src.get(k)
+                if v is not None:
+                    vv = str(v).strip()
+                    if vv:
+                        return vv
+            lk = str(k).lower()
+            if lk in src:
+                v = src.get(lk)
+                if v is not None:
+                    vv = str(v).strip()
+                    if vv:
+                        return vv
+
+    # 2) settings
+    v2 = _get_setting(s, [
+        "target_trade_date", "TARGET_TRADE_DATE",
+        "next_trade_date", "NEXT_TRADE_DATE",
+        "expected_next_trade_date", "EXPECTED_NEXT_TRADE_DATE",
+    ], "")
+    v2 = "" if v2 is None else str(v2).strip()
+    return v2
+
+
+def _ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def _safe_write_csv(df: pd.DataFrame, path: Path, warnings: List[str]) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(path, index=False, encoding="utf-8-sig")
+        return True
+    except Exception as e:
+        warnings.append(f"pred_table_write_failed: {path} ({e})")
+        return False
+
+
+def _upsert_pred_history(history_path: Path, pred_df: pd.DataFrame, trade_date: str, warnings: List[str]) -> bool:
+    """
+    按 trade_date 覆盖 upsert：
+    - 删除 history 中同 trade_date 的旧记录
+    - 追加本次 pred_df
+    """
+    try:
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if history_path.exists() and history_path.stat().st_size > 0:
+            try:
+                hist = pd.read_csv(history_path, dtype=str, encoding="utf-8-sig")
+            except Exception:
+                hist = pd.read_csv(history_path, dtype=str, encoding="utf-8")
+        else:
+            hist = pd.DataFrame()
+
+        # 统一列集合（避免后续演进时列对不上）
+        if hist is None or hist.empty:
+            out = pred_df.copy()
+        else:
+            if "trade_date" not in hist.columns:
+                hist["trade_date"] = ""
+            hist["trade_date"] = hist["trade_date"].astype(str).str.strip()
+
+            # 删掉同 trade_date
+            hist2 = hist[hist["trade_date"] != str(trade_date)].copy()
+
+            # 对齐列
+            all_cols = list(dict.fromkeys(list(hist2.columns) + list(pred_df.columns)))
+            for c in all_cols:
+                if c not in hist2.columns:
+                    hist2[c] = ""
+                if c not in pred_df.columns:
+                    pred_df[c] = ""
+
+            out = pd.concat([hist2[all_cols], pred_df[all_cols]], ignore_index=True)
+
+        out.to_csv(history_path, index=False, encoding="utf-8-sig")
+        return True
+    except Exception as e:
+        warnings.append(f"pred_history_upsert_failed: {history_path} ({e})")
+        return False
 
 
 def _find_limit_up_df(src: Optional[Mapping[str, Any]]) -> Optional[pd.DataFrame]:
@@ -678,7 +782,6 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     # -------- 2.5) Enrich strength from Step3 outputs if missing/mostly zero --------
     enrich_meta: Dict[str, Any] = {"attempted": False, "used": False}
 
-    # 将 cfg 映射到 dict settings（确保 cfg 生效）
     if s is None:
         s2 = {
             "enrich_strength_force": cfg.enrich_strength_force,
@@ -896,6 +999,45 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "emotion_factor": top_df_raw["_emotion_factor"].round(6),
     })
 
+    # -------- 11.5) NEW: Persist prediction table (Top10) --------
+    pred_meta: Dict[str, Any] = {"written": False, "daily_path": "", "history_path": "", "trade_date": "", "target_trade_date": ""}
+    try:
+        trade_date = _detect_trade_date(full_sorted, s) or ""
+        target_trade_date = _detect_target_trade_date(src_mapping, s) or ""
+
+        if trade_date:
+            outputs_dir = Path(str(cfg.outputs_dir or "outputs"))
+            learning_dir = outputs_dir / "learning"
+            _ensure_dir(learning_dir)
+
+            daily_path = learning_dir / f"pred_top10_{trade_date}.csv"
+            history_path = learning_dir / "pred_top10_history.csv"
+
+            pred_df = top_df.copy()
+            pred_df.insert(0, "trade_date", trade_date)
+            pred_df.insert(1, "target_trade_date", target_trade_date)
+
+            # 兼容字段命名（Probability/板块/题材等）
+            pred_df.rename(columns={"prob": "Probability"}, inplace=True)
+
+            ok_daily = _safe_write_csv(pred_df, daily_path, warnings)
+            ok_hist = _upsert_pred_history(history_path, pred_df.copy(), trade_date, warnings)
+
+            pred_meta.update({
+                "written": bool(ok_daily and ok_hist),
+                "daily_path": str(daily_path),
+                "history_path": str(history_path),
+                "trade_date": trade_date,
+                "target_trade_date": target_trade_date,
+            })
+
+            if ok_daily and ok_hist:
+                warnings.append(f"pred_table_written: {daily_path} (+history upsert)")
+        else:
+            warnings.append("pred_table_skip: cannot detect trade_date; skip writing pred_top10_*.csv")
+    except Exception as e:
+        warnings.append(f"pred_table_exception: {e}")
+
     # -------- 12) NEW: Build limit_up_table for report --------
     limit_up_table = pd.DataFrame()
     try:
@@ -980,9 +1122,12 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
             "state": regime_info.get("state", None),
             "source": regime_info.get("used", "default"),
         },
+
+        # ✅ 新增：预测表落库元信息（不影响外部结构）
+        "pred_table": pred_meta,
     }
 
-    # ✅ 主返回结构不变，只新增 limit_up_table
+    # ✅ 主返回结构不变，只新增 limit_up_table（以及 meta 里 pred_table）
     return {
         "topN": top_df,
         "topn": top_df,
@@ -998,4 +1143,4 @@ def run(df: Any, s=None) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    print("Step6 FinalTopN Quant/Production Edition (Enhanced + Strength Enrich + limit_up_table + regime calib) ready.")
+    print("Step6 FinalTopN Quant/Production Edition (Enhanced + Strength Enrich + limit_up_table + regime calib + pred_table persist) ready.")
