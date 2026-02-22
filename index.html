@@ -20,7 +20,6 @@
     .wrap{max-width: 980px; margin: 0 auto; padding: 24px 16px 60px;}
     header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px;}
     h1{font-size:16px; margin:0; letter-spacing:.5px;}
-    .sub{color:var(--muted); font-size:14px; margin-top:6px;}
     .nav{display:flex; gap:10px; align-items:center;}
     button{
       border:1px solid var(--line);
@@ -55,11 +54,38 @@
       border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:14px;
       background:#fff;
     }
+
+    /* ✅ 新增：学习区 KPI + 表格 */
+    .kpi{
+      display:flex; align-items:center; justify-content:space-between;
+      gap:10px; flex-wrap:wrap;
+      padding:10px 12px;
+      border:1px solid var(--line);
+      border-radius:12px;
+      background:#fff;
+      margin: 8px 0 12px;
+    }
+    .kpi strong{font-size:14px;}
+    .kpi span{color:var(--muted); font-size:13px;}
+    .tbl-wrap{overflow:auto;}
+    table.simple{
+      border-collapse: collapse; width:100%;
+      background:#fff; border:1px solid var(--line);
+      border-radius: 12px; overflow:hidden;
+    }
+    table.simple th, table.simple td{
+      border-bottom:1px solid var(--line);
+      padding:10px 12px; font-size:14px; white-space:nowrap;
+      text-align:left;
+    }
+    table.simple th{background: var(--card); font-weight:600;}
+    table.simple tr:last-child td{border-bottom:none;}
   </style>
 
   <script>
     // =============== 基础工具 ===============
     const LOOKBACK_DAYS = 60; // 没有日报时，最多向前回退多少天去找“最近可用日报”
+    const STEP7_JSON_LATEST = "outputs/learning/step7_report_latest.json";
 
     function yyyymmdd(date){
       const y = date.getFullYear();
@@ -111,6 +137,11 @@
       if(!res.ok) throw new Error(`${res.status} -> ${path}`);
       return await res.text();
     }
+    async function fetchJson(path){
+      const res = await fetch(path, { cache: "no-store" });
+      if(!res.ok) throw new Error(`${res.status} -> ${path}`);
+      return await res.json();
+    }
 
     // =============== 核心：找“最近存在的日报” ===============
     async function findNearestExistingReportDate(startDate){
@@ -124,7 +155,7 @@
       return null;
     }
 
-    // =============== 加载日报 ===============
+    // =============== 加载日报（返回 useDate 作为全站基准日） ===============
     async function loadDailyReport(targetDate){
       const titleEl = document.getElementById('title');
       const reportEl = document.getElementById('report');
@@ -135,7 +166,6 @@
       errEl.textContent = "";
       reportEl.innerHTML = `<div class="hint">正在定位可用日报（最多回退 ${LOOKBACK_DAYS} 天）...</div>`;
 
-      // 1) 找最近存在的日报日期
       const useDate = await findNearestExistingReportDate(targetDate);
       if(!useDate){
         titleEl.textContent = `A-Share TOP10`;
@@ -143,10 +173,9 @@
         errEl.textContent =
           `在 ${yyyymmdd(targetDate)} 往前 ${LOOKBACK_DAYS} 天内，都没有找到 outputs/predict_top10_YYYYMMDD.md。\n` +
           `请确认日报文件已提交到仓库 outputs/ 目录，并能通过 Pages 访问。`;
-        return;
+        return null;
       }
 
-      // 2) 更新日期选择器/提示（如果发生回退，给用户明确提示）
       picker.value = toDateInputValue(useDate);
       const targetStr = yyyymmdd(targetDate);
       const useStr = yyyymmdd(useDate);
@@ -154,19 +183,17 @@
         ? `提示：你选择的 ${targetStr} 无日报，已自动回退到最近可用日报 ${useStr}`
         : `提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告`;
 
-      // 3) 标题强制使用统一格式（动态日期）
       const niceDate = yyyy_mm_dd(useDate);
       titleEl.textContent = `A-Share TOP10 - ${niceDate}`;
       document.title = `A-Share TOP10 - ${niceDate}`;
 
-      // 4) 拉取并渲染 markdown（先删掉 md 第一行标题）
       const path = mdPathFor(useDate);
       reportEl.innerHTML = `<div class="hint">正在加载：${path}</div>`;
 
       try{
         const md = await fetchText(path);
 
-        // 去掉 md 的第一行标题（例如：# 20260213 预测报告）
+        // 去掉 md 第一行标题
         let md2 = md;
         const lines = md2.split(/\r?\n/);
         if (lines.length > 0 && lines[0].trim().startsWith('#')) {
@@ -174,29 +201,117 @@
           while (lines.length > 0 && lines[0].trim() === '') lines.shift();
           md2 = lines.join('\n');
         }
-
         reportEl.innerHTML = marked.parse(md2);
       }catch(e){
         reportEl.innerHTML = "";
         errEl.textContent = `读取日报失败：${e.message}`;
       }
+
+      return useDate;
     }
 
-    // =============== 加载学习状态 ===============
-    async function loadLearningStatus(){
-      const mdPath = `outputs/learning/step7_report_latest.md`;
-      const box = document.getElementById('learning');
+    // =============== 近10日命中率（只依赖 step7_report_latest.json） ===============
+    function pickRecent10Array(obj){
+      if(!obj || typeof obj !== 'object') return null;
+
+      const keys = [
+        "recent_10", "recent10", "last_10", "last10",
+        "last_10_days", "recent_10_days",
+        "hit_rate_last10", "hit_rate_10d", "top10_last10",
+        "recent_hits", "recent_summary"
+      ];
+      for(const k of keys){
+        if(Array.isArray(obj[k])) return obj[k];
+      }
+      for(const k of Object.keys(obj)){
+        if(Array.isArray(obj[k]) && obj[k].length >= 3) return obj[k];
+      }
+      return null;
+    }
+
+    function normalizeRow(r){
+      const date = r.date || r.trade_date || r.d || r.day || r.D || r.TRADE_DATE;
+      const hit  = r.hit || r.hits || r.hit_count || r.hit_num || r.correct || r.correct_count || r.top10_hit || r.HIT;
+      const rate = r.hit_rate || r.rate || r.accuracy || r.hit_ratio || r.HIT_RATE;
+      const total = r.limit_up_total || r.limit_up_count || r.total_limit_up || r.total || r.market_limit_up || r.LIMIT_UP_TOTAL;
+      return { date, hit, rate, total };
+    }
+
+    function formatRate(x){
+      if(x === null || x === undefined || x === "") return "";
+      const n = Number(x);
+      if(Number.isFinite(n)){
+        if(n <= 1) return `${Math.round(n*100)}%`;
+        if(n <= 100) return `${Math.round(n)}%`;
+      }
+      return String(x);
+    }
+
+    function renderHit10Table(rows){
+      const box = document.getElementById('hit10');
+      const title = document.getElementById('hit10_title');
+
+      if(!rows || rows.length === 0){
+        title.textContent = "近10日 Top10 命中率";
+        box.innerHTML = `<div class="hint">JSON 已加载，但未识别到“近10日列表”字段（请检查 step7_report_latest.json 结构）</div>`;
+        return;
+      }
+
+      // ✅ 强制显示 10 条交易日
+      const top10 = rows.slice(0, 10);
+
+      title.textContent = "近10日 Top10 命中率（固定取 latest.json 的最近10条交易日）";
+
+      const html = [];
+      html.push(`<div class="tbl-wrap"><table class="simple">`);
+      html.push(`<thead><tr>
+        <th>日期</th><th>命中数</th><th>命中率</th><th>当日涨停家数</th>
+      </tr></thead><tbody>`);
+
+      for(const r0 of top10){
+        const r = normalizeRow(r0);
+        html.push(`<tr>
+          <td>${r.date ?? ""}</td>
+          <td>${r.hit ?? ""}</td>
+          <td>${formatRate(r.rate)}</td>
+          <td>${r.total ?? ""}</td>
+        </tr>`);
+      }
+
+      html.push(`</tbody></table></div>`);
+      box.innerHTML = html.join("");
+    }
+
+    // =============== 学习区：统一“基准日”展示 + 近10日表格 ===============
+    async function loadLearningStatus(useDate){
+      const kpi = document.getElementById('learning_kpi');
       const err = document.getElementById('learning_err');
+      const mdBox = document.getElementById('learning_md');
 
       err.textContent = "";
-      box.innerHTML = `<div class="hint">正在加载：${mdPath}</div>`;
+      mdBox.innerHTML = "";
+      kpi.innerHTML = `<strong>基准日：${useDate ? yyyy_mm_dd(useDate) : "-"}</strong>
+                       <span>说明：learning 目前只有 step7_report_latest.json，所以近10日表为“最新近10日”，不随历史回看回溯</span>`;
 
+      // 1) 渲染近10日表
+      try{
+        const obj = await fetchJson(STEP7_JSON_LATEST);
+        const arr = pickRecent10Array(obj);
+        renderHit10Table(arr);
+      }catch(e){
+        document.getElementById('hit10').innerHTML = "";
+        err.textContent = `未能读取 ${STEP7_JSON_LATEST}：${e.message}`;
+      }
+
+      // 2) （可选）如果你还想保留 md learning 文本，就继续读 latest.md
+      //    你说目前只剩 json 也行，但仓库里其实有 step7_report_latest.md，我这里保留兼容。
+      const mdPath = `outputs/learning/step7_report_latest.md`;
       try{
         const md = await fetchText(mdPath);
-        box.innerHTML = marked.parse(md);
-      }catch(e){
-        box.innerHTML = "";
-        err.textContent = `未能读取学习状态：${e.message}\n请确认 ${mdPath} 在仓库存在且 Pages 可访问。`;
+        mdBox.innerHTML = marked.parse(md);
+      }catch(_){
+        // 不强制，没 md 也不报错
+        mdBox.innerHTML = "";
       }
     }
 
@@ -240,8 +355,11 @@
       const date = getQueryDate();
       bindNav(date);
 
-      await loadDailyReport(date);
-      await loadLearningStatus();
+      // ✅ 关键：先加载日报，拿到 useDate，作为“全局基准日”
+      const useDate = await loadDailyReport(date);
+
+      // ✅ 学习区使用同一个 useDate（统一日期呈现，不再固定）
+      await loadLearningStatus(useDate || date);
     };
   </script>
 </head>
@@ -273,8 +391,18 @@
 
     <div class="card">
       <h2>学习状态</h2>
+
+      <!-- ✅ 统一日期：基准日永远跟随日报 useDate -->
+      <div id="learning_kpi" class="kpi"></div>
+
       <div id="learning_err" class="err"></div>
-      <div id="learning" class="md"></div>
+
+      <!-- ✅ 近10日表：固定渲染 10 条 -->
+      <h3 id="hit10_title" style="margin:12px 0 8px; font-size:15px;">近10日 Top10 命中率</h3>
+      <div id="hit10"></div>
+
+      <!-- ✅ （可选）learning 文本 -->
+      <div id="learning_md" class="md" style="margin-top:12px;"></div>
     </div>
   </div>
 </body>
