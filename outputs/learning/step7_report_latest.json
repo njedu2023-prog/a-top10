@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-23 07:35:25",
+  "ts": "2026-02-23 07:37:47",
   "topn": 10,
   "lookback_days": 150,
   "today_yyyymmdd": "20260223",
@@ -15,6 +15,15 @@
     "note": "src=pred_top10_history"
   },
   "hit_rows_all": [
+    {
+      "trade_date": "20260202",
+      "expected_next_trade_date": "20260203",
+      "actual_next_trade_date": "20260203",
+      "topn": 10,
+      "hit": 6,
+      "hit_rate": 0.6,
+      "note": "src=pred_top10_history"
+    },
     {
       "trade_date": "20260203",
       "expected_next_trade_date": "20260204",
@@ -98,6 +107,13 @@
     }
   ],
   "hit_rows_done_last10": [
+    {
+      "trade_date": "20260202",
+      "actual_next_trade_date": "20260203",
+      "topn": 10,
+      "hit": 6,
+      "hit_rate": "0.6"
+    },
     {
       "trade_date": "20260203",
       "actual_next_trade_date": "20260204",
@@ -235,7 +251,7 @@
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.22468919273770943,
+          "std": 0.22373962100331093,
           "unique_count": 1094
         }
       },
@@ -268,8 +284,8 @@
     },
     "pseudo_ratio": 0.07598253275109171,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-22T23:35:25Z",
-    "model_version": "7abb2920a934c46407a42b9dd0f5f057a9f52a1f",
+    "updated_at_utc": "2026-02-22T23:37:47Z",
+    "model_version": "3879c23b5a6736e8aa75ddea82eee3596dc20d9b",
     "today_yyyymmdd": "20260223",
     "latest_snapshot_yyyymmdd": "20260213",
     "label_upper_bound_yyyymmdd": "20260213"
