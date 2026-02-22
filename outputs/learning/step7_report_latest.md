@@ -1,6 +1,7 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-02-22 23:57:53
+- 生成时间：2026-02-23 01:36:03
+- Today：20260223
 - TopN：10
 - Lookback：150 天
 
@@ -59,20 +60,4 @@
 - github_raw read limit_list_d failed: HTTP Error 404: Not Found
 - github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260223/limit_list_d.csv
 - github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260224/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260225/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260226/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260227/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260228/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260301/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260302/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260303/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- next_trade_date_unresolved: expected=20260216 max_forward_days=15
+- next_trade_date_unresolved: expected=20260216 max_forward_days=15 upper_bound=20260223
