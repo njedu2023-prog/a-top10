@@ -1,16 +1,16 @@
 # Step3 Debug Report
 
-- trade_date: `20260210`
-- rows: 60
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260210`
+- trade_date: `20260209`
+- rows: 86
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260209`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5470
-- daily_basic.csv: 5470
-- top_list.csv: 70
+- daily.csv: 5465
+- daily_basic.csv: 5465
+- top_list.csv: 66
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 60
+- limit_list_d.csv: 86
 - limit_break_d.csv: 0
 
 ## Missing rate
@@ -27,19 +27,19 @@
 ## Nonzero rate (关键验收)
 - StrengthScore: 1.0000
 - turnover_rate: 1.0000
-- seal_amount: 1.0000
-- open_times: 0.4167
+- seal_amount: 0.9651
+- open_times: 0.4651
 
 ```json
 {
-  "trade_date": "20260210",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260210",
+  "trade_date": "20260209",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260209",
   "files": {
-    "daily.csv": 5470,
-    "daily_basic.csv": 5470,
-    "top_list.csv": 70,
+    "daily.csv": 5465,
+    "daily_basic.csv": 5465,
+    "top_list.csv": 66,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 60,
+    "limit_list_d.csv": 86,
     "limit_break_d.csv": 0
   },
   "missing_rate": {
@@ -56,8 +56,8 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "turnover_rate": 1.0,
-    "seal_amount": 1.0,
-    "open_times": 0.4166666666666667
+    "seal_amount": 0.9651162790697675,
+    "open_times": 0.46511627906976744
   }
 }
 ```
