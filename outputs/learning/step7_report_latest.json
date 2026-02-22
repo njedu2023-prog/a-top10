@@ -1,237 +1,23 @@
 {
-  "ts": "2026-02-23 05:15:34",
+  "ts": "2026-02-23 06:27:56",
   "topn": 10,
   "lookback_days": 150,
   "today_yyyymmdd": "20260223",
   "latest_snapshot_yyyymmdd": "20260213",
   "label_upper_bound_yyyymmdd": "20260213",
-  "latest_hit": {
-    "trade_date": "20260212",
-    "expected_next_trade_date": "20260213",
-    "actual_next_trade_date": "20260213",
-    "topn": 10,
-    "hit": 3,
-    "hit_rate": 0.3,
-    "note": ""
-  },
+  "latest_hit": null,
   "hit_rows_all": [
     {
-      "trade_date": "20260123",
-      "expected_next_trade_date": "20260126",
-      "actual_next_trade_date": "20260126",
-      "topn": 10,
-      "hit": 1,
-      "hit_rate": 0.1,
-      "note": ""
-    },
-    {
-      "trade_date": "20260126",
-      "expected_next_trade_date": "20260128",
-      "actual_next_trade_date": "20260128",
-      "topn": 10,
-      "hit": 4,
-      "hit_rate": 0.4,
-      "note": ""
-    },
-    {
-      "trade_date": "20260127",
-      "expected_next_trade_date": "20260128",
-      "actual_next_trade_date": "20260128",
-      "topn": 10,
-      "hit": 1,
-      "hit_rate": 0.1,
-      "note": ""
-    },
-    {
-      "trade_date": "20260128",
-      "expected_next_trade_date": "20260129",
-      "actual_next_trade_date": "20260129",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": 0.3,
-      "note": ""
-    },
-    {
-      "trade_date": "20260129",
-      "expected_next_trade_date": "20260130",
-      "actual_next_trade_date": "20260130",
-      "topn": 10,
-      "hit": 1,
-      "hit_rate": 0.1,
-      "note": ""
-    },
-    {
-      "trade_date": "20260130",
-      "expected_next_trade_date": "20260202",
-      "actual_next_trade_date": "20260202",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": 0.3,
-      "note": ""
-    },
-    {
-      "trade_date": "20260202",
-      "expected_next_trade_date": "20260203",
-      "actual_next_trade_date": "20260203",
-      "topn": 10,
-      "hit": 6,
-      "hit_rate": 0.6,
-      "note": ""
-    },
-    {
-      "trade_date": "20260203",
-      "expected_next_trade_date": "20260204",
-      "actual_next_trade_date": "20260204",
-      "topn": 10,
-      "hit": 5,
-      "hit_rate": 0.5,
-      "note": ""
-    },
-    {
-      "trade_date": "20260204",
-      "expected_next_trade_date": "20260205",
-      "actual_next_trade_date": "20260205",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": 0.3,
-      "note": ""
-    },
-    {
-      "trade_date": "20260205",
-      "expected_next_trade_date": "20260206",
-      "actual_next_trade_date": "20260206",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": 0.3,
-      "note": ""
-    },
-    {
-      "trade_date": "20260206",
-      "expected_next_trade_date": "20260209",
-      "actual_next_trade_date": "20260209",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": 0.3,
-      "note": ""
-    },
-    {
-      "trade_date": "20260209",
-      "expected_next_trade_date": "20260210",
-      "actual_next_trade_date": "20260210",
-      "topn": 10,
-      "hit": 5,
-      "hit_rate": 0.5,
-      "note": ""
-    },
-    {
-      "trade_date": "20260210",
-      "expected_next_trade_date": "20260211",
-      "actual_next_trade_date": "20260211",
-      "topn": 10,
-      "hit": 4,
-      "hit_rate": 0.4,
-      "note": ""
-    },
-    {
-      "trade_date": "20260211",
-      "expected_next_trade_date": "20260212",
-      "actual_next_trade_date": "20260212",
-      "topn": 10,
-      "hit": 7,
-      "hit_rate": 0.7,
-      "note": ""
-    },
-    {
-      "trade_date": "20260212",
-      "expected_next_trade_date": "20260213",
-      "actual_next_trade_date": "20260213",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": 0.3,
-      "note": ""
-    },
-    {
       "trade_date": "20260213",
-      "expected_next_trade_date": "20260216",
+      "expected_next_trade_date": "",
       "actual_next_trade_date": "",
       "topn": 10,
       "hit": "",
       "hit_rate": "",
-      "note": "pending_label: expected_next_trade_date_not_available (upper_bound=20260213)"
+      "note": "pending_label: no next snapshot available yet"
     }
   ],
-  "hit_rows_done_last10": [
-    {
-      "trade_date": "20260130",
-      "actual_next_trade_date": "20260202",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": "0.3"
-    },
-    {
-      "trade_date": "20260202",
-      "actual_next_trade_date": "20260203",
-      "topn": 10,
-      "hit": 6,
-      "hit_rate": "0.6"
-    },
-    {
-      "trade_date": "20260203",
-      "actual_next_trade_date": "20260204",
-      "topn": 10,
-      "hit": 5,
-      "hit_rate": "0.5"
-    },
-    {
-      "trade_date": "20260204",
-      "actual_next_trade_date": "20260205",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": "0.3"
-    },
-    {
-      "trade_date": "20260205",
-      "actual_next_trade_date": "20260206",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": "0.3"
-    },
-    {
-      "trade_date": "20260206",
-      "actual_next_trade_date": "20260209",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": "0.3"
-    },
-    {
-      "trade_date": "20260209",
-      "actual_next_trade_date": "20260210",
-      "topn": 10,
-      "hit": 5,
-      "hit_rate": "0.5"
-    },
-    {
-      "trade_date": "20260210",
-      "actual_next_trade_date": "20260211",
-      "topn": 10,
-      "hit": 4,
-      "hit_rate": "0.4"
-    },
-    {
-      "trade_date": "20260211",
-      "actual_next_trade_date": "20260212",
-      "topn": 10,
-      "hit": 7,
-      "hit_rate": "0.7"
-    },
-    {
-      "trade_date": "20260212",
-      "actual_next_trade_date": "20260213",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": "0.3"
-    }
-  ],
+  "hit_rows_done_last10": [],
   "train_meta": {
     "feature_history_file": "outputs/learning/feature_history.csv",
     "rows_raw": 1145,
@@ -345,8 +131,8 @@
     },
     "pseudo_ratio": 0.07598253275109171,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-22T21:15:34Z",
-    "model_version": "104ac7cbdd1d28227f47323692a2eb85f5940133",
+    "updated_at_utc": "2026-02-22T22:27:56Z",
+    "model_version": "21ceeabd0cef40dbdec8c275a7ea5cb02ef6b7e9",
     "today_yyyymmdd": "20260223",
     "latest_snapshot_yyyymmdd": "20260213",
     "label_upper_bound_yyyymmdd": "20260213"
