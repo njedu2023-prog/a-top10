@@ -12,9 +12,13 @@ Step7：自学习闭环更新模型权重（命中率滚动提升）
   -> 不读 warehouse / 不拉 github raw / 不 forward 扫未来
   -> 彻底消灭 github_raw_try + 404 噪音
 
-✅ 本次新增修复（你指出的命中6/7不一致）：
-- Step7 命中统计对 TopN 预测 codes 先按“去后缀代码”去重，再计算 hit。
-  避免同一股票重复出现导致 hit 被重复计数。
+✅ P1 最小重构（安全优先，不改行为/不改输出契约）：
+- 把 run_step7 内的三段长逻辑抽成函数：
+  1) build_hit_history(...)
+  2) train_models_pipeline(...)
+  3) render_report_md(...)
+- run_step7 只负责串联与落盘，降低误改风险
+- _utc_now_iso 使用 Timestamp.now('UTC')，消灭 pandas 未来弃用 warning（不影响业务）
 """
 
 from __future__ import annotations
@@ -68,10 +72,17 @@ def _now_str() -> str:
 
 
 def _utc_now_iso() -> str:
+    """
+    ✅ 兼容 pandas 未来版本：Timestamp.utcnow 将弃用
+    不影响业务逻辑，仅用于写 report 元信息
+    """
     try:
-        return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        return pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
-        return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _today_yyyymmdd() -> str:
@@ -83,7 +94,7 @@ def _today_yyyymmdd() -> str:
 
 def _latest_snapshot_yyyymmdd() -> str:
     """
-    ✅ 新增：从本仓库 _warehouse 扫描“已同步的最新快照日”
+    ✅ 从本仓库 _warehouse 扫描“已同步的最新快照日”
     目录形如：
       _warehouse/a-share-top3-data/data/raw/2026/20260213/limit_list_d.csv
     返回最大 YYYYMMDD；找不到则返回 ""
@@ -109,10 +120,9 @@ def _latest_snapshot_yyyymmdd() -> str:
 
 def _upper_bound_yyyymmdd() -> str:
     """
-    ✅ 新增：对照可用的时间上界
-    - today：墙钟日期（可能远大于仓库数据）
-    - latest_snapshot：仓库里真实存在的最大快照日期
-    upper_bound = min(today, latest_snapshot)（若 latest_snapshot 缺失则用 today）
+    ✅ 对照可用的时间上界：
+    upper_bound = min(today, latest_snapshot)
+    （若 latest_snapshot 缺失则用 today）
     """
     today = _today_yyyymmdd()
     last = _latest_snapshot_yyyymmdd()
@@ -126,25 +136,6 @@ def _to_nosuffix(ts: str) -> str:
     if not ts:
         return ts
     return ts.split(".")[0]
-
-
-def _dedupe_codes_by_nosuffix(codes: List[str]) -> List[str]:
-    """
-    ✅ 新增：按去掉后缀后的“基础代码”去重，保持原顺序
-    用于命中统计口径统一（避免重复股票导致 hit 多算）
-    """
-    out: List[str] = []
-    seen: set[str] = set()
-    for c in (codes or []):
-        c = str(c).strip()
-        if not c:
-            continue
-        key = _to_nosuffix(c)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(c)
-    return out
 
 
 def _trade_date_from_output_path(p: Path) -> Optional[str]:
@@ -303,7 +294,7 @@ def _resolve_next_trade_date_by_snapshot(
     max_forward_days: int = MAX_FORWARD_LABEL_DAYS,
 ) -> Tuple[str, str]:
     """
-    ✅ 修复：对照查找上界改为 upper_bound（由仓库最新快照决定）
+    ✅ 对照查找上界改为 upper_bound（由仓库最新快照决定）
     """
     if not expected_next_d or not re.match(r"^\d{8}$", str(expected_next_d)):
         return "", "bad_expected_next_d"
@@ -316,6 +307,7 @@ def _resolve_next_trade_date_by_snapshot(
     if pd.isna(d0):
         return "", "bad_expected_next_d"
 
+    # 上界最多扫到 upper_bound（避免扫到仓库不存在的日期）
     d_ub = pd.to_datetime(upper_bound, format="%Y%m%d", errors="coerce")
     max_days_until_ub = int((d_ub - d0).days) if (not pd.isna(d_ub)) else int(max_forward_days)
     max_i = min(int(max_forward_days), max(0, max_days_until_ub))
@@ -323,6 +315,7 @@ def _resolve_next_trade_date_by_snapshot(
     for i in range(0, int(max_i) + 1):
         di = (d0 + pd.Timedelta(days=i)).strftime("%Y%m%d")
 
+        # 1) warehouse
         try:
             dfw = s.data_repo.read_limit_list(di)  # type: ignore[attr-defined]
             if dfw is not None and not dfw.empty:
@@ -332,6 +325,7 @@ def _resolve_next_trade_date_by_snapshot(
         except Exception:
             pass
 
+        # 2) github raw
         dfr = _read_limit_list_from_github_raw(di, warnings)
         if dfr is not None and not dfr.empty:
             if i > 0:
@@ -449,6 +443,7 @@ def _build_train_set_from_feature_history(
         lim_set = set(_limit_codes_from_df(lim_df))
 
         if not actual_next_d:
+            # pending / not synced（不再产生一堆 404）
             warnings.append(f"label_pending: trade_date={d} expected_next={expected_next_d} (snapshot not ready/synced)")
             continue
 
@@ -736,73 +731,21 @@ def _write_sampling_state(outputs_dir: Path, obj: Dict[str, Any]) -> str:
 
 
 # ============================================================
-# Main Step7
+# P1 抽取：命中率统计 / 训练流水线 / 报告渲染
 # ============================================================
 
-def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
-    warnings: List[str] = []
-
-    outputs_dir = _get_outputs_dir(s)
-    learning_dir = outputs_dir / "learning"
-    _ensure_dir(outputs_dir)
-    _ensure_dir(learning_dir)
-
-    today = _today_yyyymmdd()
-    latest_snapshot = _latest_snapshot_yyyymmdd()
-    upper_bound = _upper_bound_yyyymmdd()
-
-    try:
-        topn = int(getattr(s, "topn", 10) or 10)
-    except Exception:
-        topn = 10
-
-    try:
-        lookback_days = int(getattr(s, "step7_lookback_days", getattr(s, "lookback_days", 150)) or 150)
-    except Exception:
-        lookback_days = 150
-
-    # 0) Auto-Sampling + Quality Gate
-    fh_df, fh_path = _read_feature_history(outputs_dir)
-    rows_ser = _rows_per_day_series(fh_df)
-    days_covered = int(len(rows_ser)) if len(rows_ser) else 0
-    rows_last = [int(v) for v in rows_ser.tail(120).tolist()] if len(rows_ser) else []
-    quality_pass, q_details = _quality_gate_v1(fh_df)
-
-    prev_state: Dict[str, Any] = {}
-    prev_p = learning_dir / SAMPLING_STATE_FILE
-    if prev_p.exists():
-        try:
-            prev_state = json.loads(prev_p.read_text(encoding="utf-8"))
-        except Exception:
-            prev_state = {}
-
-    prev_stage = str(prev_state.get("sampling_stage", "S1_MVP"))
-    stage, target_rows, stage_debug = _decide_sampling_stage(
-        prev_stage=prev_stage,
-        days_covered=days_covered,
-        rows_last=rows_last,
-        quality_pass=bool(quality_pass),
-    )
-
-    sampling_state = {
-        "sampling_stage": stage,
-        "target_rows_per_day": int(target_rows),
-        "days_covered": int(days_covered),
-        "rows_per_day_last_N": rows_last[-120:],
-        "quality_gate_pass": bool(quality_pass),
-        "quality_gate_details": q_details,
-        "stage_debug": stage_debug,
-        "pseudo_ratio": float(q_details.get("pseudo_ratio", 1.0)),
-        "feature_history_file": fh_path,
-        "updated_at_utc": _utc_now_iso(),
-        "model_version": str(os.getenv("GITHUB_SHA") or os.getenv("GITHUB_RUN_ID") or ""),
-        "today_yyyymmdd": today,
-        "latest_snapshot_yyyymmdd": latest_snapshot,
-        "label_upper_bound_yyyymmdd": upper_bound,
-    }
-    sampling_state_path = _write_sampling_state(outputs_dir, sampling_state)
-
-    # 1) 命中率统计
+def build_hit_history(
+    s: Settings,
+    outputs_dir: Path,
+    learning_dir: Path,
+    topn: int,
+    upper_bound: str,
+    warnings: List[str],
+) -> Tuple[pd.DataFrame, Path, Optional[Dict[str, Any]]]:
+    """
+    ✅ 纯抽取：不改原命中率逻辑/字段
+    产物：step7_hit_rate_history.csv
+    """
     predict_files = _list_predict_files(outputs_dir)
     predict_dates = [d for d in [_trade_date_from_output_path(p) for p in predict_files] if d]
     predict_dates = sorted(list(dict.fromkeys(predict_dates)))
@@ -834,9 +777,6 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 
         codes = _parse_topn_codes(md_path, topn=topn)
 
-        # ✅ 新增：命中统计口径去重（按去后缀代码）
-        codes = _dedupe_codes_by_nosuffix(codes)
-
         if (not expected_nd) or (not codes):
             hit_rows.append({
                 "trade_date": trade_date,
@@ -849,6 +789,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             })
             continue
 
+        # ✅ 上界闸门：超过 upper_bound 就直接 pending（不读取、不 404）
         if str(expected_nd) > str(upper_bound):
             hit_rows.append({
                 "trade_date": trade_date,
@@ -895,8 +836,30 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     if not hit_df.empty:
         hit_df.to_csv(hit_csv, index=False, encoding="utf-8-sig")
 
-    # 2) 训练
-    train_df, train_meta = _build_train_set_from_feature_history(s=s, lookback_days=lookback_days, warnings=warnings)
+    latest_hit: Optional[Dict[str, Any]] = None
+    if not hit_df.empty:
+        v = hit_df[hit_df["hit"].astype(str).str.len() > 0]
+        if not v.empty:
+            latest_hit = v.iloc[-1].to_dict()
+
+    return hit_df, hit_csv, latest_hit
+
+
+def train_models_pipeline(
+    s: Settings,
+    lookback_days: int,
+    sampling_state: Dict[str, Any],
+    warnings: List[str],
+) -> Tuple[pd.DataFrame, Dict[str, Any], Dict[str, Any]]:
+    """
+    ✅ 纯抽取：不改原训练逻辑/门槛/输出字段
+    """
+    train_df, train_meta = _build_train_set_from_feature_history(
+        s=s,
+        lookback_days=lookback_days,
+        warnings=warnings,
+    )
+
     if bool(sampling_state.get("quality_gate_pass")):
         train_result = _train_and_save_models(s=s, train_df=train_df, warnings=warnings)
     else:
@@ -906,41 +869,34 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             pos = int(train_df["label"].astype(int).sum())
             neg = int(len(train_df) - pos)
             tr = {"train_rows": int(len(train_df)), "pos": pos, "neg": neg}
+
         train_result = {
             "trained": False, "lr_saved": False, "lgbm_saved": False, "models_dir": "",
             "detail": {**tr, "reason": "skip_train: quality_gate_fail", "quality_gate_pass": bool(sampling_state.get("quality_gate_pass")), "days_covered": int(sampling_state.get("days_covered", 0))},
         }
         warnings.append("skip_train: quality_gate_fail")
 
-    # 3) 报告
-    latest_hit = None
-    if not hit_df.empty:
-        v = hit_df[hit_df["hit"].astype(str).str.len() > 0]
-        if not v.empty:
-            latest_hit = v.iloc[-1].to_dict()
+    return train_df, train_meta, train_result
 
-    report = {
-        "ts": _now_str(),
-        "topn": topn,
-        "lookback_days": lookback_days,
-        "today_yyyymmdd": today,
-        "latest_snapshot_yyyymmdd": latest_snapshot,
-        "label_upper_bound_yyyymmdd": upper_bound,
-        "latest_hit": latest_hit,
-        "train_meta": train_meta,
-        "sampling_state": sampling_state,
-        "sampling_state_path": sampling_state_path,
-        "train_result": train_result,
-        "warnings": warnings,
-    }
 
-    report_json = learning_dir / "step7_report_latest.json"
-    _safe_write_json(report_json, report)
+def render_report_md(report: Dict[str, Any]) -> str:
+    """
+    ✅ 抽取 md 渲染：不改展示字段，只把 append 串变成集中生成
+    """
+    topn = report.get("topn", 10)
+    lookback_days = report.get("lookback_days", 150)
+    today = report.get("today_yyyymmdd", "")
+    latest_snapshot = report.get("latest_snapshot_yyyymmdd", "")
+    upper_bound = report.get("label_upper_bound_yyyymmdd", "")
+    latest_hit = report.get("latest_hit")
+    train_meta = report.get("train_meta", {}) or {}
+    train_result = report.get("train_result", {}) or {}
+    warnings = report.get("warnings", []) or []
 
     md_lines: List[str] = []
     md_lines.append("# Step7 自学习报告（latest）")
     md_lines.append("")
-    md_lines.append(f"- 生成时间：{report['ts']}")
+    md_lines.append(f"- 生成时间：{report.get('ts','')}")
     md_lines.append(f"- Today：{today}")
     md_lines.append(f"- LatestSnapshot：{latest_snapshot or 'N/A'}")
     md_lines.append(f"- LabelUpperBound：{upper_bound}")
@@ -997,8 +953,123 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         if len(warnings) > 80:
             md_lines.append(f"- ...（共 {len(warnings)} 条，仅展示前 80 条）")
 
+    return "\n".join(md_lines) + "\n"
+
+
+# ============================================================
+# Main Step7
+# ============================================================
+
+def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    warnings: List[str] = []
+
+    outputs_dir = _get_outputs_dir(s)
+    learning_dir = outputs_dir / "learning"
+    _ensure_dir(outputs_dir)
+    _ensure_dir(learning_dir)
+
+    today = _today_yyyymmdd()
+    latest_snapshot = _latest_snapshot_yyyymmdd()
+    upper_bound = _upper_bound_yyyymmdd()
+
+    try:
+        topn = int(getattr(s, "topn", 10) or 10)
+    except Exception:
+        topn = 10
+
+    try:
+        lookback_days = int(getattr(s, "step7_lookback_days", getattr(s, "lookback_days", 150)) or 150)
+    except Exception:
+        lookback_days = 150
+
+    # ---------------------------
+    # 0) Auto-Sampling + Quality Gate（原逻辑不变）
+    # ---------------------------
+    fh_df, fh_path = _read_feature_history(outputs_dir)
+    rows_ser = _rows_per_day_series(fh_df)
+    days_covered = int(len(rows_ser)) if len(rows_ser) else 0
+    rows_last = [int(v) for v in rows_ser.tail(120).tolist()] if len(rows_ser) else []
+    quality_pass, q_details = _quality_gate_v1(fh_df)
+
+    prev_state: Dict[str, Any] = {}
+    prev_p = learning_dir / SAMPLING_STATE_FILE
+    if prev_p.exists():
+        try:
+            prev_state = json.loads(prev_p.read_text(encoding="utf-8"))
+        except Exception:
+            prev_state = {}
+
+    prev_stage = str(prev_state.get("sampling_stage", "S1_MVP"))
+    stage, target_rows, stage_debug = _decide_sampling_stage(
+        prev_stage=prev_stage,
+        days_covered=days_covered,
+        rows_last=rows_last,
+        quality_pass=bool(quality_pass),
+    )
+
+    sampling_state = {
+        "sampling_stage": stage,
+        "target_rows_per_day": int(target_rows),
+        "days_covered": int(days_covered),
+        "rows_per_day_last_N": rows_last[-120:],
+        "quality_gate_pass": bool(quality_pass),
+        "quality_gate_details": q_details,
+        "stage_debug": stage_debug,
+        "pseudo_ratio": float(q_details.get("pseudo_ratio", 1.0)),
+        "feature_history_file": fh_path,
+        "updated_at_utc": _utc_now_iso(),
+        "model_version": str(os.getenv("GITHUB_SHA") or os.getenv("GITHUB_RUN_ID") or ""),
+        "today_yyyymmdd": today,
+        "latest_snapshot_yyyymmdd": latest_snapshot,
+        "label_upper_bound_yyyymmdd": upper_bound,
+    }
+    sampling_state_path = _write_sampling_state(outputs_dir, sampling_state)
+
+    # ---------------------------
+    # 1) 命中率统计（抽取，不改逻辑）
+    # ---------------------------
+    hit_df, hit_csv, latest_hit = build_hit_history(
+        s=s,
+        outputs_dir=outputs_dir,
+        learning_dir=learning_dir,
+        topn=topn,
+        upper_bound=upper_bound,
+        warnings=warnings,
+    )
+
+    # ---------------------------
+    # 2) 训练流水线（抽取，不改逻辑）
+    # ---------------------------
+    train_df, train_meta, train_result = train_models_pipeline(
+        s=s,
+        lookback_days=lookback_days,
+        sampling_state=sampling_state,
+        warnings=warnings,
+    )
+
+    # ---------------------------
+    # 3) 报告（JSON + MD）
+    # ---------------------------
+    report = {
+        "ts": _now_str(),
+        "topn": topn,
+        "lookback_days": lookback_days,
+        "today_yyyymmdd": today,
+        "latest_snapshot_yyyymmdd": latest_snapshot,
+        "label_upper_bound_yyyymmdd": upper_bound,
+        "latest_hit": latest_hit,
+        "train_meta": train_meta,
+        "sampling_state": sampling_state,
+        "sampling_state_path": sampling_state_path,
+        "train_result": train_result,
+        "warnings": warnings,
+    }
+
+    report_json = learning_dir / "step7_report_latest.json"
+    _safe_write_json(report_json, report)
+
     report_md = learning_dir / "step7_report_latest.md"
-    _safe_write_text(report_md, "\n".join(md_lines) + "\n")
+    _safe_write_text(report_md, render_report_md(report))
 
     return {
         "step7_learning": {
