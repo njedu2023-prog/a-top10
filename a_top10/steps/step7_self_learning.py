@@ -19,6 +19,12 @@ Step7：自学习闭环更新模型权重（命中率滚动提升）
   3) render_report_md(...)
 - run_step7 只负责串联与落盘，降低误改风险
 - _utc_now_iso 使用 Timestamp.now('UTC')，消灭 pandas 未来弃用 warning（不影响业务）
+
+✅ 本次新增修复：解决“近10日命中率统计不一致”（只改 Step7，不动其它模块）
+- 命中历史 CSV 写入时：pending 行（未完成打标）统一挪到文件最前面
+  目的：避免前端/报告端用简单 tail(10) 时把 pending 算入近10日
+- step7_report_latest.md 增加《近10日 Top10 命中率》表：
+  统一口径：只统计已完成打标（actual_next_trade_date 与 hit_rate 均非空）
 """
 
 from __future__ import annotations
@@ -264,6 +270,26 @@ def _infer_next_trade_date(predict_dates: List[str], d: str) -> str:
     return ""
 
 
+def _is_done_row(row: Dict[str, Any]) -> bool:
+    """已完成打标：actual_next_trade_date 与 hit_rate 均非空"""
+    a = str(row.get("actual_next_trade_date", "")).strip()
+    hr = row.get("hit_rate", "")
+    hr_s = str(hr).strip() if hr is not None else ""
+    return bool(a) and bool(hr_s)
+
+
+def _md_table(rows: List[Dict[str, Any]], cols: List[str]) -> str:
+    if not rows:
+        return ""
+    # 纯 markdown 表（不引入第三方依赖，避免环境差异）
+    header = "| " + " | ".join(cols) + " |"
+    sep = "| " + " | ".join(["---"] * len(cols)) + " |"
+    body = []
+    for r in rows:
+        body.append("| " + " | ".join([str(r.get(c, "")).strip() for c in cols]) + " |")
+    return "\n".join([header, sep] + body)
+
+
 # ============================================================
 # Label source
 # ============================================================
@@ -307,7 +333,6 @@ def _resolve_next_trade_date_by_snapshot(
     if pd.isna(d0):
         return "", "bad_expected_next_d"
 
-    # 上界最多扫到 upper_bound（避免扫到仓库不存在的日期）
     d_ub = pd.to_datetime(upper_bound, format="%Y%m%d", errors="coerce")
     max_days_until_ub = int((d_ub - d0).days) if (not pd.isna(d_ub)) else int(max_forward_days)
     max_i = min(int(max_forward_days), max(0, max_days_until_ub))
@@ -443,7 +468,6 @@ def _build_train_set_from_feature_history(
         lim_set = set(_limit_codes_from_df(lim_df))
 
         if not actual_next_d:
-            # pending / not synced（不再产生一堆 404）
             warnings.append(f"label_pending: trade_date={d} expected_next={expected_next_d} (snapshot not ready/synced)")
             continue
 
@@ -745,6 +769,10 @@ def build_hit_history(
     """
     ✅ 纯抽取：不改原命中率逻辑/字段
     产物：step7_hit_rate_history.csv
+
+    ✅ 本次修复（统计一致性）：
+    - CSV 落盘前，把 pending 行放在最前面，done 行放后面（done 内按 trade_date 升序）
+      避免简单 tail(10) 把 pending 纳入“近10日命中率”
     """
     predict_files = _list_predict_files(outputs_dir)
     predict_dates = [d for d in [_trade_date_from_output_path(p) for p in predict_files] if d]
@@ -789,7 +817,6 @@ def build_hit_history(
             })
             continue
 
-        # ✅ 上界闸门：超过 upper_bound 就直接 pending（不读取、不 404）
         if str(expected_nd) > str(upper_bound):
             hit_rows.append({
                 "trade_date": trade_date,
@@ -833,13 +860,50 @@ def build_hit_history(
 
     hit_df = pd.DataFrame(hit_rows)
     hit_csv = learning_dir / "step7_hit_rate_history.csv"
+
     if not hit_df.empty:
-        hit_df.to_csv(hit_csv, index=False, encoding="utf-8-sig")
+        # ✅ 统计一致性修复：pending 前置，done 后置；done 内按 trade_date 升序
+        # 注意：不改变字段，不改变含义，只改变排序，以减少外部 tail(10) 的误统计
+        try:
+            hit_df["trade_date"] = hit_df["trade_date"].astype(str).str.strip()
+        except Exception:
+            pass
+
+        pending_mask = (
+            hit_df.get("actual_next_trade_date", pd.Series([""] * len(hit_df))).astype(str).str.strip().eq("")
+            | hit_df.get("hit_rate", pd.Series([""] * len(hit_df))).astype(str).str.strip().eq("")
+        )
+
+        df_pending = hit_df[pending_mask].copy()
+        df_done = hit_df[~pending_mask].copy()
+
+        if not df_pending.empty:
+            df_pending = df_pending.sort_values("trade_date")
+
+        if not df_done.empty:
+            df_done = df_done.sort_values("trade_date")
+
+        hit_df_out = pd.concat([df_pending, df_done], ignore_index=True)
+        hit_df_out.to_csv(hit_csv, index=False, encoding="utf-8-sig")
+    else:
+        # 空表也写表头，避免消费者读不到列
+        pd.DataFrame(columns=[
+            "trade_date", "expected_next_trade_date", "actual_next_trade_date", "topn", "hit", "hit_rate", "note"
+        ]).to_csv(hit_csv, index=False, encoding="utf-8-sig")
 
     latest_hit: Optional[Dict[str, Any]] = None
     if not hit_df.empty:
-        v = hit_df[hit_df["hit"].astype(str).str.len() > 0]
+        # latest_hit 只取 done 行最后一条（避免 pending 误报）
+        try:
+            v = hit_df[~(
+                hit_df.get("actual_next_trade_date", pd.Series([""] * len(hit_df))).astype(str).str.strip().eq("")
+                | hit_df.get("hit_rate", pd.Series([""] * len(hit_df))).astype(str).str.strip().eq("")
+            )]
+        except Exception:
+            v = hit_df.copy()
+
         if not v.empty:
+            v = v.sort_values("trade_date")
             latest_hit = v.iloc[-1].to_dict()
 
     return hit_df, hit_csv, latest_hit
@@ -882,6 +946,7 @@ def train_models_pipeline(
 def render_report_md(report: Dict[str, Any]) -> str:
     """
     ✅ 抽取 md 渲染：不改展示字段，只把 append 串变成集中生成
+    ✅ 本次新增：近10日命中率表（done-only，保证一致口径）
     """
     topn = report.get("topn", 10)
     lookback_days = report.get("lookback_days", 150)
@@ -892,6 +957,8 @@ def render_report_md(report: Dict[str, Any]) -> str:
     train_meta = report.get("train_meta", {}) or {}
     train_result = report.get("train_result", {}) or {}
     warnings = report.get("warnings", []) or []
+    hit_rows_all = report.get("hit_rows_all", []) or []
+    hit_rows_done_last10 = report.get("hit_rows_done_last10", []) or []
 
     md_lines: List[str] = []
     md_lines.append("# Step7 自学习报告（latest）")
@@ -915,6 +982,17 @@ def render_report_md(report: Dict[str, Any]) -> str:
     else:
         md_lines.append("")
         md_lines.append("- 暂无可验证命中（对照日快照尚未产生/同步，或缺少下一交易日预测文件）")
+
+    md_lines.append("")
+    md_lines.append("## 1.1) 近10日 Top10 命中率（done-only）")
+    md_lines.append("")
+    if hit_rows_done_last10:
+        md_lines.append(_md_table(
+            hit_rows_done_last10,
+            cols=["trade_date", "actual_next_trade_date", "topn", "hit", "hit_rate"]
+        ))
+    else:
+        md_lines.append("- 暂无近10日可统计数据（可能全部为 pending，或尚未形成有效对照）")
 
     md_lines.append("")
     md_lines.append("## 2) 训练数据概况")
@@ -1037,6 +1115,23 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         warnings=warnings,
     )
 
+    # 近10日（done-only）用于报告展示，确保与“统计口径”一致
+    hit_rows_all: List[Dict[str, Any]] = []
+    hit_rows_done_last10: List[Dict[str, Any]] = []
+    try:
+        if hit_df is not None and not hit_df.empty:
+            hit_rows_all = hit_df.to_dict(orient="records")
+            # done-only
+            d = hit_df.copy()
+            d["actual_next_trade_date"] = d.get("actual_next_trade_date", "").astype(str).str.strip()
+            d["hit_rate"] = d.get("hit_rate", "").astype(str).str.strip()
+            d = d[(d["actual_next_trade_date"] != "") & (d["hit_rate"] != "")]
+            if not d.empty:
+                d = d.sort_values("trade_date").tail(10)
+                hit_rows_done_last10 = d[["trade_date", "actual_next_trade_date", "topn", "hit", "hit_rate"]].to_dict(orient="records")
+    except Exception:
+        pass
+
     # ---------------------------
     # 2) 训练流水线（抽取，不改逻辑）
     # ---------------------------
@@ -1058,6 +1153,8 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         "latest_snapshot_yyyymmdd": latest_snapshot,
         "label_upper_bound_yyyymmdd": upper_bound,
         "latest_hit": latest_hit,
+        "hit_rows_all": hit_rows_all,                 # 仅用于报告自洽核对
+        "hit_rows_done_last10": hit_rows_done_last10, # 近10日（done-only）
         "train_meta": train_meta,
         "sampling_state": sampling_state,
         "sampling_state_path": sampling_state_path,
