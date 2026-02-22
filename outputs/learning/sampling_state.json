@@ -52,7 +52,7 @@
       "turnover_rate": {
         "non_null_rate": 1.0,
         "non_zero_rate": 0.9240174672489083,
-        "std": 12.378405528767592,
+        "std": 12.378405528767594,
         "unique_count": 1058
       },
       "seal_amount": {
@@ -70,7 +70,7 @@
       "Probability": {
         "non_null_rate": 1.0,
         "non_zero_rate": 1.0,
-        "std": 0.22373962100331093,
+        "std": 0.22249712344515424,
         "unique_count": 1094
       }
     },
@@ -103,8 +103,8 @@
   },
   "pseudo_ratio": 0.07598253275109171,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-02-22T23:37:47Z",
-  "model_version": "3879c23b5a6736e8aa75ddea82eee3596dc20d9b",
+  "updated_at_utc": "2026-02-22T23:38:59Z",
+  "model_version": "1708fde113e0319e82ee6a16b2929f01fd222dda",
   "today_yyyymmdd": "20260223",
   "latest_snapshot_yyyymmdd": "20260213",
   "label_upper_bound_yyyymmdd": "20260213"
