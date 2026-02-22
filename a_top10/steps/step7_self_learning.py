@@ -21,6 +21,11 @@ Step7：自学习闭环更新模型权重（命中率滚动提升）
   -> expected_next_trade_date 可能不存在（如 20260216），自动滚动到第一个存在 limit_list_d 的实际交易日
 - 移除 tushare 兜底（避免环境缺包带来噪音告警）
 - 报告中同时披露 expected/actual next_trade_date，避免误读命中率
+
+✅ 本次新增修复（你提的 Warnings 问题）：
+- 若 expected_next_trade_date > today（未来对照日尚未发生）
+  -> 直接判定为 PENDING（非错误）
+  -> 不查 GitHub raw、不 forward 扫未来、不产生 404 warnings
 """
 
 from __future__ import annotations
@@ -50,6 +55,9 @@ MIN_POS = 10       # 冷启动最低正样本数（涨停=1）
 # 方案A：最多向后寻找多少天的对照日（周末/节假日/同步延迟）
 MAX_FORWARD_LABEL_DAYS = int(os.getenv("MAX_FORWARD_LABEL_DAYS", "15") or "15")
 
+# 用于判断“未来对照日未到”的时区（与主系统一致）
+DEFAULT_TZ = os.getenv("A_TOP10_TZ", "Asia/Shanghai")
+
 
 # ============================================================
 # Utils
@@ -78,6 +86,18 @@ def _utc_now_iso() -> str:
         return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
         return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _today_yyyymmdd() -> str:
+    """
+    ✅ 新增：统一“今天”的交易日判断基准（用于 future gate）
+    - 默认用 Asia/Shanghai（与 workflow TZ 一致）
+    """
+    try:
+        return pd.Timestamp.now(tz=DEFAULT_TZ).strftime("%Y%m%d")
+    except Exception:
+        # 兜底：用本地时间（不理想，但不会崩）
+        return pd.Timestamp.now().strftime("%Y%m%d")
 
 
 def _to_nosuffix(ts: str) -> str:
@@ -286,15 +306,30 @@ def _resolve_next_trade_date_by_snapshot(
     - 返回 (actual_next_d, src)
       - 找到则 actual_next_d=YYYYMMDD
       - 找不到则 actual_next_d=""
+    ✅ 修复：若 expected_next_d 在未来（> today），直接返回 PENDING，不查 raw、不 forward 扫未来
+    ✅ 修复：forward 搜索上界限制到 today（只在“已到期但缺文件”时才 forward）
     """
     if not expected_next_d or not re.match(r"^\d{8}$", str(expected_next_d)):
         return "", "bad_expected_next_d"
+
+    today = _today_yyyymmdd()
+    if str(expected_next_d) > str(today):
+        # ✅ future gate：未来对照未发生 -> 正常 pending，不应产生 404 warnings
+        return "", "pending_future"
 
     d0 = pd.to_datetime(expected_next_d, format="%Y%m%d", errors="coerce")
     if pd.isna(d0):
         return "", "bad_expected_next_d"
 
-    for i in range(0, int(max_forward_days) + 1):
+    # ✅ 上界：最多只能扫到 today（避免扫进未来）
+    try:
+        d_today = pd.to_datetime(today, format="%Y%m%d", errors="coerce")
+        max_days_until_today = int((d_today - d0).days) if (not pd.isna(d_today)) else int(max_forward_days)
+        max_i = min(int(max_forward_days), max(0, max_days_until_today))
+    except Exception:
+        max_i = int(max_forward_days)
+
+    for i in range(0, int(max_i) + 1):
         di = (d0 + pd.Timedelta(days=i)).strftime("%Y%m%d")
 
         # 1) warehouse
@@ -307,14 +342,14 @@ def _resolve_next_trade_date_by_snapshot(
         except Exception:
             pass
 
-        # 2) github raw
+        # 2) github raw（只会在 di <= today 的范围内触发）
         dfr = _read_limit_list_from_github_raw(di, warnings)
         if dfr is not None and not dfr.empty:
             if i > 0:
                 warnings.append(f"next_trade_date_adjusted: {expected_next_d} -> {di} (github_raw)")
             return di, "github_raw"
 
-    warnings.append(f"next_trade_date_unresolved: expected={expected_next_d} max_forward_days={max_forward_days}")
+    warnings.append(f"next_trade_date_unresolved: expected={expected_next_d} max_forward_days={max_forward_days} upper_bound={today}")
     return "", "not_found_within_window"
 
 
@@ -323,13 +358,14 @@ def _read_limit_list_anyway(s: Settings, expected_trade_date: str, warnings: Lis
     ✅ 关键：先把 expected_trade_date resolve 成“真实可用对照日”，再读取 limit_list_d
     返回：(df, actual_trade_date)
     """
-    actual_d, _src = _resolve_next_trade_date_by_snapshot(
+    actual_d, src = _resolve_next_trade_date_by_snapshot(
         s=s,
         expected_next_d=expected_trade_date,
         warnings=warnings,
         max_forward_days=MAX_FORWARD_LABEL_DAYS,
     )
     if not actual_d:
+        # pending_future 也在这里体现为 “无对照可读”
         return pd.DataFrame(), ""
 
     # 1) warehouse（再次读取，避免重复 raw）
@@ -437,6 +473,7 @@ def _build_train_set_from_feature_history(
         lim_set = set(_limit_codes_from_df(lim_df))
 
         if not actual_next_d:
+            # 这里多数是“未同步”或“缺快照”，但也可能是 pending_future（极少）
             warnings.append(f"label_pending: trade_date={d} expected_next={expected_next_d} (no snapshot yet)")
             continue
 
@@ -755,6 +792,8 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     _ensure_dir(outputs_dir)
     _ensure_dir(learning_dir)
 
+    today = _today_yyyymmdd()  # ✅ 新增：统一 today
+
     try:
         topn = int(getattr(s, "topn", 10) or 10)
     except Exception:
@@ -802,6 +841,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         "feature_history_file": fh_path,
         "updated_at_utc": _utc_now_iso(),
         "model_version": str(os.getenv("GITHUB_SHA") or os.getenv("GITHUB_RUN_ID") or ""),
+        "today_yyyymmdd": today,  # ✅ 记录 today
     }
 
     sampling_state_path = _write_sampling_state(outputs_dir, sampling_state)
@@ -853,10 +893,23 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             })
             continue
 
+        # ✅ 关键修复：未来对照日未到 -> 直接 pending，不查 raw、不 forward
+        if str(expected_nd) > str(today):
+            hit_rows.append({
+                "trade_date": trade_date,
+                "expected_next_trade_date": expected_nd,
+                "actual_next_trade_date": "",
+                "topn": len(codes),
+                "hit": "",
+                "hit_rate": "",
+                "note": f"pending_label: expected_next_trade_date_not_arrived (today={today})",
+            })
+            continue
+
         lim_df, actual_nd = _read_limit_list_anyway(s, expected_nd, warnings)
 
         if not actual_nd:
-            # ✅ 对照数据未产生/未同步：不要写 0，写 pending
+            # 对照数据未产生/未同步：不要写 0，写 pending
             hit_rows.append({
                 "trade_date": trade_date,
                 "expected_next_trade_date": expected_nd,
@@ -938,6 +991,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         "ts": _now_str(),
         "topn": topn,
         "lookback_days": lookback_days,
+        "today_yyyymmdd": today,
         "latest_hit": latest_hit,
         "train_meta": train_meta,
         "sampling_state": sampling_state,
@@ -953,6 +1007,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     md_lines.append("# Step7 自学习报告（latest）")
     md_lines.append("")
     md_lines.append(f"- 生成时间：{report['ts']}")
+    md_lines.append(f"- Today：{today}")
     md_lines.append(f"- TopN：{topn}")
     md_lines.append(f"- Lookback：{lookback_days} 天")
     md_lines.append("")
@@ -961,7 +1016,6 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     if latest_hit:
         md_lines.append("")
         md_lines.append(f"- trade_date：{latest_hit.get('trade_date','')}")
-        # 兼容旧字段（如果历史 CSV 没有 expected/actual）
         if "expected_next_trade_date" in latest_hit or "actual_next_trade_date" in latest_hit:
             md_lines.append(f"- expected_next_trade_date：{latest_hit.get('expected_next_trade_date','')}")
             md_lines.append(f"- actual_next_trade_date：{latest_hit.get('actual_next_trade_date','')}")
