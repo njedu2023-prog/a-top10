@@ -1008,6 +1008,12 @@ def build_hit_history(
 
             # 2) expected_next_trade_date (prefer explicit target_trade_date, else snapshot-next)
             expected_nd = _get_target_trade_date_from_pred(pred_df, td)
+
+            # ✅ 双保险：无论上游返回什么，都先 string 化并清理 nan
+            expected_nd = "" if expected_nd is None else str(expected_nd).strip()
+            if expected_nd.lower() == "nan":
+                expected_nd = ""
+
             if expected_nd and (not re.match(r"^\d{8}$", expected_nd)):
                 expected_nd = ""
 
