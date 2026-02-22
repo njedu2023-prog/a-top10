@@ -17,20 +17,10 @@ Step7：自学习闭环更新模型权重（命中率滚动提升）
     outputs/learning/step7_report_latest.md
 
 ✅ 本版本修复点（关键）：
-- 修复 y 打标数据源缺失：next_trade_date 的 limit_list_d.csv 不一定在本次 _warehouse 内
-  -> 增加 3 段式兜底读取：
-     1) s.data_repo.read_limit_list(next_d)
-     2) GitHub RAW 拉取 a-share-top3-data/data/raw/YYYY/YYYYMMDD/limit_list_d.csv
-     3) tushare pro.limit_list_d(trade_date=next_d)
-- 移除 “days_covered>=30 才训练” 的硬门槛（它会让你永远 trained=False）
-  -> 训练是否执行只由 MIN_SAMPLES / MIN_POS / single_class 决定
-- 报告 3) 训练执行结果：无论训练是否执行，都要写 train_rows、pos/neg、reason
-
-✅ 本次新增修复（只修命中率统计，不破坏其它功能）：
-- 命中率统计不再用“预测文件日期列表的下一天”推断 next_trade_date
-  -> 改为从预测报告标题《YYYYMMDD 预测：YYYYMMDD 涨停 TOP 10》解析 target day
-- TopN 代码解析仅解析“涨停 TOP 10”对应的第一张表（支持 md 管道表 / html table）
-  -> 避免误解析“命中情况表/近10日命中率表”等其它表导致命中数错误
+- 方案A：自动寻找“下一个可用对照日”（跳过周末/节假日/缺快照日）
+  -> expected_next_trade_date 可能不存在（如 20260216），自动滚动到第一个存在 limit_list_d 的实际交易日
+- 移除 tushare 兜底（避免环境缺包带来噪音告警）
+- 报告中同时披露 expected/actual next_trade_date，避免误读命中率
 """
 
 from __future__ import annotations
@@ -47,6 +37,7 @@ import pandas as pd
 from a_top10.config import Settings
 from a_top10.steps.step5_ml_probability import _get_ts_code_col, _normalize_id_columns
 
+
 # ============================================================
 # Constants
 # ============================================================
@@ -55,6 +46,10 @@ LGBM_MODEL_PATH = Path("step5_lgbm.joblib")
 
 MIN_SAMPLES = 200  # 冷启动最低样本量
 MIN_POS = 10       # 冷启动最低正样本数（涨停=1）
+
+# 方案A：最多向后寻找多少天的对照日（周末/节假日/同步延迟）
+MAX_FORWARD_LABEL_DAYS = int(os.getenv("MAX_FORWARD_LABEL_DAYS", "15") or "15")
+
 
 # ============================================================
 # Utils
@@ -112,7 +107,7 @@ def _read_text_best_effort(p: Path) -> str:
 
 
 # ============================================================
-# ✅ 新增：从报告标题解析 “预测日 -> 目标日（下一交易日）”
+# ✅ 从报告标题解析 “预测日 -> 目标日（下一交易日）”
 # ============================================================
 
 def _extract_pred_and_target_from_report(text: str) -> Tuple[str, str]:
@@ -125,13 +120,11 @@ def _extract_pred_and_target_from_report(text: str) -> Tuple[str, str]:
     if not text:
         return "", ""
 
-    # 最强约束：必须带“涨停 TOP”
     pat = re.compile(r"《\s*(\d{8})\s*预测：\s*(\d{8})\s*涨停\s*TOP\s*10\s*》")
     m = pat.search(text)
     if m:
         return m.group(1), m.group(2)
 
-    # 兼容：TOP10/Top 10/空格等
     pat2 = re.compile(r"《\s*(\d{8})\s*预测：\s*(\d{8})\s*涨停\s*TOP\s*10", re.IGNORECASE)
     m2 = pat2.search(text)
     if m2:
@@ -141,22 +134,21 @@ def _extract_pred_and_target_from_report(text: str) -> Tuple[str, str]:
 
 
 # ============================================================
-# ✅ 修复：只解析“涨停 TOP10”那张表的 TopN codes（支持 md 管道表 / html table）
+# ✅ 只解析“涨停 TOP10”那张表的 TopN codes（支持 md 管道表 / html table）
 # ============================================================
 
 def _parse_topn_codes(md_path: Path, topn: int) -> List[str]:
     """
     从预测报告 md 中解析 TopN 代码：
-    - 只解析《YYYYMMDD 预测：YYYYMMDD 涨停 TOP 10》对应的第一张表
+    - 只解析“涨停 TOP 10”附近的第一张表
     - 支持：
-        1) markdown pipe table: | 1 | 000001.SZ | ...
-        2) html table: <tr><td>1</td><td>000001.SZ</td>...
+        1) markdown pipe table
+        2) html table
     """
     text = _read_text_best_effort(md_path)
     if not text:
         return []
 
-    # 1) 定位“涨停 TOP 10”标题附近的片段，避免扫到其它表
     anchor = None
     for key in ["涨停 TOP 10", "涨停TOP 10", "涨停 TOP10", "涨停TOP10"]:
         idx = text.find(key)
@@ -164,24 +156,18 @@ def _parse_topn_codes(md_path: Path, topn: int) -> List[str]:
             anchor = idx
             break
 
-    # 若找不到 anchor，就退化为原逻辑（但仍尽量安全）
     scope = text[anchor:] if anchor is not None else text
 
-    # 2) 优先解析 html table（你系统里确实会输出 <table>）
     codes: List[str] = []
-    # 找第一张 <table>...</table>
     m_table = re.search(r"<table\b.*?>.*?</table>", scope, flags=re.IGNORECASE | re.DOTALL)
     if m_table:
         table_html = m_table.group(0)
-        # 行形如：<tr><td>1</td><td>600000.SH</td>...
         for m in re.finditer(r"<tr>\s*<td>\s*\d+\s*</td>\s*<td>\s*([^<\s]+)\s*</td>", table_html, flags=re.IGNORECASE):
             codes.append(m.group(1).strip())
             if len(codes) >= int(topn):
                 break
-        codes = [c for c in codes if c]
-        return codes[: int(topn)]
+        return [c for c in codes if c][: int(topn)]
 
-    # 3) 解析 markdown pipe table（只解析 anchor 后第一张管道表）
     lines = scope.splitlines()
     in_table = False
     for line in lines:
@@ -190,23 +176,18 @@ def _parse_topn_codes(md_path: Path, topn: int) -> List[str]:
             if in_table:
                 break
             continue
-
-        # 表开始判定：遇到类似 "| 排名 | 代码 |" 或 "| 1 | 000001.SZ |"
         if s.startswith("|") and s.endswith("|"):
             in_table = True
-            # 数据行：| 1 | 000001.SZ | ...
             m = re.match(r"^\|\s*\d+\s*\|\s*([0-9A-Za-z\.\-]+)\s*\|", s)
             if m:
                 codes.append(m.group(1).strip())
                 if len(codes) >= int(topn):
                     break
         else:
-            # 一旦离开 table 区域就停止
             if in_table:
                 break
 
-    codes = [c for c in codes if c]
-    return codes[: int(topn)]
+    return [c for c in codes if c][: int(topn)]
 
 
 def _limit_codes_from_df(df: pd.DataFrame) -> List[str]:
@@ -234,7 +215,6 @@ def _get_outputs_dir(s: Settings) -> Path:
 
 
 def _get_models_dir(s: Settings) -> Path:
-    # 优先 Settings 指定，其次 ./models
     try:
         if hasattr(s, "data_repo") and hasattr(s.data_repo, "models_dir"):
             p = Path(getattr(s.data_repo, "models_dir"))
@@ -252,7 +232,6 @@ def _list_predict_files(outputs_dir: Path) -> List[Path]:
 
 
 def _infer_next_trade_date(predict_dates: List[str], d: str) -> str:
-    # 旧逻辑保留（作为最后 fallback）
     try:
         idx = predict_dates.index(d)
         if idx < len(predict_dates) - 1:
@@ -268,16 +247,15 @@ def _infer_next_trade_date(predict_dates: List[str], d: str) -> str:
 
 def _read_limit_list_from_github_raw(next_d: str, warnings: List[str]) -> pd.DataFrame:
     """
-    兜底2：直接从 GitHub raw 拉 limit_list_d.csv
+    兜底：从 GitHub raw 拉 limit_list_d.csv
 
-    ✅ 修复：固定读取当前仓库 a-top10 的 _warehouse 路径，避免 env 拼错导致 404
+    ✅ 固定读取当前仓库 a-top10 的 _warehouse 路径，避免 env 拼错导致 404
     """
     branch = str(os.getenv("DATA_BRANCH", "main")).strip()
 
-    # Actions 标准变量：形如 "njedu2023-prog/a-top10"
     repo_full = str(os.getenv("GITHUB_REPOSITORY", "")).strip()
     if not repo_full:
-        repo_full = "njedu2023-prog/a-top10"  # 最后兜底写死
+        repo_full = "njedu2023-prog/a-top10"
 
     year = next_d[:4]
     url = (
@@ -296,54 +274,75 @@ def _read_limit_list_from_github_raw(next_d: str, warnings: List[str]) -> pd.Dat
             return pd.DataFrame()
 
 
-def _read_limit_list_from_tushare(next_d: str, warnings: List[str]) -> pd.DataFrame:
+def _resolve_next_trade_date_by_snapshot(
+    s: Settings,
+    expected_next_d: str,
+    warnings: List[str],
+    max_forward_days: int = MAX_FORWARD_LABEL_DAYS,
+) -> Tuple[str, str]:
     """
-    兜底3：直接 tushare 拉下一交易日 limit_list_d
+    方案A：自动寻找“下一个可用对照日”
+    - expected_next_d 可能是非交易日/还未同步
+    - 返回 (actual_next_d, src)
+      - 找到则 actual_next_d=YYYYMMDD
+      - 找不到则 actual_next_d=""
     """
-    token = str(os.getenv("TUSHARE_TOKEN", "")).strip()
-    if not token:
-        warnings.append("tushare: missing TUSHARE_TOKEN env; skip.")
-        return pd.DataFrame()
+    if not expected_next_d or not re.match(r"^\d{8}$", str(expected_next_d)):
+        return "", "bad_expected_next_d"
 
+    d0 = pd.to_datetime(expected_next_d, format="%Y%m%d", errors="coerce")
+    if pd.isna(d0):
+        return "", "bad_expected_next_d"
+
+    for i in range(0, int(max_forward_days) + 1):
+        di = (d0 + pd.Timedelta(days=i)).strftime("%Y%m%d")
+
+        # 1) warehouse
+        try:
+            dfw = s.data_repo.read_limit_list(di)  # type: ignore[attr-defined]
+            if dfw is not None and not dfw.empty:
+                if i > 0:
+                    warnings.append(f"next_trade_date_adjusted: {expected_next_d} -> {di} (warehouse)")
+                return di, "warehouse"
+        except Exception:
+            pass
+
+        # 2) github raw
+        dfr = _read_limit_list_from_github_raw(di, warnings)
+        if dfr is not None and not dfr.empty:
+            if i > 0:
+                warnings.append(f"next_trade_date_adjusted: {expected_next_d} -> {di} (github_raw)")
+            return di, "github_raw"
+
+    warnings.append(f"next_trade_date_unresolved: expected={expected_next_d} max_forward_days={max_forward_days}")
+    return "", "not_found_within_window"
+
+
+def _read_limit_list_anyway(s: Settings, expected_trade_date: str, warnings: List[str]) -> Tuple[pd.DataFrame, str]:
+    """
+    ✅ 关键：先把 expected_trade_date resolve 成“真实可用对照日”，再读取 limit_list_d
+    返回：(df, actual_trade_date)
+    """
+    actual_d, _src = _resolve_next_trade_date_by_snapshot(
+        s=s,
+        expected_next_d=expected_trade_date,
+        warnings=warnings,
+        max_forward_days=MAX_FORWARD_LABEL_DAYS,
+    )
+    if not actual_d:
+        return pd.DataFrame(), ""
+
+    # 1) warehouse（再次读取，避免重复 raw）
     try:
-        import tushare as ts
-    except Exception as e:
-        warnings.append(f"tushare import failed: {e}")
-        return pd.DataFrame()
-
-    try:
-        ts.set_token(token)
-        pro = ts.pro_api()
-        df = pro.limit_list_d(trade_date=next_d, fields="trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount")
-        if df is None:
-            return pd.DataFrame()
-        return df
-    except Exception as e:
-        warnings.append(f"tushare pro.limit_list_d failed: {e}")
-        return pd.DataFrame()
-
-
-def _read_limit_list_anyway(s: Settings, trade_date: str, warnings: List[str]) -> pd.DataFrame:
-    """
-    ✅ 关键修复：确保 next_trade_date 的 limit_list_d 能读到
-    优先级：
-      1) s.data_repo.read_limit_list(trade_date)
-      2) GitHub RAW 拉取
-      3) tushare API 拉取
-    """
-    try:
-        df = s.data_repo.read_limit_list(trade_date)  # type: ignore[attr-defined]
+        df = s.data_repo.read_limit_list(actual_d)  # type: ignore[attr-defined]
         if df is not None and not df.empty:
-            return df
+            return df, actual_d
     except Exception as e:
         warnings.append(f"read_limit_list (warehouse) failed: {e}")
 
-    df2 = _read_limit_list_from_github_raw(trade_date, warnings)
-    if df2 is not None and not df2.empty:
-        return df2
-
-    df3 = _read_limit_list_from_tushare(trade_date, warnings)
-    return df3 if df3 is not None else pd.DataFrame()
+    # 2) github raw
+    df2 = _read_limit_list_from_github_raw(actual_d, warnings)
+    return (df2 if df2 is not None else pd.DataFrame()), actual_d
 
 
 # ============================================================
@@ -358,7 +357,7 @@ def _build_train_set_from_feature_history(
     """
     训练样本：
     - X：StrengthScore/ThemeBoost/seal_amount/open_times/turnover_rate
-    - y：next_day 是否涨停（用 next_trade_date 的 limit_list_d.csv）
+    - y：next_day 是否涨停（用“实际可用对照日”的 limit_list_d.csv 打标）
     """
     outputs_dir = _get_outputs_dir(s)
     fp = outputs_dir / "learning" / "feature_history.csv"
@@ -432,12 +431,17 @@ def _build_train_set_from_feature_history(
     rows: List[Dict[str, Any]] = []
 
     for i, d in enumerate(dates2[:-1]):
-        next_d = dates2[i + 1]
-        lim_df = _read_limit_list_anyway(s, next_d, warnings)
+        expected_next_d = dates2[i + 1]
+
+        lim_df, actual_next_d = _read_limit_list_anyway(s, expected_next_d, warnings)
         lim_set = set(_limit_codes_from_df(lim_df))
 
+        if not actual_next_d:
+            warnings.append(f"label_pending: trade_date={d} expected_next={expected_next_d} (no snapshot yet)")
+            continue
+
         if not lim_set:
-            warnings.append(f"label_source_empty: next_trade_date={next_d} limit_list empty (warehouse/raw/tushare all failed)")
+            warnings.append(f"label_source_empty: trade_date={d} actual_next_trade_date={actual_next_d} limit_list empty")
 
         df_day = dfx[dfx["trade_date"] == d].copy()
         if df_day.empty:
@@ -448,7 +452,8 @@ def _build_train_set_from_feature_history(
             y = 1 if (code in lim_set or _to_nosuffix(code) in lim_set) else 0
             row = {
                 "trade_date": d,
-                "next_trade_date": next_d,
+                "next_trade_date": actual_next_d,          # ✅ 记录实际 used 对照日
+                "expected_next_trade_date": expected_next_d,
                 "ts_code": code,
                 "label": int(y),
             }
@@ -750,7 +755,6 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     _ensure_dir(outputs_dir)
     _ensure_dir(learning_dir)
 
-    # topn / lookback
     try:
         topn = int(getattr(s, "topn", 10) or 10)
     except Exception:
@@ -803,7 +807,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     sampling_state_path = _write_sampling_state(outputs_dir, sampling_state)
 
     # ---------------------------
-    # 1) 命中率统计（✅ 修复）
+    # 1) 命中率统计（方案A增强：expected vs actual）
     # ---------------------------
     predict_files = _list_predict_files(outputs_dir)
     predict_dates = [d for d in [_trade_date_from_output_path(p) for p in predict_files] if d]
@@ -823,35 +827,47 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 
         text = _read_text_best_effort(md_path)
 
-        # ✅ 新逻辑：从报告标题解析预测日/目标日
         pred_in_title, target_in_title = _extract_pred_and_target_from_report(text)
 
         trade_date = pred_in_title or d
-        nd = target_in_title
+        expected_nd = target_in_title
 
-        # 若标题没解析到，才退回旧逻辑（避免中断）
-        if not nd:
-            nd = _infer_next_trade_date(predict_dates, d)
-            if nd:
-                warnings.append(f"hit_rate_fallback_next_date: trade_date={trade_date} use_next={nd} (title_parse_failed)")
+        if not expected_nd:
+            expected_nd = _infer_next_trade_date(predict_dates, d)
+            if expected_nd:
+                warnings.append(f"hit_rate_fallback_next_date: trade_date={trade_date} use_next={expected_nd} (title_parse_failed)")
             else:
                 warnings.append(f"hit_rate_no_next_date: trade_date={trade_date} (title_parse_failed and no next file)")
 
-        # ✅ 只从“涨停 TOP10”那张表解析 codes
         codes = _parse_topn_codes(md_path, topn=topn)
 
-        if (not nd) or (not codes):
+        if (not expected_nd) or (not codes):
             hit_rows.append({
                 "trade_date": trade_date,
-                "next_trade_date": nd or "",
+                "expected_next_trade_date": expected_nd or "",
+                "actual_next_trade_date": "",
                 "topn": len(codes),
-                "hit": "" if not codes or not nd else 0,
-                "hit_rate": "" if not codes or not nd else 0.0,
-                "note": ("no next_trade_date" if not nd else "no topn codes parsed"),
+                "hit": "",
+                "hit_rate": "",
+                "note": ("no expected_next_trade_date" if not expected_nd else "no topn codes parsed"),
             })
             continue
 
-        lim_df = _read_limit_list_anyway(s, nd, warnings)
+        lim_df, actual_nd = _read_limit_list_anyway(s, expected_nd, warnings)
+
+        if not actual_nd:
+            # ✅ 对照数据未产生/未同步：不要写 0，写 pending
+            hit_rows.append({
+                "trade_date": trade_date,
+                "expected_next_trade_date": expected_nd,
+                "actual_next_trade_date": "",
+                "topn": len(codes),
+                "hit": "",
+                "hit_rate": "",
+                "note": "pending_label: next trading day snapshot not ready",
+            })
+            continue
+
         lim_set = _limit_codes_from_df(lim_df)
 
         hit = 0
@@ -862,7 +878,8 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         hit_rate = hit / max(1, len(codes))
         hit_rows.append({
             "trade_date": trade_date,
-            "next_trade_date": nd,
+            "expected_next_trade_date": expected_nd,
+            "actual_next_trade_date": actual_nd,
             "topn": len(codes),
             "hit": hit,
             "hit_rate": round(hit_rate, 4),
@@ -912,6 +929,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     # ---------------------------
     latest_hit = None
     if not hit_df.empty:
+        # 只取“已完成对照”的最新一条（hit 不为空）
         v = hit_df[hit_df["hit"].astype(str).str.len() > 0]
         if not v.empty:
             latest_hit = v.iloc[-1].to_dict()
@@ -943,12 +961,17 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     if latest_hit:
         md_lines.append("")
         md_lines.append(f"- trade_date：{latest_hit.get('trade_date','')}")
-        md_lines.append(f"- next_trade_date：{latest_hit.get('next_trade_date','')}")
+        # 兼容旧字段（如果历史 CSV 没有 expected/actual）
+        if "expected_next_trade_date" in latest_hit or "actual_next_trade_date" in latest_hit:
+            md_lines.append(f"- expected_next_trade_date：{latest_hit.get('expected_next_trade_date','')}")
+            md_lines.append(f"- actual_next_trade_date：{latest_hit.get('actual_next_trade_date','')}")
+        else:
+            md_lines.append(f"- next_trade_date：{latest_hit.get('next_trade_date','')}")
         md_lines.append(f"- hit/topn：{latest_hit.get('hit','')}/{latest_hit.get('topn','')}")
         md_lines.append(f"- hit_rate：{latest_hit.get('hit_rate','')}")
     else:
         md_lines.append("")
-        md_lines.append("- 暂无可验证命中（缺少下一交易日预测文件或数据）")
+        md_lines.append("- 暂无可验证命中（对照日快照尚未产生/同步，或缺少下一交易日预测文件）")
 
     md_lines.append("")
     md_lines.append("## 1.5) Auto-Sampling 状态")
@@ -1012,7 +1035,6 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# CLI 调试入口（不会影响主 pipeline）
 if __name__ == "__main__":
     s = Settings()
     out = run_step7(s, ctx={})
