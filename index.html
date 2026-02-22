@@ -55,31 +55,6 @@
       border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:14px;
       background:#fff;
     }
-    .kpi{
-      display:flex; align-items:center; justify-content:space-between;
-      gap: 10px;
-      padding: 10px 12px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: #fff;
-      margin: 8px 0 12px;
-      flex-wrap: wrap;
-    }
-    .kpi strong{font-size:14px;}
-    .kpi span{color:var(--muted); font-size:13px;}
-    .tbl-wrap{overflow:auto;}
-    table.simple{
-      border-collapse: collapse; width:100%;
-      background:#fff; border:1px solid var(--line);
-      border-radius: 12px; overflow:hidden;
-    }
-    table.simple th, table.simple td{
-      border-bottom:1px solid var(--line);
-      padding:10px 12px; font-size:14px; white-space:nowrap;
-      text-align:left;
-    }
-    table.simple th{background: var(--card); font-weight:600;}
-    table.simple tr:last-child td{border-bottom:none;}
   </style>
 
   <script>
@@ -127,34 +102,14 @@
       url.searchParams.set('d', d);
       location.href = url.toString();
     }
-
     function mdPathFor(date){
       return `outputs/predict_top10_${yyyymmdd(date)}.md`;
     }
-
-    // ✅ 新增：学习状态按日期读取（优先 date-specific，fallback latest）
-    function step7JsonPathFor(date){
-      return `outputs/learning/step7_report_${yyyymmdd(date)}.json`;
-    }
-    function step7MdPathFor(date){
-      return `outputs/learning/step7_report_${yyyymmdd(date)}.md`;
-    }
-    const STEP7_JSON_LATEST = `outputs/learning/step7_report_latest.json`;
-    const STEP7_MD_LATEST   = `outputs/learning/step7_report_latest.md`;
 
     async function fetchText(path){
       const res = await fetch(path, { cache: "no-store" });
       if(!res.ok) throw new Error(`${res.status} -> ${path}`);
       return await res.text();
-    }
-    async function fetchJson(path){
-      const res = await fetch(path, { cache: "no-store" });
-      if(!res.ok) throw new Error(`${res.status} -> ${path}`);
-      return await res.json();
-    }
-    async function exists(path){
-      const res = await fetch(path, { method: "GET", cache: "no-store" });
-      return res.ok;
     }
 
     // =============== 核心：找“最近存在的日报” ===============
@@ -188,7 +143,7 @@
         errEl.textContent =
           `在 ${yyyymmdd(targetDate)} 往前 ${LOOKBACK_DAYS} 天内，都没有找到 outputs/predict_top10_YYYYMMDD.md。\n` +
           `请确认日报文件已提交到仓库 outputs/ 目录，并能通过 Pages 访问。`;
-        return null;
+        return;
       }
 
       // 2) 更新日期选择器/提示（如果发生回退，给用户明确提示）
@@ -225,146 +180,23 @@
         reportEl.innerHTML = "";
         errEl.textContent = `读取日报失败：${e.message}`;
       }
-
-      return useDate;
     }
 
-    // =============== 学习状态：从 JSON 生成“近10日 Top10 命中率” ===============
-    function pickRecent10Array(obj){
-      if(!obj || typeof obj !== 'object') return null;
-
-      // 常见字段名兼容（你后续 step7 可以随便调整字段名，这里尽量兜底）
-      const candidates = [
-        "recent_10", "recent10", "last_10", "last10",
-        "last_10_days", "recent_10_days",
-        "hit_rate_last10", "hit_rate_10d", "top10_last10",
-        "recent_hits", "recent_summary"
-      ];
-      for(const k of candidates){
-        if(Array.isArray(obj[k])) return obj[k];
-      }
-
-      // 再兜底：找第一个“看起来像列表”的字段
-      for(const k of Object.keys(obj)){
-        if(Array.isArray(obj[k]) && obj[k].length >= 3) return obj[k];
-      }
-      return null;
-    }
-
-    function normalizeRow(r){
-      // 目标列：日期 / 命中数 / 命中率 / 当日涨停家数
-      const date = r.date || r.trade_date || r.d || r.day || r.D || r.TRADE_DATE;
-      const hit  = r.hit || r.hits || r.hit_count || r.hit_num || r.correct || r.correct_count || r.top10_hit || r.HIT;
-      const rate = r.hit_rate || r.rate || r.accuracy || r.hit_ratio || r.HIT_RATE;
-      const total = r.limit_up_total || r.limit_up_count || r.total_limit_up || r.total || r.market_limit_up || r.LIMIT_UP_TOTAL;
-
-      return { date, hit, rate, total };
-    }
-
-    function formatRate(x){
-      if(x === null || x === undefined || x === "") return "";
-      const n = Number(x);
-      if(Number.isFinite(n)){
-        // 如果是 0~1 的小数，转百分比；如果已经像 40/60 则认为是百分数
-        if(n <= 1) return `${Math.round(n*100)}%`;
-        if(n <= 100) return `${Math.round(n)}%`;
-      }
-      // 已经是字符串百分号
-      return String(x);
-    }
-
-    function renderHit10Table(rows){
-      const box = document.getElementById('hit10');
-      if(!rows || rows.length === 0){
-        box.innerHTML = `<div class="hint">未找到“近10日命中率”数据（JSON 内未识别到 last10 数组）</div>`;
-        return;
-      }
-
-      // 只取前 10 条（确保“显示10条交易日数据”）
-      const top10 = rows.slice(0, 10);
-
-      const html = [];
-      html.push(`<div class="tbl-wrap">`);
-      html.push(`<table class="simple">`);
-      html.push(`<thead><tr>
-        <th>日期</th><th>命中数</th><th>命中率</th><th>当日涨停家数</th>
-      </tr></thead>`);
-      html.push(`<tbody>`);
-
-      for(const r0 of top10){
-        const r = normalizeRow(r0);
-        html.push(`<tr>
-          <td>${r.date ?? ""}</td>
-          <td>${r.hit ?? ""}</td>
-          <td>${formatRate(r.rate)}</td>
-          <td>${r.total ?? ""}</td>
-        </tr>`);
-      }
-
-      html.push(`</tbody></table></div>`);
-      box.innerHTML = html.join("");
-    }
-
-    // =============== 加载学习状态（按日期联动） ===============
-    async function loadLearningStatus(useDate){
-      const kpiDate = document.getElementById('learning_date');
-      const hitTitle = document.getElementById('hit10_title');
-      const hitBox = document.getElementById('hit10');
-      const mdBox = document.getElementById('learning_md');
+    // =============== 加载学习状态 ===============
+    async function loadLearningStatus(){
+      const mdPath = `outputs/learning/step7_report_latest.md`;
+      const box = document.getElementById('learning');
       const err = document.getElementById('learning_err');
 
       err.textContent = "";
-      hitBox.innerHTML = `<div class="hint">正在加载近10日命中率...</div>`;
-      mdBox.innerHTML  = `<div class="hint">正在加载学习状态...</div>`;
+      box.innerHTML = `<div class="hint">正在加载：${mdPath}</div>`;
 
-      const nice = useDate ? yyyy_mm_dd(useDate) : "";
-      kpiDate.textContent = nice ? `当前查看基准日：${nice}` : `当前查看基准日：-`;
-
-      // 1) 先试 date-specific JSON（用于“近10日命中率表”）
-      let jsonPathUsed = null;
       try{
-        if(useDate && await exists(step7JsonPathFor(useDate))){
-          jsonPathUsed = step7JsonPathFor(useDate);
-        }else if(await exists(STEP7_JSON_LATEST)){
-          jsonPathUsed = STEP7_JSON_LATEST;
-        }
-
-        if(jsonPathUsed){
-          const obj = await fetchJson(jsonPathUsed);
-          const arr = pickRecent10Array(obj);
-          if(arr){
-            hitTitle.textContent = `近10日 Top10 命中率（来源：${jsonPathUsed.includes('latest') ? 'latest' : yyyymmdd(useDate)}）`;
-            renderHit10Table(arr);
-          }else{
-            hitTitle.textContent = `近10日 Top10 命中率`;
-            hitBox.innerHTML = `<div class="hint">JSON 已加载，但未识别到 last10 数组：${jsonPathUsed}</div>`;
-          }
-        }else{
-          hitBox.innerHTML = `<div class="hint">未找到 step7_report_*.json / step7_report_latest.json</div>`;
-        }
+        const md = await fetchText(mdPath);
+        box.innerHTML = marked.parse(md);
       }catch(e){
-        hitBox.innerHTML = `<div class="hint">近10日命中率加载失败：${e.message}</div>`;
-      }
-
-      // 2) 再试 date-specific MD（学习状态正文），否则 latest
-      let mdPathUsed = null;
-      try{
-        if(useDate && await exists(step7MdPathFor(useDate))){
-          mdPathUsed = step7MdPathFor(useDate);
-        }else if(await exists(STEP7_MD_LATEST)){
-          mdPathUsed = STEP7_MD_LATEST;
-        }
-
-        if(mdPathUsed){
-          const md = await fetchText(mdPathUsed);
-          mdBox.innerHTML = marked.parse(md);
-        }else{
-          mdBox.innerHTML = "";
-          err.textContent = `未能读取学习状态：缺少 step7_report_YYYYMMDD.md 与 step7_report_latest.md`;
-        }
-      }catch(e){
-        mdBox.innerHTML = "";
-        err.textContent = `未能读取学习状态：${e.message}\n请确认 learning 报告在仓库存在且 Pages 可访问。`;
+        box.innerHTML = "";
+        err.textContent = `未能读取学习状态：${e.message}\n请确认 ${mdPath} 在仓库存在且 Pages 可访问。`;
       }
     }
 
@@ -408,10 +240,8 @@
       const date = getQueryDate();
       bindNav(date);
 
-      const useDate = await loadDailyReport(date);
-      // ✅ 关键：学习状态与“近10日命中率表”统一跟随 useDate（回退后的日期）
-      if(useDate) await loadLearningStatus(useDate);
-      else await loadLearningStatus(date);
+      await loadDailyReport(date);
+      await loadLearningStatus();
     };
   </script>
 </head>
@@ -443,21 +273,8 @@
 
     <div class="card">
       <h2>学习状态</h2>
-
-      <!-- ✅ 这行让“日期/命中率/当日涨停家数”在 UI 上统一跟随选中日期（基准日） -->
-      <div class="kpi">
-        <strong id="learning_date">当前查看基准日：-</strong>
-        <span>说明：学习状态优先读取 step7_report_YYYYMMDD.*，不存在则回退 latest</span>
-      </div>
-
       <div id="learning_err" class="err"></div>
-
-      <!-- ✅ 近10日命中率表：优先来自 step7_report_YYYYMMDD.json -->
-      <h3 id="hit10_title" style="margin:12px 0 8px; font-size:15px;">近10日 Top10 命中率</h3>
-      <div id="hit10"></div>
-
-      <!-- ✅ 学习状态正文（md）：date-specific 优先，否则 latest -->
-      <div id="learning_md" class="md" style="margin-top:12px;"></div>
+      <div id="learning" class="md"></div>
     </div>
   </div>
 </body>
