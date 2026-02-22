@@ -268,21 +268,24 @@ def _infer_next_trade_date(predict_dates: List[str], d: str) -> str:
 
 def _read_limit_list_from_github_raw(next_d: str, warnings: List[str]) -> pd.DataFrame:
     """
-    兜底2：直接从 GitHub raw 拉 a-share-top3-data 的 limit_list_d.csv
-    依赖 env：
-      DATA_GITHUB_USER / DATA_REPO / DATA_BRANCH / RAW_DIR
-    """
-    user = str(os.getenv("DATA_GITHUB_USER", "")).strip()
-    repo = str(os.getenv("DATA_REPO", "")).strip()
-    branch = str(os.getenv("DATA_BRANCH", "main")).strip()
-    raw_dir = str(os.getenv("RAW_DIR", "data/raw")).strip()
+    兜底2：直接从 GitHub raw 拉 limit_list_d.csv
 
-    if not user or not repo:
-        warnings.append("github_raw: missing DATA_GITHUB_USER/DATA_REPO env; skip.")
-        return pd.DataFrame()
+    ✅ 修复：固定读取当前仓库 a-top10 的 _warehouse 路径，避免 env 拼错导致 404
+    """
+    branch = str(os.getenv("DATA_BRANCH", "main")).strip()
+
+    # Actions 标准变量：形如 "njedu2023-prog/a-top10"
+    repo_full = str(os.getenv("GITHUB_REPOSITORY", "")).strip()
+    if not repo_full:
+        repo_full = "njedu2023-prog/a-top10"  # 最后兜底写死
 
     year = next_d[:4]
-    url = f"https://raw.githubusercontent.com/{user}/{repo}/{branch}/{raw_dir}/{year}/{next_d}/limit_list_d.csv"
+    url = (
+        f"https://raw.githubusercontent.com/{repo_full}/{branch}"
+        f"/_warehouse/a-share-top3-data/data/raw/{year}/{next_d}/limit_list_d.csv"
+    )
+    warnings.append(f"github_raw_try: {url}")
+
     try:
         return pd.read_csv(url, dtype=str, encoding="utf-8-sig")
     except Exception:
