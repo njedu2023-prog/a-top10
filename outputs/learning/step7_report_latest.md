@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-02-22 20:42:41
+- 生成时间：2026-02-22 22:39:19
 - TopN：10
 - Lookback：150 天
 
@@ -42,5 +42,6 @@
 
 ## 4) Warnings
 
+- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260216/limit_list_d.csv
 - github_raw read limit_list_d failed: HTTP Error 404: Not Found
 - tushare import failed: No module named 'tushare'

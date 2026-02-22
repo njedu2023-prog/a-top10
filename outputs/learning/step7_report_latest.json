@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-22 20:42:41",
+  "ts": "2026-02-22 22:39:19",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -123,8 +123,8 @@
     },
     "pseudo_ratio": 0.07598253275109171,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-22T12:42:40Z",
-    "model_version": "21191f16305293e975595924aa6850b32a6ad542"
+    "updated_at_utc": "2026-02-22T14:39:18Z",
+    "model_version": "f3b4ef225317ba6dff4ac7a4d779a35dca7409bd"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
@@ -142,6 +142,7 @@
     }
   },
   "warnings": [
+    "github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260216/limit_list_d.csv",
     "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
     "tushare import failed: No module named 'tushare'"
   ]
