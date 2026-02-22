@@ -19,6 +19,10 @@ concurrency:
   group: top10-daily
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -63,7 +67,6 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        shell: bash
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
@@ -76,7 +79,6 @@ jobs:
       # Resolve trade_date (P0 gate: open_times & seal_amount required)
       - name: Resolve trade_date (manual or auto, with P0 gate)
         id: resolve_date
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -138,7 +140,6 @@ jobs:
       # Sync ONLY the resolved trade_date directory into _warehouse (system contract)
       - name: Sync TOP3 snapshot to _warehouse (ONLY trade_date dir)
         id: sync_top3
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -148,7 +149,7 @@ jobs:
           src_dir="${RAW_DIR}/${year}/${trade_date}"
           dest_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"
 
-          rm -rf _tmp_top3
+          rm -rf _tmp_top3 || true
           git clone --depth 1 --filter=blob:none --sparse \
             --branch "${DATA_BRANCH}" \
             "https://github.com/${DATA_GITHUB_USER}/${DATA_REPO}.git" _tmp_top3
@@ -173,7 +174,6 @@ jobs:
 
       # Debug: print header/columns for limit_list_d.csv (proof of sync)
       - name: Debug synced limit_list_d (header + columns)
-        shell: bash
         run: |
           set -euo pipefail
           td="${{ steps.resolve_date.outputs.trade_date }}"
@@ -185,7 +185,6 @@ jobs:
 
       # Quality gate (required files + key columns)
       - name: Quality gate (required files + key columns)
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -219,7 +218,6 @@ jobs:
           retention-days: 30
 
       - name: Run Top10 Engine + Step7
-        shell: bash
         env:
           TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
         run: |
@@ -231,27 +229,26 @@ jobs:
           fi
           python -m a_top10.steps.step7_self_learning
 
-      - name: Step7 artifacts check + stamp (always)
+      # ✅ Stamp (single file overwrite)
+      - name: Stamp last run (always)
         if: always()
-        shell: bash
         run: |
           set -euo pipefail
           td="${{ steps.resolve_date.outputs.trade_date }}"
           rid="${{ github.run_id }}"
+          sha="${{ github.sha }}"
           mkdir -p outputs/learning
-          echo "run_id=${rid} trade_date=${td} utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "outputs/learning/_last_run_${td}_${rid}.txt"
+          echo "trade_date=${td} run_id=${rid} commit_sha=${sha} utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "outputs/learning/_last_run.txt"
 
       # ✅ Commit & push: outputs + models + _warehouse(today)
       - name: Commit & push outputs + models + _warehouse(today) (always)
         if: always()
-        shell: bash
         run: |
           set -euo pipefail
 
           td="${{ steps.resolve_date.outputs.trade_date }}"
           y="${td:0:4}"
           rid="${{ github.run_id }}"
-          year_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${y}"
           snap_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${y}/${td}"
 
           git config user.name "github-actions[bot]"
@@ -267,6 +264,6 @@ jobs:
             exit 0
           fi
 
-          git commit -m "auto: sync top3 snapshot into _warehouse ${td} (run=${rid})" || true
+          git commit -m "auto: run top10 ${td} (run=${rid})" || true
           git pull --rebase origin main || true
           git push || true
