@@ -1,17 +1,17 @@
 {
-  "ts": "2026-02-23 06:52:08",
+  "ts": "2026-02-23 06:56:45",
   "topn": 10,
   "lookback_days": 150,
   "today_yyyymmdd": "20260223",
   "latest_snapshot_yyyymmdd": "20260213",
   "label_upper_bound_yyyymmdd": "20260213",
   "latest_hit": {
-    "trade_date": "20260211",
-    "expected_next_trade_date": "20260212",
-    "actual_next_trade_date": "20260212",
+    "trade_date": "20260212",
+    "expected_next_trade_date": "20260213",
+    "actual_next_trade_date": "20260213",
     "topn": 10,
-    "hit": 7,
-    "hit_rate": 0.7,
+    "hit": 3,
+    "hit_rate": 0.3,
     "note": "src=pred_top10_history"
   },
   "hit_rows_all": [
@@ -22,6 +22,15 @@
       "topn": 10,
       "hit": 7,
       "hit_rate": 0.7,
+      "note": "src=pred_top10_history"
+    },
+    {
+      "trade_date": "20260212",
+      "expected_next_trade_date": "20260213",
+      "actual_next_trade_date": "20260213",
+      "topn": 10,
+      "hit": 3,
+      "hit_rate": 0.3,
       "note": "src=pred_top10_history"
     },
     {
@@ -41,6 +50,13 @@
       "topn": 10,
       "hit": 7,
       "hit_rate": "0.7"
+    },
+    {
+      "trade_date": "20260212",
+      "actual_next_trade_date": "20260213",
+      "topn": 10,
+      "hit": 3,
+      "hit_rate": "0.3"
     }
   ],
   "train_meta": {
@@ -156,8 +172,8 @@
     },
     "pseudo_ratio": 0.07598253275109171,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-22T22:52:07Z",
-    "model_version": "f355518d328751f0fbdce2f80e90d881ca379b0f",
+    "updated_at_utc": "2026-02-22T22:56:44Z",
+    "model_version": "040fb22158ea4327da43125eace9405b03074867",
     "today_yyyymmdd": "20260223",
     "latest_snapshot_yyyymmdd": "20260213",
     "label_upper_bound_yyyymmdd": "20260213"
