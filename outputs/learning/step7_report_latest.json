@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-22 20:16:47",
+  "ts": "2026-02-22 20:28:32",
   "topn": 10,
   "lookback_days": 150,
   "latest_hit": {
@@ -78,7 +78,7 @@
         "seal_amount": {
           "non_null_rate": 1.0,
           "non_zero_rate": 0.8908296943231441,
-          "std": 247735051.71998233,
+          "std": 247735051.71998236,
           "unique_count": 1021
         },
         "open_times": {
@@ -90,7 +90,7 @@
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.23151239774751572,
+          "std": 0.23431807594308632,
           "unique_count": 1094
         }
       },
@@ -123,8 +123,8 @@
     },
     "pseudo_ratio": 0.07598253275109171,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-22T12:16:46Z",
-    "model_version": "e905ae2211ec6eb245c9390ab855ffb836cf24a9"
+    "updated_at_utc": "2026-02-22T12:28:32Z",
+    "model_version": "6be84fe953c7dd11842ddf6748d280c16d9ba8e2"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
