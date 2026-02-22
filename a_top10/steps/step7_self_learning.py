@@ -25,6 +25,12 @@ Step7：自学习闭环更新模型权重（命中率滚动提升）
 - 移除 “days_covered>=30 才训练” 的硬门槛（它会让你永远 trained=False）
   -> 训练是否执行只由 MIN_SAMPLES / MIN_POS / single_class 决定
 - 报告 3) 训练执行结果：无论训练是否执行，都要写 train_rows、pos/neg、reason
+
+✅ 本次新增修复（只修命中率统计，不破坏其它功能）：
+- 命中率统计不再用“预测文件日期列表的下一天”推断 next_trade_date
+  -> 改为从预测报告标题《YYYYMMDD 预测：YYYYMMDD 涨停 TOP 10》解析 target day
+- TopN 代码解析仅解析“涨停 TOP 10”对应的第一张表（支持 md 管道表 / html table）
+  -> 避免误解析“命中情况表/近10日命中率表”等其它表导致命中数错误
 """
 
 from __future__ import annotations
@@ -105,17 +111,100 @@ def _read_text_best_effort(p: Path) -> str:
                 return ""
 
 
+# ============================================================
+# ✅ 新增：从报告标题解析 “预测日 -> 目标日（下一交易日）”
+# ============================================================
+
+def _extract_pred_and_target_from_report(text: str) -> Tuple[str, str]:
+    """
+    尝试从报告标题中解析：
+      《20260212 预测：20260213 涨停 TOP 10》
+    返回：(pred_date, target_date)
+    若找不到则返回 ("","")
+    """
+    if not text:
+        return "", ""
+
+    # 最强约束：必须带“涨停 TOP”
+    pat = re.compile(r"《\s*(\d{8})\s*预测：\s*(\d{8})\s*涨停\s*TOP\s*10\s*》")
+    m = pat.search(text)
+    if m:
+        return m.group(1), m.group(2)
+
+    # 兼容：TOP10/Top 10/空格等
+    pat2 = re.compile(r"《\s*(\d{8})\s*预测：\s*(\d{8})\s*涨停\s*TOP\s*10", re.IGNORECASE)
+    m2 = pat2.search(text)
+    if m2:
+        return m2.group(1), m2.group(2)
+
+    return "", ""
+
+
+# ============================================================
+# ✅ 修复：只解析“涨停 TOP10”那张表的 TopN codes（支持 md 管道表 / html table）
+# ============================================================
+
 def _parse_topn_codes(md_path: Path, topn: int) -> List[str]:
-    """从预测报告 md 表格中解析 TopN 代码。"""
+    """
+    从预测报告 md 中解析 TopN 代码：
+    - 只解析《YYYYMMDD 预测：YYYYMMDD 涨停 TOP 10》对应的第一张表
+    - 支持：
+        1) markdown pipe table: | 1 | 000001.SZ | ...
+        2) html table: <tr><td>1</td><td>000001.SZ</td>...
+    """
     text = _read_text_best_effort(md_path)
     if not text:
         return []
+
+    # 1) 定位“涨停 TOP 10”标题附近的片段，避免扫到其它表
+    anchor = None
+    for key in ["涨停 TOP 10", "涨停TOP 10", "涨停 TOP10", "涨停TOP10"]:
+        idx = text.find(key)
+        if idx >= 0:
+            anchor = idx
+            break
+
+    # 若找不到 anchor，就退化为原逻辑（但仍尽量安全）
+    scope = text[anchor:] if anchor is not None else text
+
+    # 2) 优先解析 html table（你系统里确实会输出 <table>）
     codes: List[str] = []
-    pat = re.compile(r"^\s*\|\s*\d+\s*\|\s*([0-9A-Za-z\.\-]+)\s*\|")
-    for line in text.splitlines():
-        m = pat.match(line)
-        if m:
+    # 找第一张 <table>...</table>
+    m_table = re.search(r"<table\b.*?>.*?</table>", scope, flags=re.IGNORECASE | re.DOTALL)
+    if m_table:
+        table_html = m_table.group(0)
+        # 行形如：<tr><td>1</td><td>600000.SH</td>...
+        for m in re.finditer(r"<tr>\s*<td>\s*\d+\s*</td>\s*<td>\s*([^<\s]+)\s*</td>", table_html, flags=re.IGNORECASE):
             codes.append(m.group(1).strip())
+            if len(codes) >= int(topn):
+                break
+        codes = [c for c in codes if c]
+        return codes[: int(topn)]
+
+    # 3) 解析 markdown pipe table（只解析 anchor 后第一张管道表）
+    lines = scope.splitlines()
+    in_table = False
+    for line in lines:
+        s = line.strip()
+        if not s:
+            if in_table:
+                break
+            continue
+
+        # 表开始判定：遇到类似 "| 排名 | 代码 |" 或 "| 1 | 000001.SZ |"
+        if s.startswith("|") and s.endswith("|"):
+            in_table = True
+            # 数据行：| 1 | 000001.SZ | ...
+            m = re.match(r"^\|\s*\d+\s*\|\s*([0-9A-Za-z\.\-]+)\s*\|", s)
+            if m:
+                codes.append(m.group(1).strip())
+                if len(codes) >= int(topn):
+                    break
+        else:
+            # 一旦离开 table 区域就停止
+            if in_table:
+                break
+
     codes = [c for c in codes if c]
     return codes[: int(topn)]
 
@@ -163,7 +252,7 @@ def _list_predict_files(outputs_dir: Path) -> List[Path]:
 
 
 def _infer_next_trade_date(predict_dates: List[str], d: str) -> str:
-    # 简单：用预测文件日期列表中的下一天
+    # 旧逻辑保留（作为最后 fallback）
     try:
         idx = predict_dates.index(d)
         if idx < len(predict_dates) - 1:
@@ -222,7 +311,6 @@ def _read_limit_list_from_tushare(next_d: str, warnings: List[str]) -> pd.DataFr
     try:
         ts.set_token(token)
         pro = ts.pro_api()
-        # fields 尽量包含 ts_code
         df = pro.limit_list_d(trade_date=next_d, fields="trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount")
         if df is None:
             return pd.DataFrame()
@@ -236,11 +324,10 @@ def _read_limit_list_anyway(s: Settings, trade_date: str, warnings: List[str]) -
     """
     ✅ 关键修复：确保 next_trade_date 的 limit_list_d 能读到
     优先级：
-      1) s.data_repo.read_limit_list(trade_date)   （如果本次 _warehouse 有）
-      2) GitHub RAW 拉取                         （与你的架构最一致）
-      3) tushare API 拉取                         （最后兜底）
+      1) s.data_repo.read_limit_list(trade_date)
+      2) GitHub RAW 拉取
+      3) tushare API 拉取
     """
-    # 1) 本地/warehouse
     try:
         df = s.data_repo.read_limit_list(trade_date)  # type: ignore[attr-defined]
         if df is not None and not df.empty:
@@ -248,12 +335,10 @@ def _read_limit_list_anyway(s: Settings, trade_date: str, warnings: List[str]) -
     except Exception as e:
         warnings.append(f"read_limit_list (warehouse) failed: {e}")
 
-    # 2) GitHub raw
     df2 = _read_limit_list_from_github_raw(trade_date, warnings)
     if df2 is not None and not df2.empty:
         return df2
 
-    # 3) tushare
     df3 = _read_limit_list_from_tushare(trade_date, warnings)
     return df3 if df3 is not None else pd.DataFrame()
 
@@ -268,10 +353,6 @@ def _build_train_set_from_feature_history(
     warnings: List[str],
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    feature_history.csv 列（目前仓库已经是这些）：
-    run_time_utc, trade_date, ts_code, name, Probability, _prob_src,
-    StrengthScore, ThemeBoost, seal_amount, open_times, turnover_rate, _prob_warn
-
     训练样本：
     - X：StrengthScore/ThemeBoost/seal_amount/open_times/turnover_rate
     - y：next_day 是否涨停（用 next_trade_date 的 limit_list_d.csv）
@@ -292,7 +373,6 @@ def _build_train_set_from_feature_history(
         warnings.append("feature_history.csv not found: training skipped.")
         return pd.DataFrame(), meta
 
-    # robust read
     df = None
     for enc in ("utf-8-sig", "utf-8", "gbk"):
         try:
@@ -345,12 +425,10 @@ def _build_train_set_from_feature_history(
         warnings.append("all rows are all-zero features: training skipped.")
         return pd.DataFrame(), meta
 
-    # label
     dates2 = sorted([d for d in dfx["trade_date"].unique().tolist() if re.match(r"^\d{8}$", str(d))])
     rows: List[Dict[str, Any]] = []
 
     for i, d in enumerate(dates2[:-1]):
-        # ✅ next_d 用 feature_history 中的下一天（你现有体系）
         next_d = dates2[i + 1]
         lim_df = _read_limit_list_anyway(s, next_d, warnings)
         lim_set = set(_limit_codes_from_df(lim_df))
@@ -452,7 +530,6 @@ def _train_and_save_models(s: Settings, train_df: pd.DataFrame, warnings: List[s
         "detail": {},
     }
 
-    # 先把基础统计写进去（即使后面 skip，也不会空）
     if train_df is None or train_df.empty:
         warnings.append("train_df empty: training skipped.")
         res["detail"] = {"reason": "train_df empty", "train_rows": 0, "pos": 0, "neg": 0}
@@ -482,13 +559,11 @@ def _train_and_save_models(s: Settings, train_df: pd.DataFrame, warnings: List[s
     models_dir = _get_models_dir(s)
     res["models_dir"] = str(models_dir)
 
-    # Train LR (must)
     lr_model = _train_lr(train_df, warnings)
     lr_path = models_dir / LR_MODEL_PATH.name
     lr_saved = _save_joblib_model(lr_model, lr_path, warnings)
     res["lr_saved"] = bool(lr_saved)
 
-    # Train LGBM (optional)
     lgbm_model = _train_lgbm(train_df, warnings)
     lgbm_path = models_dir / LGBM_MODEL_PATH.name
     lgbm_saved = _save_joblib_model(lgbm_model, lgbm_path, warnings)
@@ -558,7 +633,6 @@ def _quality_gate_v1(df: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
         details["pass"] = False
         return False, details
 
-    # 最近 30 个交易日窗口
     try:
         dates = sorted(df["trade_date"].astype(str).unique())
         recent_dates = dates[-30:] if len(dates) >= 30 else dates
@@ -726,7 +800,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     sampling_state_path = _write_sampling_state(outputs_dir, sampling_state)
 
     # ---------------------------
-    # 1) 命中率统计
+    # 1) 命中率统计（✅ 修复）
     # ---------------------------
     predict_files = _list_predict_files(outputs_dir)
     predict_dates = [d for d in [_trade_date_from_output_path(p) for p in predict_files] if d]
@@ -744,17 +818,33 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         if md_path is None or not md_path.exists():
             continue
 
-        nd = _infer_next_trade_date(predict_dates, d)
+        text = _read_text_best_effort(md_path)
+
+        # ✅ 新逻辑：从报告标题解析预测日/目标日
+        pred_in_title, target_in_title = _extract_pred_and_target_from_report(text)
+
+        trade_date = pred_in_title or d
+        nd = target_in_title
+
+        # 若标题没解析到，才退回旧逻辑（避免中断）
+        if not nd:
+            nd = _infer_next_trade_date(predict_dates, d)
+            if nd:
+                warnings.append(f"hit_rate_fallback_next_date: trade_date={trade_date} use_next={nd} (title_parse_failed)")
+            else:
+                warnings.append(f"hit_rate_no_next_date: trade_date={trade_date} (title_parse_failed and no next file)")
+
+        # ✅ 只从“涨停 TOP10”那张表解析 codes
         codes = _parse_topn_codes(md_path, topn=topn)
 
-        if not nd:
+        if (not nd) or (not codes):
             hit_rows.append({
-                "trade_date": d,
-                "next_trade_date": "",
+                "trade_date": trade_date,
+                "next_trade_date": nd or "",
                 "topn": len(codes),
-                "hit": "",
-                "hit_rate": "",
-                "note": "no next_trade_date",
+                "hit": "" if not codes or not nd else 0,
+                "hit_rate": "" if not codes or not nd else 0.0,
+                "note": ("no next_trade_date" if not nd else "no topn codes parsed"),
             })
             continue
 
@@ -768,7 +858,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 
         hit_rate = hit / max(1, len(codes))
         hit_rows.append({
-            "trade_date": d,
+            "trade_date": trade_date,
             "next_trade_date": nd,
             "topn": len(codes),
             "hit": hit,
@@ -790,12 +880,9 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         warnings=warnings,
     )
 
-    # ✅ 修复：不再用 days_covered>=30 卡死训练
-    # 训练是否执行只由 quality_gate + MIN_SAMPLES/MIN_POS 决定
     if bool(sampling_state.get("quality_gate_pass")):
         train_result = _train_and_save_models(s=s, train_df=train_df, warnings=warnings)
     else:
-        # 仍然把 train_rows/pos/neg 填满，避免报告空
         if train_df is None or train_df.empty:
             tr = {"train_rows": 0, "pos": 0, "neg": 0}
         else:
