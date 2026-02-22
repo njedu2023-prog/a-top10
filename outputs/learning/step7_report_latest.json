@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-23 07:40:25",
+  "ts": "2026-02-23 07:42:42",
   "topn": 10,
   "lookback_days": 150,
   "today_yyyymmdd": "20260223",
@@ -15,6 +15,15 @@
     "note": "src=pred_top10_history"
   },
   "hit_rows_all": [
+    {
+      "trade_date": "20260128",
+      "expected_next_trade_date": "20260129",
+      "actual_next_trade_date": "20260129",
+      "topn": 10,
+      "hit": 4,
+      "hit_rate": 0.4,
+      "note": "src=pred_top10_history"
+    },
     {
       "trade_date": "20260129",
       "expected_next_trade_date": "20260130",
@@ -276,7 +285,7 @@
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.2194230108018881,
+          "std": 0.2173241689089006,
           "unique_count": 1094
         }
       },
@@ -309,8 +318,8 @@
     },
     "pseudo_ratio": 0.07598253275109171,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-22T23:40:25Z",
-    "model_version": "4fed144ac8c76b4d2124f1cb9e33c19249fa4c96",
+    "updated_at_utc": "2026-02-22T23:42:41Z",
+    "model_version": "c32137cc3408cd8187b8b4768b05f8ba368e9ac2",
     "today_yyyymmdd": "20260223",
     "latest_snapshot_yyyymmdd": "20260213",
     "label_upper_bound_yyyymmdd": "20260213"
