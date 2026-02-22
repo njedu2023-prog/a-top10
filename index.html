@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>A-Share TOP10</title>
 
+  <!-- Markdown 渲染库（前端直接把 .md 转成 HTML） -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
   <style>
@@ -19,6 +20,7 @@
     .wrap{max-width: 980px; margin: 0 auto; padding: 24px 16px 60px;}
     header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px;}
     h1{font-size:16px; margin:0; letter-spacing:.5px;}
+    .sub{color:var(--muted); font-size:14px; margin-top:6px;}
     .nav{display:flex; gap:10px; align-items:center;}
     button{
       border:1px solid var(--line);
@@ -53,38 +55,11 @@
       border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:14px;
       background:#fff;
     }
-    .kpi{
-      display:flex; align-items:center; justify-content:space-between;
-      gap:10px; flex-wrap:wrap;
-      padding:10px 12px;
-      border:1px solid var(--line);
-      border-radius:12px;
-      background:#fff;
-      margin: 8px 0 12px;
-    }
-    .kpi strong{font-size:14px;}
-    .kpi span{color:var(--muted); font-size:13px;}
-    .tbl-wrap{overflow:auto;}
-    table.simple{
-      border-collapse: collapse; width:100%;
-      background:#fff; border:1px solid var(--line);
-      border-radius: 12px; overflow:hidden;
-    }
-    table.simple th, table.simple td{
-      border-bottom:1px solid var(--line);
-      padding:10px 12px; font-size:14px; white-space:nowrap;
-      text-align:left;
-    }
-    table.simple th{background: var(--card); font-weight:600;}
-    table.simple tr:last-child td{border-bottom:none;}
   </style>
 
   <script>
-    const LOOKBACK_DAYS = 60;
-
-    const STEP7_JSON_LATEST = "outputs/learning/step7_report_latest.json";
-    const STEP7_MD_LATEST   = "outputs/learning/step7_report_latest.md";
-    const STEP7_HIT_CSV     = "outputs/learning/step7_hit_rate_history.csv";
+    // =============== 基础工具 ===============
+    const LOOKBACK_DAYS = 60; // 没有日报时，最多向前回退多少天去找“最近可用日报”
 
     function yyyymmdd(date){
       const y = date.getFullYear();
@@ -92,12 +67,14 @@
       const d = String(date.getDate()).padStart(2,'0');
       return `${y}${m}${d}`;
     }
+
     function yyyy_mm_dd(date){
       const y = date.getFullYear();
       const m = String(date.getMonth()+1).padStart(2,'0');
       const d = String(date.getDate()).padStart(2,'0');
       return `${y}-${m}-${d}`;
     }
+
     function toDateInputValue(date){
       const y = date.getFullYear();
       const m = String(date.getMonth()+1).padStart(2,'0');
@@ -117,7 +94,7 @@
         const dd = parseInt(d.slice(6,8),10);
         return new Date(y, m-1, dd);
       }
-      return new Date();
+      return new Date(); // 默认今天
     }
     function setQueryDate(date){
       const d = yyyymmdd(date);
@@ -134,26 +111,8 @@
       if(!res.ok) throw new Error(`${res.status} -> ${path}`);
       return await res.text();
     }
-    async function fetchJson(path){
-      const res = await fetch(path, { cache: "no-store" });
-      if(!res.ok) throw new Error(`${res.status} -> ${path}`);
-      return await res.json();
-    }
-    async function exists(path){
-      const res = await fetch(path, { method: "GET", cache: "no-store" });
-      return res.ok;
-    }
 
-    // ---- 关键：把任何日期字符串归一化成 YYYYMMDD（用于比较和截断）
-    function normDateKey(x){
-      if(x === null || x === undefined) return "";
-      const s = String(x).trim();
-      if(!s) return "";
-      const digits = s.replace(/[^0-9]/g, "");
-      if(digits.length >= 8) return digits.slice(0,8);
-      return "";
-    }
-
+    // =============== 核心：找“最近存在的日报” ===============
     async function findNearestExistingReportDate(startDate){
       for(let i=0; i<=LOOKBACK_DAYS; i++){
         const d = new Date(startDate);
@@ -165,6 +124,7 @@
       return null;
     }
 
+    // =============== 加载日报 ===============
     async function loadDailyReport(targetDate){
       const titleEl = document.getElementById('title');
       const reportEl = document.getElementById('report');
@@ -175,6 +135,7 @@
       errEl.textContent = "";
       reportEl.innerHTML = `<div class="hint">正在定位可用日报（最多回退 ${LOOKBACK_DAYS} 天）...</div>`;
 
+      // 1) 找最近存在的日报日期
       const useDate = await findNearestExistingReportDate(targetDate);
       if(!useDate){
         titleEl.textContent = `A-Share TOP10`;
@@ -182,9 +143,10 @@
         errEl.textContent =
           `在 ${yyyymmdd(targetDate)} 往前 ${LOOKBACK_DAYS} 天内，都没有找到 outputs/predict_top10_YYYYMMDD.md。\n` +
           `请确认日报文件已提交到仓库 outputs/ 目录，并能通过 Pages 访问。`;
-        return null;
+        return;
       }
 
+      // 2) 更新日期选择器/提示（如果发生回退，给用户明确提示）
       picker.value = toDateInputValue(useDate);
       const targetStr = yyyymmdd(targetDate);
       const useStr = yyyymmdd(useDate);
@@ -192,15 +154,19 @@
         ? `提示：你选择的 ${targetStr} 无日报，已自动回退到最近可用日报 ${useStr}`
         : `提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告`;
 
+      // 3) 标题强制使用统一格式（动态日期）
       const niceDate = yyyy_mm_dd(useDate);
       titleEl.textContent = `A-Share TOP10 - ${niceDate}`;
       document.title = `A-Share TOP10 - ${niceDate}`;
 
+      // 4) 拉取并渲染 markdown（先删掉 md 第一行标题）
       const path = mdPathFor(useDate);
       reportEl.innerHTML = `<div class="hint">正在加载：${path}</div>`;
 
       try{
         const md = await fetchText(path);
+
+        // 去掉 md 的第一行标题（例如：# 20260213 预测报告）
         let md2 = md;
         const lines = md2.split(/\r?\n/);
         if (lines.length > 0 && lines[0].trim().startsWith('#')) {
@@ -208,210 +174,33 @@
           while (lines.length > 0 && lines[0].trim() === '') lines.shift();
           md2 = lines.join('\n');
         }
+
         reportEl.innerHTML = marked.parse(md2);
       }catch(e){
         reportEl.innerHTML = "";
         errEl.textContent = `读取日报失败：${e.message}`;
       }
-
-      return useDate;
     }
 
-    function formatRate(x){
-      if(x === null || x === undefined || x === "") return "";
-      const n = Number(x);
-      if(Number.isFinite(n)){
-        if(n <= 1) return `${Math.round(n*100)}%`;
-        if(n <= 100) return `${Math.round(n)}%`;
-      }
-      return String(x);
-    }
-
-    function renderHit10Table(rows, baseKey, sourceLabel){
-      const box = document.getElementById('hit10');
-      const title = document.getElementById('hit10_title');
-
-      if(!rows || rows.length === 0){
-        title.textContent = `近10日 Top10 命中率`;
-        box.innerHTML = `<div class="hint">未找到可渲染数据</div>`;
-        return;
-      }
-
-      // ✅ 核心：按基准日截断（<= baseKey），再取最近10条
-      const filtered = rows
-        .filter(r => normDateKey(r.date) && normDateKey(r.date) <= baseKey)
-        .sort((a,b)=> normDateKey(b.date).localeCompare(normDateKey(a.date)));
-
-      const top10 = filtered.slice(0, 10);
-
-      title.textContent = `近10日 Top10 命中率（基准日<=${baseKey}，${sourceLabel}）`;
-
-      const html = [];
-      html.push(`<div class="tbl-wrap"><table class="simple">`);
-      html.push(`<thead><tr>
-        <th>日期</th><th>命中数</th><th>命中率</th><th>当日涨停家数</th>
-      </tr></thead><tbody>`);
-
-      for(const r of top10){
-        html.push(`<tr>
-          <td>${r.date ?? ""}</td>
-          <td>${r.hit ?? ""}</td>
-          <td>${formatRate(r.rate)}</td>
-          <td>${r.total ?? ""}</td>
-        </tr>`);
-      }
-
-      html.push(`</tbody></table></div>`);
-      box.innerHTML = html.join("");
-    }
-
-    // ------- CSV 解析（优先）
-    function parseCsv(text){
-      const lines = text.split(/\r?\n/).filter(x=>x.trim()!=="");
-      if(lines.length < 2) return { header: [], rows: [] };
-
-      const header = lines[0].split(",").map(s=>s.trim());
-      const rows = [];
-      for(let i=1; i<lines.length; i++){
-        const cols = lines[i].split(",").map(s=>s.trim());
-        const obj = {};
-        for(let j=0; j<header.length && j<cols.length; j++){
-          obj[header[j]] = cols[j];
-        }
-        rows.push(obj);
-      }
-      return { header, rows };
-    }
-
-    function pickCsvCols(header){
-      const pick = (cands) => {
-        for(const c of cands){
-          const idx = header.findIndex(h=>h===c);
-          if(idx>=0) return c;
-        }
-        return null;
-      };
-      return {
-        date:  pick(["trade_date","date","d","day"]),
-        hit:   pick(["hit","hits","hit_count","hit_num","correct","correct_count","top10_hit"]),
-        rate:  pick(["hit_rate","rate","accuracy","hit_ratio"]),
-        total: pick(["limit_up_total","limit_up_count","total_limit_up","total","market_limit_up"])
-      };
-    }
-
-    function rowsFromCsv(parsed){
-      const { header, rows } = parsed;
-      const m = pickCsvCols(header);
-      if(!m.date) return [];
-      return rows.map(r=>({
-        date: r[m.date],
-        hit:  m.hit ? r[m.hit] : "",
-        rate: m.rate ? r[m.rate] : "",
-        total: m.total ? r[m.total] : ""
-      })).filter(x=>x.date);
-    }
-
-    // ------- JSON 兜底（深度找数组）
-    function normalizeJsonRow(r){
-      if(!r || typeof r !== "object") return null;
-      const date = r.date || r.trade_date || r.d || r.day || r.D || r.TRADE_DATE;
-      const hit  = r.hit || r.hits || r.hit_count || r.hit_num || r.correct || r.correct_count || r.top10_hit || r.HIT;
-      const rate = r.hit_rate || r.rate || r.accuracy || r.hit_ratio || r.HIT_RATE;
-      const total = r.limit_up_total || r.limit_up_count || r.total_limit_up || r.total || r.market_limit_up || r.LIMIT_UP_TOTAL;
-      if(date === undefined && hit === undefined && rate === undefined && total === undefined) return null;
-      return { date, hit, rate, total };
-    }
-
-    function scoreArrayAsHitTable(arr){
-      if(!Array.isArray(arr) || arr.length === 0) return -1;
-      let score = 0;
-      let valid = 0;
-      for(let i=0; i<Math.min(arr.length, 30); i++){
-        const n = normalizeJsonRow(arr[i]);
-        if(!n) continue;
-        valid++;
-        if(n.date) score += 3;
-        if(n.hit !== undefined && n.hit !== null && n.hit !== "") score += 2;
-        if(n.rate !== undefined && n.rate !== null && n.rate !== "") score += 2;
-        if(n.total !== undefined && n.total !== null && n.total !== "") score += 1;
-      }
-      if(valid < 3) return -1;
-      if(arr.length >= 10) score += 5;
-      return score;
-    }
-
-    function deepFindBestHitArray(obj){
-      let best = { score: -1, arr: null };
-      const visit = (node, depth) => {
-        if(depth > 10) return;
-        if(Array.isArray(node)){
-          const s = scoreArrayAsHitTable(node);
-          if(s > best.score) best = { score: s, arr: node };
-          for(const x of node){
-            if(x && typeof x === "object") visit(x, depth+1);
-          }
-          return;
-        }
-        if(node && typeof node === "object"){
-          for(const k of Object.keys(node)){
-            const v = node[k];
-            if(v && (typeof v === "object")) visit(v, depth+1);
-          }
-        }
-      };
-      visit(obj, 0);
-      return best.arr;
-    }
-
-    async function loadLearningStatus(useDate){
-      const kpi = document.getElementById('learning_kpi');
+    // =============== 加载学习状态 ===============
+    async function loadLearningStatus(){
+      const mdPath = `outputs/learning/step7_report_latest.md`;
+      const box = document.getElementById('learning');
       const err = document.getElementById('learning_err');
-      const mdBox = document.getElementById('learning_md');
 
       err.textContent = "";
-      mdBox.innerHTML = "";
+      box.innerHTML = `<div class="hint">正在加载：${mdPath}</div>`;
 
-      const baseKey = yyyymmdd(useDate);
-
-      kpi.innerHTML = `
-        <strong>当前查看基准日：${useDate ? yyyy_mm_dd(useDate) : "-"}</strong>
-        <span>说明：近10日表=“<=基准日”的最近10个交易日（纯前端截断）</span>
-      `;
-
-      // 1) 近10日表：优先 CSV（能随基准日动态变化）
       try{
-        if(await exists(STEP7_HIT_CSV)){
-          const csvText = await fetchText(STEP7_HIT_CSV);
-          const parsed = parseCsv(csvText);
-          const rows = rowsFromCsv(parsed);
-          renderHit10Table(rows, baseKey, `来源：${STEP7_HIT_CSV}`);
-        }else{
-          // 2) 兜底 JSON
-          const obj = await fetchJson(STEP7_JSON_LATEST);
-          const bestArr = deepFindBestHitArray(obj);
-          if(bestArr){
-            const rows = bestArr.map(normalizeJsonRow).filter(x=>x && x.date);
-            renderHit10Table(rows, baseKey, `来源：${STEP7_JSON_LATEST}`);
-          }else{
-            renderHit10Table([], baseKey, "无可用数据");
-          }
-        }
+        const md = await fetchText(mdPath);
+        box.innerHTML = marked.parse(md);
       }catch(e){
-        document.getElementById('hit10').innerHTML = "";
-        err.textContent = `近10日命中率表渲染失败：${e.message}`;
-      }
-
-      // learning md（可选）
-      try{
-        if(await exists(STEP7_MD_LATEST)){
-          const md = await fetchText(STEP7_MD_LATEST);
-          mdBox.innerHTML = marked.parse(md);
-        }
-      }catch(_){
-        mdBox.innerHTML = "";
+        box.innerHTML = "";
+        err.textContent = `未能读取学习状态：${e.message}\n请确认 ${mdPath} 在仓库存在且 Pages 可访问。`;
       }
     }
 
+    // =============== 导航：跳过缺失日报 ===============
     async function jumpByDaysSkippingMissing(currentDate, delta){
       for(let i=1; i<=LOOKBACK_DAYS; i++){
         const d = new Date(currentDate);
@@ -451,8 +240,8 @@
       const date = getQueryDate();
       bindNav(date);
 
-      const useDate = await loadDailyReport(date);
-      await loadLearningStatus(useDate || date);
+      await loadDailyReport(date);
+      await loadLearningStatus();
     };
   </script>
 </head>
@@ -484,14 +273,8 @@
 
     <div class="card">
       <h2>学习状态</h2>
-
-      <div id="learning_kpi" class="kpi"></div>
       <div id="learning_err" class="err"></div>
-
-      <h3 id="hit10_title" style="margin:12px 0 8px; font-size:15px;">近10日 Top10 命中率</h3>
-      <div id="hit10"></div>
-
-      <div id="learning_md" class="md" style="margin-top:12px;"></div>
+      <div id="learning" class="md"></div>
     </div>
   </div>
 </body>
