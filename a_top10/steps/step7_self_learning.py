@@ -9,22 +9,30 @@ Step7：自学习闭环更新模型权重（命中率滚动提升）
   upper_bound = min(today, latest_snapshot_date_in_repo)
 - 如果 expected_next_trade_date > upper_bound：
   -> 直接 pending（非错误）
-  -> 不读 warehouse / 不拉 github raw / 不 forward 扫未来
-  -> 彻底消灭 github_raw_try + 404 噪音
+  -> 不读未来 / 不 forward 扫未来
+  -> 避免大量无意义噪音
 
 ✅ P1 最小重构（安全优先，不改行为/不改输出契约）：
 - 把 run_step7 内的三段长逻辑抽成函数：
   1) build_hit_history(...)
   2) train_models_pipeline(...)
   3) render_report_md(...)
-- run_step7 只负责串联与落盘，降低误改风险
-- _utc_now_iso 使用 Timestamp.now('UTC')，消灭 pandas 未来弃用 warning（不影响业务）
+- run_step7 只负责串联与落盘
+- _utc_now_iso 使用 Timestamp.now('UTC')，兼容 pandas 未来版本
 
-✅ 本次新增修复：解决“近10日命中率统计不一致”（只改 Step7，不动其它模块）
-- 命中历史 CSV 写入时：pending 行（未完成打标）统一挪到文件最前面
-  目的：避免前端/报告端用简单 tail(10) 时把 pending 算入近10日
-- step7_report_latest.md 增加《近10日 Top10 命中率》表：
-  统一口径：只统计已完成打标（actual_next_trade_date 与 hit_rate 均非空）
+✅ 统计一致性修复（保留）：
+- 命中历史 CSV 写入时：pending 行统一挪到文件最前面
+- step7_report_latest.md 增加《近10日 Top10 命中率》表（done-only）
+
+✅ 本次核心升级（你确认的新数据链路，解决“爬 MD 不科学”根因）：
+- Step6 已落库：
+    outputs/learning/pred_top10_{trade_date}.csv
+    outputs/learning/pred_top10_history.csv
+- Step7 命中统计改为：
+    预测表 = pred_top10_history.csv（结构化）
+    对照表 = 下一个“可用快照日”的 limit_list_d.csv（仓库硬数据）
+  -> 不再扫描 predict_top10_*.md（仅作为历史兜底 fallback）
+- 输出文件名仍为：outputs/learning/step7_hit_rate_history.csv（契约不变）
 """
 
 from __future__ import annotations
@@ -177,6 +185,9 @@ def _extract_pred_and_target_from_report(text: str) -> Tuple[str, str]:
 
 
 def _parse_topn_codes(md_path: Path, topn: int) -> List[str]:
+    """
+    ⚠️ 旧链路兜底：仅当 pred_top10_history.csv 不存在/不可用时才会被调用
+    """
     text = _read_text_best_effort(md_path)
     if not text:
         return []
@@ -281,7 +292,6 @@ def _is_done_row(row: Dict[str, Any]) -> bool:
 def _md_table(rows: List[Dict[str, Any]], cols: List[str]) -> str:
     if not rows:
         return ""
-    # 纯 markdown 表（不引入第三方依赖，避免环境差异）
     header = "| " + " | ".join(cols) + " |"
     sep = "| " + " | ".join(["---"] * len(cols)) + " |"
     body = []
@@ -290,11 +300,201 @@ def _md_table(rows: List[Dict[str, Any]], cols: List[str]) -> str:
     return "\n".join([header, sep] + body)
 
 
+def _dedup_keep_order(items: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for x in items:
+        x = str(x).strip()
+        if not x:
+            continue
+        if x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    return out
+
+
 # ============================================================
-# Label source
+# New Data Link: pred_top10_history + snapshot-based next trade day
+# ============================================================
+
+def _read_pred_top10_history(outputs_dir: Path, warnings: List[str]) -> pd.DataFrame:
+    """
+    读取 Step6 落库的结构化预测表：
+      outputs/learning/pred_top10_history.csv
+    """
+    fp = outputs_dir / "learning" / "pred_top10_history.csv"
+    if not fp.exists():
+        return pd.DataFrame()
+    for enc in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            df = pd.read_csv(fp, dtype=str, encoding=enc)
+            if df is None:
+                return pd.DataFrame()
+            return df
+        except Exception:
+            continue
+    try:
+        return pd.read_csv(fp, dtype=str)
+    except Exception as e:
+        warnings.append(f"pred_top10_history read failed: {e}")
+        return pd.DataFrame()
+
+
+def _pred_dates_from_history(pred_df: pd.DataFrame) -> List[str]:
+    if pred_df is None or pred_df.empty:
+        return []
+    if "trade_date" not in pred_df.columns:
+        return []
+    dates = pred_df["trade_date"].astype(str).str.strip()
+    dates = [d for d in dates.unique().tolist() if re.match(r"^\d{8}$", str(d))]
+    return sorted(dates)
+
+
+def _get_pred_codes_for_date(pred_df: pd.DataFrame, trade_date: str, topn: int) -> Tuple[List[str], str]:
+    """
+    从 pred_top10_history 中取某天的 TopN codes
+    返回：codes, reason
+    """
+    if pred_df is None or pred_df.empty:
+        return [], "pred_df_empty"
+    if "trade_date" not in pred_df.columns:
+        return [], "pred_missing_trade_date"
+    if "ts_code" not in pred_df.columns:
+        return [], "pred_missing_ts_code"
+
+    d = pred_df.copy()
+    d["trade_date"] = d["trade_date"].astype(str).str.strip()
+    d = d[d["trade_date"] == str(trade_date)].copy()
+    if d.empty:
+        return [], "pred_no_rows_for_date"
+
+    # rank 若存在，优先用 rank 排序取前 N
+    if "rank" in d.columns:
+        d["rank"] = pd.to_numeric(d["rank"], errors="coerce")
+        d = d.sort_values("rank", kind="mergesort")
+    else:
+        # 兜底：按 Probability/score 排序（但最好还是 rank）
+        if "Probability" in d.columns:
+            d["Probability"] = pd.to_numeric(d["Probability"], errors="coerce")
+            d = d.sort_values("Probability", ascending=False, kind="mergesort")
+        elif "prob" in d.columns:
+            d["prob"] = pd.to_numeric(d["prob"], errors="coerce")
+            d = d.sort_values("prob", ascending=False, kind="mergesort")
+        elif "score" in d.columns:
+            d["score"] = pd.to_numeric(d["score"], errors="coerce")
+            d = d.sort_values("score", ascending=False, kind="mergesort")
+
+    codes = d["ts_code"].astype(str).str.strip().tolist()
+    codes = _dedup_keep_order(codes)[: int(topn)]
+    return codes, "ok"
+
+
+def _get_target_trade_date_from_pred(pred_df: pd.DataFrame, trade_date: str) -> str:
+    if pred_df is None or pred_df.empty:
+        return ""
+    if "trade_date" not in pred_df.columns:
+        return ""
+    if "target_trade_date" not in pred_df.columns:
+        return ""
+
+    d = pred_df.copy()
+    d["trade_date"] = d["trade_date"].astype(str).str.strip()
+    d = d[d["trade_date"] == str(trade_date)].copy()
+    if d.empty:
+        return ""
+    v = d["target_trade_date"].astype(str).str.strip()
+    v = v[v != ""]
+    if len(v) == 0:
+        return ""
+    # 取众数（一天10行应一致）
+    try:
+        return v.value_counts().index[0]
+    except Exception:
+        return v.iloc[0]
+
+
+def _list_snapshot_dates() -> List[str]:
+    """
+    从 _warehouse 扫描所有快照日期（YYYYMMDD），用于“对照日=下一个可用快照日”规则
+    """
+    base = Path("_warehouse/a-share-top3-data/data/raw")
+    if not base.exists():
+        return []
+    out: List[str] = []
+    try:
+        for year_dir in base.glob("[0-9][0-9][0-9][0-9]"):
+            if not year_dir.is_dir():
+                continue
+            for ddir in year_dir.glob("[0-9]" * 8):
+                if not ddir.is_dir():
+                    continue
+                d = ddir.name.strip()
+                if re.match(r"^\d{8}$", d):
+                    out.append(d)
+    except Exception:
+        return []
+    out = sorted(list(dict.fromkeys(out)))
+    return out
+
+
+def _next_snapshot_after(trade_date: str, snapshot_dates: List[str], upper_bound: str) -> str:
+    """
+    对照日规则：
+      target_trade_date = 第一个 > trade_date 且 <= upper_bound 的快照日
+    """
+    td = str(trade_date).strip()
+    if not re.match(r"^\d{8}$", td):
+        return ""
+    ub = str(upper_bound).strip()
+    if not re.match(r"^\d{8}$", ub):
+        ub = td  # 极端兜底
+
+    for d in snapshot_dates:
+        if d > td and d <= ub:
+            return d
+    return ""
+
+
+def _read_limit_list_warehouse(s: Settings, d: str, warnings: List[str]) -> pd.DataFrame:
+    """
+    读取仓库硬数据 limit_list_d：
+    1) 优先用 s.data_repo.read_limit_list(d)
+    2) 兜底直接读 _warehouse 路径的 CSV
+    """
+    # 1) data_repo
+    try:
+        dfw = s.data_repo.read_limit_list(d)  # type: ignore[attr-defined]
+        if dfw is not None and not dfw.empty:
+            return dfw
+    except Exception as e:
+        warnings.append(f"read_limit_list via data_repo failed: {e}")
+
+    # 2) direct file
+    try:
+        y = d[:4]
+        p = Path(f"_warehouse/a-share-top3-data/data/raw/{y}/{d}/limit_list_d.csv")
+        if p.exists() and p.stat().st_size > 0:
+            for enc in ("utf-8-sig", "utf-8", "gbk"):
+                try:
+                    return pd.read_csv(p, dtype=str, encoding=enc)
+                except Exception:
+                    continue
+            return pd.read_csv(p, dtype=str)
+    except Exception as e:
+        warnings.append(f"read_limit_list direct csv failed: {e}")
+
+    return pd.DataFrame()
+
+
+# ============================================================
+# Legacy (old) label source for training pipeline (kept)
 # ============================================================
 
 def _read_limit_list_from_github_raw(next_d: str, warnings: List[str]) -> pd.DataFrame:
+    """
+    旧训练链路保留（不作为命中统计主链路使用）
+    """
     branch = str(os.getenv("DATA_BRANCH", "main")).strip()
     repo_full = str(os.getenv("GITHUB_REPOSITORY", "")).strip() or "njedu2023-prog/a-top10"
     year = next_d[:4]
@@ -321,6 +521,7 @@ def _resolve_next_trade_date_by_snapshot(
 ) -> Tuple[str, str]:
     """
     ✅ 对照查找上界改为 upper_bound（由仓库最新快照决定）
+    （训练链路保留）
     """
     if not expected_next_d or not re.match(r"^\d{8}$", str(expected_next_d)):
         return "", "bad_expected_next_d"
@@ -362,6 +563,9 @@ def _resolve_next_trade_date_by_snapshot(
 
 
 def _read_limit_list_anyway(s: Settings, expected_trade_date: str, warnings: List[str]) -> Tuple[pd.DataFrame, str]:
+    """
+    训练链路保留（不作为命中统计主链路使用）
+    """
     actual_d, _src = _resolve_next_trade_date_by_snapshot(
         s=s,
         expected_next_d=expected_trade_date,
@@ -767,103 +971,206 @@ def build_hit_history(
     warnings: List[str],
 ) -> Tuple[pd.DataFrame, Path, Optional[Dict[str, Any]]]:
     """
-    ✅ 纯抽取：不改原命中率逻辑/字段
-    产物：step7_hit_rate_history.csv
+    ✅ 产物：outputs/learning/step7_hit_rate_history.csv（文件名/字段契约保持不变）
 
-    ✅ 本次修复（统计一致性）：
-    - CSV 落盘前，把 pending 行放在最前面，done 行放后面（done 内按 trade_date 升序）
-      避免简单 tail(10) 把 pending 纳入“近10日命中率”
+    主链路（新数据链路，权威）：
+      - 预测表：pred_top10_history.csv（Step6 结构化落库）
+      - 对照日：下一个可用快照日（limit_list_d.csv 存在）
+      - 没有对照日：pending（不是错误）
+
+    兜底链路（历史兼容）：
+      - 若 pred_top10_history 不存在/不可读，则 fallback 扫 outputs/predict_top10_*.md
     """
-    predict_files = _list_predict_files(outputs_dir)
-    predict_dates = [d for d in [_trade_date_from_output_path(p) for p in predict_files] if d]
-    predict_dates = sorted(list(dict.fromkeys(predict_dates)))
-
     hit_rows: List[Dict[str, Any]] = []
-    date_to_file: Dict[str, Path] = {}
-    for p in predict_files:
-        d = _trade_date_from_output_path(p)
-        if d:
-            date_to_file[d] = p
+    snapshot_dates = _list_snapshot_dates()
 
-    for d in predict_dates:
-        md_path = date_to_file.get(d)
-        if md_path is None or not md_path.exists():
-            continue
+    # ---------------------------
+    # A) New path: pred_top10_history.csv
+    # ---------------------------
+    pred_df = _read_pred_top10_history(outputs_dir, warnings)
+    if pred_df is not None and not pred_df.empty and ("trade_date" in pred_df.columns) and ("ts_code" in pred_df.columns):
+        pred_dates = _pred_dates_from_history(pred_df)
 
-        text = _read_text_best_effort(md_path)
-        pred_in_title, target_in_title = _extract_pred_and_target_from_report(text)
+        for td in pred_dates:
+            # 1) codes
+            codes, reason = _get_pred_codes_for_date(pred_df, td, topn=topn)
+            if not codes:
+                hit_rows.append({
+                    "trade_date": td,
+                    "expected_next_trade_date": "",
+                    "actual_next_trade_date": "",
+                    "topn": 0,
+                    "hit": "",
+                    "hit_rate": "",
+                    "note": f"pred_table_empty: {reason}",
+                })
+                continue
 
-        trade_date = pred_in_title or d
-        expected_nd = target_in_title
+            # 2) expected_next_trade_date (prefer explicit target_trade_date, else snapshot-next)
+            expected_nd = _get_target_trade_date_from_pred(pred_df, td)
+            if expected_nd and (not re.match(r"^\d{8}$", expected_nd)):
+                expected_nd = ""
 
-        if not expected_nd:
-            expected_nd = _infer_next_trade_date(predict_dates, d)
-            if expected_nd:
-                warnings.append(f"hit_rate_fallback_next_date: trade_date={trade_date} use_next={expected_nd} (title_parse_failed)")
-            else:
-                warnings.append(f"hit_rate_no_next_date: trade_date={trade_date} (title_parse_failed and no next file)")
+            if not expected_nd:
+                expected_nd = _next_snapshot_after(td, snapshot_dates, upper_bound)
 
-        codes = _parse_topn_codes(md_path, topn=topn)
+            if not expected_nd:
+                # 没有可用对照日：pending（正常）
+                hit_rows.append({
+                    "trade_date": td,
+                    "expected_next_trade_date": "",
+                    "actual_next_trade_date": "",
+                    "topn": len(codes),
+                    "hit": "",
+                    "hit_rate": "",
+                    "note": "pending_label: no next snapshot available yet",
+                })
+                continue
 
-        if (not expected_nd) or (not codes):
+            # 3) upper bound gate
+            if str(expected_nd) > str(upper_bound):
+                hit_rows.append({
+                    "trade_date": td,
+                    "expected_next_trade_date": expected_nd,
+                    "actual_next_trade_date": "",
+                    "topn": len(codes),
+                    "hit": "",
+                    "hit_rate": "",
+                    "note": f"pending_label: expected_next_trade_date_not_available (upper_bound={upper_bound})",
+                })
+                continue
+
+            # 4) read limit_list_d (warehouse hard data)
+            lim_df = _read_limit_list_warehouse(s, expected_nd, warnings)
+            if lim_df is None or lim_df.empty:
+                hit_rows.append({
+                    "trade_date": td,
+                    "expected_next_trade_date": expected_nd,
+                    "actual_next_trade_date": "",
+                    "topn": len(codes),
+                    "hit": "",
+                    "hit_rate": "",
+                    "note": "pending_label: limit_list_d not ready/synced",
+                })
+                continue
+
+            lim_set = set(_limit_codes_from_df(lim_df))
+
+            # 5) hit (codes 去重后统计，避免重复代码导致 hit 虚高)
+            hit = 0
+            for c in codes:
+                if (c in lim_set) or (_to_nosuffix(c) in lim_set):
+                    hit += 1
+            hit_rate = hit / max(1, len(codes))
+
             hit_rows.append({
-                "trade_date": trade_date,
-                "expected_next_trade_date": expected_nd or "",
-                "actual_next_trade_date": "",
+                "trade_date": td,
+                "expected_next_trade_date": expected_nd,
+                "actual_next_trade_date": expected_nd,
                 "topn": len(codes),
-                "hit": "",
-                "hit_rate": "",
-                "note": ("no expected_next_trade_date" if not expected_nd else "no topn codes parsed"),
+                "hit": int(hit),
+                "hit_rate": round(float(hit_rate), 4),
+                "note": "src=pred_top10_history",
             })
-            continue
 
-        if str(expected_nd) > str(upper_bound):
+    else:
+        # ---------------------------
+        # B) Legacy fallback: scan predict_top10_*.md
+        # ---------------------------
+        warnings.append("hit_history_fallback: pred_top10_history.csv not available; fallback to scan predict_top10_*.md")
+
+        predict_files = _list_predict_files(outputs_dir)
+        predict_dates = [d for d in [_trade_date_from_output_path(p) for p in predict_files] if d]
+        predict_dates = sorted(list(dict.fromkeys(predict_dates)))
+
+        date_to_file: Dict[str, Path] = {}
+        for p in predict_files:
+            d = _trade_date_from_output_path(p)
+            if d:
+                date_to_file[d] = p
+
+        for d in predict_dates:
+            md_path = date_to_file.get(d)
+            if md_path is None or not md_path.exists():
+                continue
+
+            text = _read_text_best_effort(md_path)
+            pred_in_title, target_in_title = _extract_pred_and_target_from_report(text)
+
+            trade_date = pred_in_title or d
+            expected_nd = target_in_title
+
+            if not expected_nd:
+                expected_nd = _infer_next_trade_date(predict_dates, d)
+                if expected_nd:
+                    warnings.append(f"hit_rate_fallback_next_date: trade_date={trade_date} use_next={expected_nd} (title_parse_failed)")
+                else:
+                    warnings.append(f"hit_rate_no_next_date: trade_date={trade_date} (title_parse_failed and no next file)")
+
+            codes = _parse_topn_codes(md_path, topn=topn)
+            codes = _dedup_keep_order(codes)
+
+            if (not expected_nd) or (not codes):
+                hit_rows.append({
+                    "trade_date": trade_date,
+                    "expected_next_trade_date": expected_nd or "",
+                    "actual_next_trade_date": "",
+                    "topn": len(codes),
+                    "hit": "",
+                    "hit_rate": "",
+                    "note": ("no expected_next_trade_date" if not expected_nd else "no topn codes parsed"),
+                })
+                continue
+
+            if str(expected_nd) > str(upper_bound):
+                hit_rows.append({
+                    "trade_date": trade_date,
+                    "expected_next_trade_date": expected_nd,
+                    "actual_next_trade_date": "",
+                    "topn": len(codes),
+                    "hit": "",
+                    "hit_rate": "",
+                    "note": f"pending_label: expected_next_trade_date_not_available (upper_bound={upper_bound})",
+                })
+                continue
+
+            lim_df, actual_nd = _read_limit_list_anyway(s, expected_nd, warnings)
+            if not actual_nd:
+                hit_rows.append({
+                    "trade_date": trade_date,
+                    "expected_next_trade_date": expected_nd,
+                    "actual_next_trade_date": "",
+                    "topn": len(codes),
+                    "hit": "",
+                    "hit_rate": "",
+                    "note": "pending_label: snapshot not ready/synced",
+                })
+                continue
+
+            lim_set = set(_limit_codes_from_df(lim_df))
+            hit = 0
+            for c in codes:
+                if (c in lim_set) or (_to_nosuffix(c) in lim_set):
+                    hit += 1
+            hit_rate = hit / max(1, len(codes))
+
             hit_rows.append({
                 "trade_date": trade_date,
                 "expected_next_trade_date": expected_nd,
-                "actual_next_trade_date": "",
+                "actual_next_trade_date": actual_nd,
                 "topn": len(codes),
-                "hit": "",
-                "hit_rate": "",
-                "note": f"pending_label: expected_next_trade_date_not_available (upper_bound={upper_bound})",
+                "hit": int(hit),
+                "hit_rate": round(float(hit_rate), 4),
+                "note": "src=md_fallback",
             })
-            continue
 
-        lim_df, actual_nd = _read_limit_list_anyway(s, expected_nd, warnings)
-        if not actual_nd:
-            hit_rows.append({
-                "trade_date": trade_date,
-                "expected_next_trade_date": expected_nd,
-                "actual_next_trade_date": "",
-                "topn": len(codes),
-                "hit": "",
-                "hit_rate": "",
-                "note": "pending_label: snapshot not ready/synced",
-            })
-            continue
-
-        lim_set = _limit_codes_from_df(lim_df)
-        hit = 0
-        for c in codes:
-            if (c in lim_set) or (_to_nosuffix(c) in lim_set):
-                hit += 1
-        hit_rate = hit / max(1, len(codes))
-        hit_rows.append({
-            "trade_date": trade_date,
-            "expected_next_trade_date": expected_nd,
-            "actual_next_trade_date": actual_nd,
-            "topn": len(codes),
-            "hit": hit,
-            "hit_rate": round(hit_rate, 4),
-            "note": "",
-        })
-
+    # ---------------------------
+    # Write CSV (pending-first)
+    # ---------------------------
     hit_df = pd.DataFrame(hit_rows)
     hit_csv = learning_dir / "step7_hit_rate_history.csv"
 
     if not hit_df.empty:
-        # ✅ 统计一致性修复：pending 前置，done 后置；done 内按 trade_date 升序
-        # 注意：不改变字段，不改变含义，只改变排序，以减少外部 tail(10) 的误统计
         try:
             hit_df["trade_date"] = hit_df["trade_date"].astype(str).str.strip()
         except Exception:
@@ -879,21 +1186,19 @@ def build_hit_history(
 
         if not df_pending.empty:
             df_pending = df_pending.sort_values("trade_date")
-
         if not df_done.empty:
             df_done = df_done.sort_values("trade_date")
 
         hit_df_out = pd.concat([df_pending, df_done], ignore_index=True)
         hit_df_out.to_csv(hit_csv, index=False, encoding="utf-8-sig")
     else:
-        # 空表也写表头，避免消费者读不到列
         pd.DataFrame(columns=[
             "trade_date", "expected_next_trade_date", "actual_next_trade_date", "topn", "hit", "hit_rate", "note"
         ]).to_csv(hit_csv, index=False, encoding="utf-8-sig")
 
+    # latest_hit: only done rows
     latest_hit: Optional[Dict[str, Any]] = None
     if not hit_df.empty:
-        # latest_hit 只取 done 行最后一条（避免 pending 误报）
         try:
             v = hit_df[~(
                 hit_df.get("actual_next_trade_date", pd.Series([""] * len(hit_df))).astype(str).str.strip().eq("")
@@ -945,8 +1250,8 @@ def train_models_pipeline(
 
 def render_report_md(report: Dict[str, Any]) -> str:
     """
-    ✅ 抽取 md 渲染：不改展示字段，只把 append 串变成集中生成
-    ✅ 本次新增：近10日命中率表（done-only，保证一致口径）
+    ✅ 抽取 md 渲染：不改展示字段
+    ✅ 近10日命中率表（done-only）
     """
     topn = report.get("topn", 10)
     lookback_days = report.get("lookback_days", 150)
@@ -979,9 +1284,11 @@ def render_report_md(report: Dict[str, Any]) -> str:
         md_lines.append(f"- actual_next_trade_date：{latest_hit.get('actual_next_trade_date','')}")
         md_lines.append(f"- hit/topn：{latest_hit.get('hit','')}/{latest_hit.get('topn','')}")
         md_lines.append(f"- hit_rate：{latest_hit.get('hit_rate','')}")
+        if latest_hit.get("note"):
+            md_lines.append(f"- note：{latest_hit.get('note','')}")
     else:
         md_lines.append("")
-        md_lines.append("- 暂无可验证命中（对照日快照尚未产生/同步，或缺少下一交易日预测文件）")
+        md_lines.append("- 暂无可验证命中（对照日快照尚未产生/同步，或尚未形成有效对照）")
 
     md_lines.append("")
     md_lines.append("## 1.1) 近10日 Top10 命中率（done-only）")
@@ -1104,7 +1411,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     sampling_state_path = _write_sampling_state(outputs_dir, sampling_state)
 
     # ---------------------------
-    # 1) 命中率统计（抽取，不改逻辑）
+    # 1) 命中率统计（新链路优先）
     # ---------------------------
     hit_df, hit_csv, latest_hit = build_hit_history(
         s=s,
@@ -1121,7 +1428,6 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if hit_df is not None and not hit_df.empty:
             hit_rows_all = hit_df.to_dict(orient="records")
-            # done-only
             d = hit_df.copy()
             d["actual_next_trade_date"] = d.get("actual_next_trade_date", "").astype(str).str.strip()
             d["hit_rate"] = d.get("hit_rate", "").astype(str).str.strip()
@@ -1153,8 +1459,8 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         "latest_snapshot_yyyymmdd": latest_snapshot,
         "label_upper_bound_yyyymmdd": upper_bound,
         "latest_hit": latest_hit,
-        "hit_rows_all": hit_rows_all,                 # 仅用于报告自洽核对
-        "hit_rows_done_last10": hit_rows_done_last10, # 近10日（done-only）
+        "hit_rows_all": hit_rows_all,
+        "hit_rows_done_last10": hit_rows_done_last10,
         "train_meta": train_meta,
         "sampling_state": sampling_state,
         "sampling_state_path": sampling_state_path,
