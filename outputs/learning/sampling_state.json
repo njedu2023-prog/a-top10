@@ -103,8 +103,8 @@
   },
   "pseudo_ratio": 0.07598253275109171,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-02-23T12:04:07Z",
-  "model_version": "26d85a8ae29c1eb01d475c01286740b97b0c239d",
+  "updated_at_utc": "2026-02-23T13:32:01Z",
+  "model_version": "bfa3449367430bc501c08d2036d7c4cca123a331",
   "today_yyyymmdd": "20260223",
   "latest_snapshot_yyyymmdd": "20260213",
   "label_upper_bound_yyyymmdd": "20260213"
