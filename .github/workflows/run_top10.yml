@@ -265,6 +265,6 @@ jobs:
             exit 0
           fi
 
-          git commit -m "auto: run top10 ${td} (run=${rid})" || true
-          git pull --rebase origin main || true
-          git push || true
+          git commit -m "auto: run top10 ${td} (run=${rid})"
+          git pull --rebase origin main
+          git push
