@@ -65,13 +65,13 @@
       "open_times": {
         "non_null_rate": 1.0,
         "non_zero_rate": 0.44264943457189015,
-        "std": 3.505144569192525,
+        "std": 3.505144569192526,
         "unique_count": 26
       },
       "Probability": {
         "non_null_rate": 1.0,
         "non_zero_rate": 1.0,
-        "std": 0.2011297413080693,
+        "std": 0.20272505697486315,
         "unique_count": 1186
       }
     },
@@ -105,8 +105,8 @@
   },
   "pseudo_ratio": 0.07027463651050081,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-02-24T11:47:27Z",
-  "model_version": "79c4880560a7fc0bd21b57556e465a3128092d2e",
+  "updated_at_utc": "2026-02-24T12:05:21Z",
+  "model_version": "4454bc16846e1ba1cf0d95ded0536643f24cd497",
   "today_yyyymmdd": "20260224",
   "latest_snapshot_yyyymmdd": "20260224",
   "label_upper_bound_yyyymmdd": "20260224"
