@@ -1,14 +1,14 @@
 {
-  "ts": "2026-02-23 22:42:48",
+  "ts": "2026-02-24 19:47:27",
   "topn": 10,
   "lookback_days": 150,
-  "today_yyyymmdd": "20260223",
-  "latest_snapshot_yyyymmdd": "20260213",
-  "label_upper_bound_yyyymmdd": "20260213",
+  "today_yyyymmdd": "20260224",
+  "latest_snapshot_yyyymmdd": "20260224",
+  "label_upper_bound_yyyymmdd": "20260224",
   "latest_hit": {
-    "trade_date": "20260212",
-    "expected_next_trade_date": "20260213",
-    "actual_next_trade_date": "20260213",
+    "trade_date": "20260213",
+    "expected_next_trade_date": "20260224",
+    "actual_next_trade_date": "20260224",
     "topn": 10,
     "hit": 3,
     "hit_rate": 0.3,
@@ -152,6 +152,15 @@
     },
     {
       "trade_date": "20260213",
+      "expected_next_trade_date": "20260224",
+      "actual_next_trade_date": "20260224",
+      "topn": 10,
+      "hit": 3,
+      "hit_rate": 0.3,
+      "note": "src=pred_top10_history"
+    },
+    {
+      "trade_date": "20260224",
       "expected_next_trade_date": "",
       "actual_next_trade_date": "",
       "topn": 10,
@@ -161,13 +170,6 @@
     }
   ],
   "hit_rows_done_last10": [
-    {
-      "trade_date": "20260130",
-      "actual_next_trade_date": "20260202",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": "0.3"
-    },
     {
       "trade_date": "20260202",
       "actual_next_trade_date": "20260203",
@@ -230,20 +232,27 @@
       "topn": 10,
       "hit": 3,
       "hit_rate": "0.3"
+    },
+    {
+      "trade_date": "20260213",
+      "actual_next_trade_date": "20260224",
+      "topn": 10,
+      "hit": 3,
+      "hit_rate": "0.3"
     }
   ],
   "train_meta": {
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "rows_raw": 1145,
-    "rows_used": 1061,
+    "rows_raw": 1238,
+    "rows_used": 1116,
     "rows_dropped_allzero": 29,
-    "dates_total": 16,
-    "dates_used": 16
+    "dates_total": 17,
+    "dates_used": 17
   },
   "sampling_state": {
     "sampling_stage": "S1_MVP",
     "target_rows_per_day": 200,
-    "days_covered": 16,
+    "days_covered": 17,
     "rows_per_day_last_N": [
       104,
       71,
@@ -260,7 +269,8 @@
       70,
       73,
       92,
-      55
+      55,
+      93
     ],
     "quality_gate_pass": true,
     "quality_gate_details": {
@@ -281,49 +291,49 @@
       "metrics": {
         "StrengthScore": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.9240174672489083,
-          "std": 19.759283878186018,
-          "unique_count": 1035
+          "non_zero_rate": 0.9297253634894992,
+          "std": 19.411534301185316,
+          "unique_count": 1125
         },
         "ThemeBoost": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.7240174672489083,
-          "std": 0.37536864558958344,
+          "non_zero_rate": 0.7269789983844911,
+          "std": 0.3745103212333509,
           "unique_count": 19
         },
         "turnover_rate": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.9240174672489083,
-          "std": 12.378405528767594,
-          "unique_count": 1058
+          "non_zero_rate": 0.9297253634894992,
+          "std": 12.168991469308446,
+          "unique_count": 1149
         },
         "seal_amount": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.8908296943231441,
-          "std": 247735051.71998236,
-          "unique_count": 1021
+          "non_zero_rate": 0.8982229402261712,
+          "std": 239652331.51741922,
+          "unique_count": 1113
         },
         "open_times": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.4393013100436681,
-          "std": 3.3666906931690135,
-          "unique_count": 24
+          "non_zero_rate": 0.44264943457189015,
+          "std": 3.505144569192525,
+          "unique_count": 26
         },
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.2035132704349511,
-          "unique_count": 1093
+          "std": 0.2011297413080693,
+          "unique_count": 1186
         }
       },
-      "pseudo_ratio": 0.07598253275109171,
-      "window_days": 16,
-      "rows_in_window": 1145,
+      "pseudo_ratio": 0.07027463651050081,
+      "window_days": 17,
+      "rows_in_window": 1238,
       "pass": true
     },
     "stage_debug": {
       "prev_stage": "S1_MVP",
-      "days_covered": 16,
+      "days_covered": 17,
       "rows_last": [
         104,
         71,
@@ -340,16 +350,17 @@
         70,
         73,
         92,
-        55
+        55,
+        93
       ]
     },
-    "pseudo_ratio": 0.07598253275109171,
+    "pseudo_ratio": 0.07027463651050081,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-23T14:42:48Z",
-    "model_version": "c344990b59f7f492abcb88c95b9abf72106f8c02",
-    "today_yyyymmdd": "20260223",
-    "latest_snapshot_yyyymmdd": "20260213",
-    "label_upper_bound_yyyymmdd": "20260213"
+    "updated_at_utc": "2026-02-24T11:47:27Z",
+    "model_version": "79c4880560a7fc0bd21b57556e465a3128092d2e",
+    "today_yyyymmdd": "20260224",
+    "latest_snapshot_yyyymmdd": "20260224",
+    "label_upper_bound_yyyymmdd": "20260224"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
@@ -358,9 +369,9 @@
     "lgbm_saved": true,
     "models_dir": "models",
     "detail": {
-      "train_rows": 1061,
-      "pos": 189,
-      "neg": 872,
+      "train_rows": 1116,
+      "pos": 198,
+      "neg": 918,
       "lr_path": "models/step5_lr.joblib",
       "lgbm_path": "models/step5_lgbm.joblib",
       "reason": "ok"
