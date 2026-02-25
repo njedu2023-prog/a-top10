@@ -31,6 +31,11 @@ jobs:
       TZ: Asia/Shanghai
       PYTHONUTF8: "1"
 
+      # ✅ P1 run meta（给 writers.py / step7 用）
+      RUN_ID: ${{ github.run_id }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+      COMMIT_SHA: ${{ github.sha }}
+
       # secret 名为 A_TOP10_TOKEN，这里桥接到程序读取的 TUSHARE_TOKEN
       TUSHARE_TOKEN: ${{ secrets.A_TOP10_TOKEN }}
 
