@@ -4,35 +4,22 @@
 """
 Step7：自学习闭环更新模型权重（命中率滚动提升）
 
-✅ 本次修复（关键）：
-- “对照日未产生”判定不再用 wall-clock today 作为上界，而改为：
-  upper_bound = min(today, latest_snapshot_date_in_repo)
-- 如果 expected_next_trade_date > upper_bound：
-  -> 直接 pending（非错误）
-  -> 不读未来 / 不 forward 扫未来
-  -> 避免大量无意义噪音
+✅ 关键升级（P1：历史冻结 / 不可变）：
+- outputs/learning/step7_hit_rate_history.csv 不再每次全量重写导致“历史回填”
+- 新策略：freeze done rows（done=已有 actual_next_trade_date 且 hit_rate 非空）
+  - done 行永不再改写（历史不可变）
+  - pending 行允许更新为 done（状态跃迁，属于“完成打标”）
+  - 新 trade_date 只追加，不回写旧 done 行
+  - 输出仍保持：pending 行在最前面（契约保持）
 
-✅ P1 最小重构（安全优先，不改行为/不改输出契约）：
-- 把 run_step7 内的三段长逻辑抽成函数：
-  1) build_hit_history(...)
-  2) train_models_pipeline(...)
-  3) render_report_md(...)
-- run_step7 只负责串联与落盘
-- _utc_now_iso 使用 Timestamp.now('UTC')，兼容 pandas 未来版本
+✅ 新数据链路（保留）：
+- 预测表 = outputs/learning/pred_top10_history.csv（结构化）
+- 对照表 = 下一个“可用快照日”的 limit_list_d.csv（仓库硬数据）
+- 不再扫描 predict_top10_*.md（仅作为兜底 fallback）
 
-✅ 统计一致性修复（保留）：
-- 命中历史 CSV 写入时：pending 行统一挪到文件最前面
-- step7_report_latest.md 增加《近10日 Top10 命中率》表（done-only）
-
-✅ 本次核心升级（你确认的新数据链路，解决“爬 MD 不科学”根因）：
-- Step6 已落库：
-    outputs/learning/pred_top10_{trade_date}.csv
-    outputs/learning/pred_top10_history.csv
-- Step7 命中统计改为：
-    预测表 = pred_top10_history.csv（结构化）
-    对照表 = 下一个“可用快照日”的 limit_list_d.csv（仓库硬数据）
-  -> 不再扫描 predict_top10_*.md（仅作为历史兜底 fallback）
-- 输出文件名仍为：outputs/learning/step7_hit_rate_history.csv（契约不变）
+✅ 兼容 writers.py 的 P1 输出：
+- pred_top10_history.csv 可能提供 verify_date（优先使用）
+- 兼容旧字段 target_trade_date（如果存在）
 """
 
 from __future__ import annotations
@@ -391,6 +378,9 @@ def _get_pred_codes_for_date(pred_df: pd.DataFrame, trade_date: str, topn: int) 
 
 
 def _get_target_trade_date_from_pred(pred_df: pd.DataFrame, trade_date: str) -> str:
+    """
+    兼容旧字段：target_trade_date
+    """
     if pred_df is None or pred_df.empty:
         return ""
     if "trade_date" not in pred_df.columns:
@@ -407,7 +397,32 @@ def _get_target_trade_date_from_pred(pred_df: pd.DataFrame, trade_date: str) -> 
     v = v[v != ""]
     if len(v) == 0:
         return ""
-    # 取众数（一天10行应一致）
+    try:
+        return v.value_counts().index[0]
+    except Exception:
+        return v.iloc[0]
+
+
+def _get_verify_date_from_pred(pred_df: pd.DataFrame, trade_date: str) -> str:
+    """
+    ✅ 兼容 writers.py P1：优先用 verify_date
+    """
+    if pred_df is None or pred_df.empty:
+        return ""
+    if "trade_date" not in pred_df.columns:
+        return ""
+    if "verify_date" not in pred_df.columns:
+        return ""
+
+    d = pred_df.copy()
+    d["trade_date"] = d["trade_date"].astype(str).str.strip()
+    d = d[d["trade_date"] == str(trade_date)].copy()
+    if d.empty:
+        return ""
+    v = d["verify_date"].astype(str).str.strip()
+    v = v[(v != "") & (v.str.lower() != "nan")]
+    if len(v) == 0:
+        return ""
     try:
         return v.value_counts().index[0]
     except Exception:
@@ -448,7 +463,7 @@ def _next_snapshot_after(trade_date: str, snapshot_dates: List[str], upper_bound
         return ""
     ub = str(upper_bound).strip()
     if not re.match(r"^\d{8}$", ub):
-        ub = td  # 极端兜底
+        ub = td
 
     for d in snapshot_dates:
         if d > td and d <= ub:
@@ -462,7 +477,6 @@ def _read_limit_list_warehouse(s: Settings, d: str, warnings: List[str]) -> pd.D
     1) 优先用 s.data_repo.read_limit_list(d)
     2) 兜底直接读 _warehouse 路径的 CSV
     """
-    # 1) data_repo
     try:
         dfw = s.data_repo.read_limit_list(d)  # type: ignore[attr-defined]
         if dfw is not None and not dfw.empty:
@@ -470,7 +484,6 @@ def _read_limit_list_warehouse(s: Settings, d: str, warnings: List[str]) -> pd.D
     except Exception as e:
         warnings.append(f"read_limit_list via data_repo failed: {e}")
 
-    # 2) direct file
     try:
         y = d[:4]
         p = Path(f"_warehouse/a-share-top3-data/data/raw/{y}/{d}/limit_list_d.csv")
@@ -541,7 +554,6 @@ def _resolve_next_trade_date_by_snapshot(
     for i in range(0, int(max_i) + 1):
         di = (d0 + pd.Timedelta(days=i)).strftime("%Y%m%d")
 
-        # 1) warehouse
         try:
             dfw = s.data_repo.read_limit_list(di)  # type: ignore[attr-defined]
             if dfw is not None and not dfw.empty:
@@ -551,7 +563,6 @@ def _resolve_next_trade_date_by_snapshot(
         except Exception:
             pass
 
-        # 2) github raw
         dfr = _read_limit_list_from_github_raw(di, warnings)
         if dfr is not None and not dfr.empty:
             if i > 0:
@@ -959,6 +970,143 @@ def _write_sampling_state(outputs_dir: Path, obj: Dict[str, Any]) -> str:
 
 
 # ============================================================
+# P1: frozen hit history upsert (pending->done allowed, done frozen)
+# ============================================================
+
+HIT_HISTORY_COLS = ["trade_date", "expected_next_trade_date", "actual_next_trade_date", "topn", "hit", "hit_rate", "note"]
+
+
+def _read_hit_history_csv(hit_csv: Path) -> pd.DataFrame:
+    if hit_csv is None or (not hit_csv.exists()):
+        return pd.DataFrame(columns=HIT_HISTORY_COLS)
+    for enc in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            df = pd.read_csv(hit_csv, dtype=str, encoding=enc)
+            if df is None:
+                return pd.DataFrame(columns=HIT_HISTORY_COLS)
+            return df
+        except Exception:
+            continue
+    try:
+        return pd.read_csv(hit_csv, dtype=str)
+    except Exception:
+        return pd.DataFrame(columns=HIT_HISTORY_COLS)
+
+
+def _is_done_df_row(df: pd.DataFrame, idx: int) -> bool:
+    try:
+        a = str(df.at[idx, "actual_next_trade_date"]).strip() if "actual_next_trade_date" in df.columns else ""
+        hr = str(df.at[idx, "hit_rate"]).strip() if "hit_rate" in df.columns else ""
+        return bool(a) and bool(hr) and hr.lower() != "nan"
+    except Exception:
+        return False
+
+
+def _freeze_upsert_hit_history(
+    df_old: pd.DataFrame,
+    df_new: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    冻结策略：
+    - 若 old 行已 done：永不覆盖
+    - 若 old 行 pending 且 new 行 done：允许升级（pending->done）
+    - 若 old 行 pending 且 new 行 pending：可用 new 更新 old（主要更新 note/expected）
+    - 若 old 不存在：追加
+    """
+    if df_old is None or df_old.empty:
+        return df_new.copy() if df_new is not None else pd.DataFrame(columns=HIT_HISTORY_COLS)
+
+    d_old = df_old.copy()
+    d_new = df_new.copy() if df_new is not None else pd.DataFrame(columns=HIT_HISTORY_COLS)
+
+    # 规范列
+    for c in HIT_HISTORY_COLS:
+        if c not in d_old.columns:
+            d_old[c] = ""
+        if c not in d_new.columns:
+            d_new[c] = ""
+
+    d_old["trade_date"] = d_old["trade_date"].astype(str).str.strip()
+    d_new["trade_date"] = d_new["trade_date"].astype(str).str.strip()
+
+    # 索引 old by trade_date（只保留第一行，避免历史异常重复）
+    old_map: Dict[str, int] = {}
+    for i in range(len(d_old)):
+        td = str(d_old.iloc[i].get("trade_date", "")).strip()
+        if not td or not re.match(r"^\d{8}$", td):
+            continue
+        if td not in old_map:
+            old_map[td] = i
+
+    rows_out: List[Dict[str, Any]] = []
+
+    # 先放入 old（后面按规则替换）
+    for i in range(len(d_old)):
+        r = {c: str(d_old.iloc[i].get(c, "")).strip() for c in HIT_HISTORY_COLS}
+        rows_out.append(r)
+
+    # upsert new
+    for j in range(len(d_new)):
+        td = str(d_new.iloc[j].get("trade_date", "")).strip()
+        if not td or not re.match(r"^\d{8}$", td):
+            continue
+
+        new_row = {c: str(d_new.iloc[j].get(c, "")).strip() for c in HIT_HISTORY_COLS}
+
+        if td not in old_map:
+            rows_out.append(new_row)
+            continue
+
+        i_old = old_map[td]
+        old_done = _is_done_df_row(d_old, i_old)
+
+        # old done -> freeze
+        if old_done:
+            continue
+
+        # old pending -> update/upgrade
+        rows_out[i_old] = new_row
+
+    out = pd.DataFrame(rows_out)
+    # 去掉可能的重复 trade_date（保留第一条即可）
+    if not out.empty and "trade_date" in out.columns:
+        out["trade_date"] = out["trade_date"].astype(str).str.strip()
+        out = out.drop_duplicates(subset=["trade_date"], keep="first")
+
+    return out
+
+
+def _write_hit_history_with_pending_first(hit_csv: Path, df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        pd.DataFrame(columns=HIT_HISTORY_COLS).to_csv(hit_csv, index=False, encoding="utf-8-sig")
+        return
+
+    d = df.copy()
+    for c in HIT_HISTORY_COLS:
+        if c not in d.columns:
+            d[c] = ""
+
+    d["trade_date"] = d["trade_date"].astype(str).str.strip()
+
+    # pending-first
+    actual = d["actual_next_trade_date"].astype(str).str.strip()
+    hr = d["hit_rate"].astype(str).str.strip()
+    pending_mask = (actual == "") | (hr == "") | (hr.str.lower() == "nan")
+
+    df_pending = d[pending_mask].copy()
+    df_done = d[~pending_mask].copy()
+
+    if not df_pending.empty:
+        df_pending = df_pending.sort_values("trade_date")
+    if not df_done.empty:
+        df_done = df_done.sort_values("trade_date")
+
+    out = pd.concat([df_pending, df_done], ignore_index=True)
+    out = out[HIT_HISTORY_COLS].copy()
+    out.to_csv(hit_csv, index=False, encoding="utf-8-sig")
+
+
+# ============================================================
 # P1 抽取：命中率统计 / 训练流水线 / 报告渲染
 # ============================================================
 
@@ -973,29 +1121,29 @@ def build_hit_history(
     """
     ✅ 产物：outputs/learning/step7_hit_rate_history.csv（文件名/字段契约保持不变）
 
-    主链路（新数据链路，权威）：
+    主链路（权威）：
       - 预测表：pred_top10_history.csv（Step6 结构化落库）
       - 对照日：下一个可用快照日（limit_list_d.csv 存在）
       - 没有对照日：pending（不是错误）
 
-    兜底链路（历史兼容）：
+    兜底链路：
       - 若 pred_top10_history 不存在/不可读，则 fallback 扫 outputs/predict_top10_*.md
     """
-    hit_rows: List[Dict[str, Any]] = []
+    hit_rows_new: List[Dict[str, Any]] = []
     snapshot_dates = _list_snapshot_dates()
+
+    pred_df = _read_pred_top10_history(outputs_dir, warnings)
 
     # ---------------------------
     # A) New path: pred_top10_history.csv
     # ---------------------------
-    pred_df = _read_pred_top10_history(outputs_dir, warnings)
     if pred_df is not None and not pred_df.empty and ("trade_date" in pred_df.columns) and ("ts_code" in pred_df.columns):
         pred_dates = _pred_dates_from_history(pred_df)
 
         for td in pred_dates:
-            # 1) codes
             codes, reason = _get_pred_codes_for_date(pred_df, td, topn=topn)
             if not codes:
-                hit_rows.append({
+                hit_rows_new.append({
                     "trade_date": td,
                     "expected_next_trade_date": "",
                     "actual_next_trade_date": "",
@@ -1006,14 +1154,14 @@ def build_hit_history(
                 })
                 continue
 
-            # 2) expected_next_trade_date (prefer explicit target_trade_date, else snapshot-next)
-            expected_nd = _get_target_trade_date_from_pred(pred_df, td)
+            # expected_next_trade_date：优先 verify_date，其次 target_trade_date，否则 snapshot-next
+            expected_nd = _get_verify_date_from_pred(pred_df, td)
+            if not expected_nd:
+                expected_nd = _get_target_trade_date_from_pred(pred_df, td)
 
-            # ✅ 双保险：无论上游返回什么，都先 string 化并清理 nan
             expected_nd = "" if expected_nd is None else str(expected_nd).strip()
             if expected_nd.lower() == "nan":
                 expected_nd = ""
-
             if expected_nd and (not re.match(r"^\d{8}$", expected_nd)):
                 expected_nd = ""
 
@@ -1021,8 +1169,7 @@ def build_hit_history(
                 expected_nd = _next_snapshot_after(td, snapshot_dates, upper_bound)
 
             if not expected_nd:
-                # 没有可用对照日：pending（正常）
-                hit_rows.append({
+                hit_rows_new.append({
                     "trade_date": td,
                     "expected_next_trade_date": "",
                     "actual_next_trade_date": "",
@@ -1033,9 +1180,8 @@ def build_hit_history(
                 })
                 continue
 
-            # 3) upper bound gate
             if str(expected_nd) > str(upper_bound):
-                hit_rows.append({
+                hit_rows_new.append({
                     "trade_date": td,
                     "expected_next_trade_date": expected_nd,
                     "actual_next_trade_date": "",
@@ -1046,10 +1192,9 @@ def build_hit_history(
                 })
                 continue
 
-            # 4) read limit_list_d (warehouse hard data)
             lim_df = _read_limit_list_warehouse(s, expected_nd, warnings)
             if lim_df is None or lim_df.empty:
-                hit_rows.append({
+                hit_rows_new.append({
                     "trade_date": td,
                     "expected_next_trade_date": expected_nd,
                     "actual_next_trade_date": "",
@@ -1062,14 +1207,13 @@ def build_hit_history(
 
             lim_set = set(_limit_codes_from_df(lim_df))
 
-            # 5) hit (codes 去重后统计，避免重复代码导致 hit 虚高)
             hit = 0
             for c in codes:
                 if (c in lim_set) or (_to_nosuffix(c) in lim_set):
                     hit += 1
             hit_rate = hit / max(1, len(codes))
 
-            hit_rows.append({
+            hit_rows_new.append({
                 "trade_date": td,
                 "expected_next_trade_date": expected_nd,
                 "actual_next_trade_date": expected_nd,
@@ -1117,7 +1261,7 @@ def build_hit_history(
             codes = _dedup_keep_order(codes)
 
             if (not expected_nd) or (not codes):
-                hit_rows.append({
+                hit_rows_new.append({
                     "trade_date": trade_date,
                     "expected_next_trade_date": expected_nd or "",
                     "actual_next_trade_date": "",
@@ -1129,7 +1273,7 @@ def build_hit_history(
                 continue
 
             if str(expected_nd) > str(upper_bound):
-                hit_rows.append({
+                hit_rows_new.append({
                     "trade_date": trade_date,
                     "expected_next_trade_date": expected_nd,
                     "actual_next_trade_date": "",
@@ -1142,7 +1286,7 @@ def build_hit_history(
 
             lim_df, actual_nd = _read_limit_list_anyway(s, expected_nd, warnings)
             if not actual_nd:
-                hit_rows.append({
+                hit_rows_new.append({
                     "trade_date": trade_date,
                     "expected_next_trade_date": expected_nd,
                     "actual_next_trade_date": "",
@@ -1160,7 +1304,7 @@ def build_hit_history(
                     hit += 1
             hit_rate = hit / max(1, len(codes))
 
-            hit_rows.append({
+            hit_rows_new.append({
                 "trade_date": trade_date,
                 "expected_next_trade_date": expected_nd,
                 "actual_next_trade_date": actual_nd,
@@ -1171,53 +1315,31 @@ def build_hit_history(
             })
 
     # ---------------------------
-    # Write CSV (pending-first)
+    # P1: merge with freeze (done immutable)
     # ---------------------------
-    hit_df = pd.DataFrame(hit_rows)
     hit_csv = learning_dir / "step7_hit_rate_history.csv"
+    df_old = _read_hit_history_csv(hit_csv)
+    df_new = pd.DataFrame(hit_rows_new) if hit_rows_new else pd.DataFrame(columns=HIT_HISTORY_COLS)
 
-    if not hit_df.empty:
+    df_merged = _freeze_upsert_hit_history(df_old, df_new)
+    _write_hit_history_with_pending_first(hit_csv, df_merged)
+
+    # latest_hit: only done rows (from merged)
+    latest_hit: Optional[Dict[str, Any]] = None
+    if df_merged is not None and not df_merged.empty:
         try:
-            hit_df["trade_date"] = hit_df["trade_date"].astype(str).str.strip()
+            d = df_merged.copy()
+            d["trade_date"] = d["trade_date"].astype(str).str.strip()
+            a = d["actual_next_trade_date"].astype(str).str.strip()
+            hr = d["hit_rate"].astype(str).str.strip()
+            done = d[(a != "") & (hr != "") & (hr.str.lower() != "nan")].copy()
+            if not done.empty:
+                done = done.sort_values("trade_date")
+                latest_hit = done.iloc[-1].to_dict()
         except Exception:
             pass
 
-        pending_mask = (
-            hit_df.get("actual_next_trade_date", pd.Series([""] * len(hit_df))).astype(str).str.strip().eq("")
-            | hit_df.get("hit_rate", pd.Series([""] * len(hit_df))).astype(str).str.strip().eq("")
-        )
-
-        df_pending = hit_df[pending_mask].copy()
-        df_done = hit_df[~pending_mask].copy()
-
-        if not df_pending.empty:
-            df_pending = df_pending.sort_values("trade_date")
-        if not df_done.empty:
-            df_done = df_done.sort_values("trade_date")
-
-        hit_df_out = pd.concat([df_pending, df_done], ignore_index=True)
-        hit_df_out.to_csv(hit_csv, index=False, encoding="utf-8-sig")
-    else:
-        pd.DataFrame(columns=[
-            "trade_date", "expected_next_trade_date", "actual_next_trade_date", "topn", "hit", "hit_rate", "note"
-        ]).to_csv(hit_csv, index=False, encoding="utf-8-sig")
-
-    # latest_hit: only done rows
-    latest_hit: Optional[Dict[str, Any]] = None
-    if not hit_df.empty:
-        try:
-            v = hit_df[~(
-                hit_df.get("actual_next_trade_date", pd.Series([""] * len(hit_df))).astype(str).str.strip().eq("")
-                | hit_df.get("hit_rate", pd.Series([""] * len(hit_df))).astype(str).str.strip().eq("")
-            )]
-        except Exception:
-            v = hit_df.copy()
-
-        if not v.empty:
-            v = v.sort_values("trade_date")
-            latest_hit = v.iloc[-1].to_dict()
-
-    return hit_df, hit_csv, latest_hit
+    return df_merged, hit_csv, latest_hit
 
 
 def train_models_pipeline(
@@ -1268,7 +1390,6 @@ def render_report_md(report: Dict[str, Any]) -> str:
     train_meta = report.get("train_meta", {}) or {}
     train_result = report.get("train_result", {}) or {}
     warnings = report.get("warnings", []) or []
-    hit_rows_all = report.get("hit_rows_all", []) or []
     hit_rows_done_last10 = report.get("hit_rows_done_last10", []) or []
 
     md_lines: List[str] = []
@@ -1417,7 +1538,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     sampling_state_path = _write_sampling_state(outputs_dir, sampling_state)
 
     # ---------------------------
-    # 1) 命中率统计（新链路优先）
+    # 1) 命中率统计（新链路优先 + P1 冻结）
     # ---------------------------
     hit_df, hit_csv, latest_hit = build_hit_history(
         s=s,
@@ -1428,7 +1549,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         warnings=warnings,
     )
 
-    # 近10日（done-only）用于报告展示，确保与“统计口径”一致
+    # 近10日（done-only）用于报告展示
     hit_rows_all: List[Dict[str, Any]] = []
     hit_rows_done_last10: List[Dict[str, Any]] = []
     try:
@@ -1437,7 +1558,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             d = hit_df.copy()
             d["actual_next_trade_date"] = d.get("actual_next_trade_date", "").astype(str).str.strip()
             d["hit_rate"] = d.get("hit_rate", "").astype(str).str.strip()
-            d = d[(d["actual_next_trade_date"] != "") & (d["hit_rate"] != "")]
+            d = d[(d["actual_next_trade_date"] != "") & (d["hit_rate"] != "") & (d["hit_rate"].str.lower() != "nan")]
             if not d.empty:
                 d = d.sort_values("trade_date").tail(10)
                 hit_rows_done_last10 = d[["trade_date", "actual_next_trade_date", "topn", "hit", "hit_rate"]].to_dict(orient="records")
