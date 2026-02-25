@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, List
@@ -22,6 +23,138 @@ PROB_COL_CANDIDATES = ["prob", "Probability", "概率", "涨停概率"]
 BOARD_COL_CANDIDATES = ["board", "板块", "industry", "行业", "所属行业", "concept", "题材"]
 
 
+# =========================
+# P1: immutable + run meta
+# =========================
+def _utc_now_iso() -> str:
+    try:
+        return pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _get_run_meta() -> Dict[str, str]:
+    """
+    统一从 GitHub Actions 环境变量取 run meta。
+    - RUN_ID / GITHUB_RUN_ID
+    - RUN_ATTEMPT / GITHUB_RUN_ATTEMPT
+    - COMMIT_SHA / GITHUB_SHA
+    """
+    run_id = (os.getenv("RUN_ID") or os.getenv("GITHUB_RUN_ID") or "").strip()
+    run_attempt = (os.getenv("RUN_ATTEMPT") or os.getenv("GITHUB_RUN_ATTEMPT") or "").strip()
+    sha = (os.getenv("COMMIT_SHA") or os.getenv("GITHUB_SHA") or "").strip()
+
+    if not run_id:
+        # 兜底：时间戳（保证归档文件名不会冲突）
+        run_id = datetime.utcnow().strftime("ts%Y%m%d%H%M%S")
+    if not run_attempt:
+        run_attempt = "1"
+
+    return {
+        "run_id": run_id,
+        "run_attempt": run_attempt,
+        "commit_sha": sha,
+        "generated_at_utc": _utc_now_iso(),
+    }
+
+
+def _ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def _write_text_once(path: Path, text: str, *, force: bool = False, encoding: str = "utf-8") -> bool:
+    """
+    写一次锁定：
+    - 若文件已存在且 force=False：不覆盖，返回 False
+    - 否则写入，返回 True
+    """
+    _ensure_dir(path.parent)
+    if path.exists() and not force:
+        print(f"[SKIP] exists (write-once): {path}")
+        return False
+    path.write_text(text, encoding=encoding)
+    print(f"[WRITE] {path}")
+    return True
+
+
+def _write_csv_once(df: pd.DataFrame, path: Path, *, force: bool = False) -> bool:
+    _ensure_dir(path.parent)
+    if path.exists() and not force:
+        print(f"[SKIP] exists (write-once): {path}")
+        return False
+    if df is None:
+        df = pd.DataFrame()
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+    print(f"[WRITE] {path} rows={len(df)}")
+    return True
+
+
+def _append_csv_unique(
+    df_new: pd.DataFrame,
+    path: Path,
+    *,
+    key_cols: Sequence[str],
+) -> Dict[str, int]:
+    """
+    append-only（不回写历史）：
+    - 读取已有 CSV
+    - 若 key_cols 相同的行已存在：跳过
+    - 只追加新行
+    返回统计：{"appended": x, "skipped": y, "total": z}
+    """
+    _ensure_dir(path.parent)
+
+    if df_new is None or df_new.empty:
+        return {"appended": 0, "skipped": 0, "total": int(path.exists())}
+
+    df_new = df_new.copy()
+
+    # 若文件不存在，直接写
+    if not path.exists():
+        df_new.to_csv(path, index=False, encoding="utf-8-sig")
+        print(f"[WRITE] {path} rows={len(df_new)} (new)")
+        return {"appended": int(len(df_new)), "skipped": 0, "total": int(len(df_new))}
+
+    # 读旧
+    try:
+        df_old = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
+    except Exception:
+        df_old = pd.DataFrame()
+
+    # 确保 key 列存在
+    for c in key_cols:
+        if c not in df_old.columns:
+            df_old[c] = ""
+        if c not in df_new.columns:
+            df_new[c] = ""
+
+    def _key_df(d: pd.DataFrame) -> pd.Series:
+        return d[list(key_cols)].astype(str).fillna("").agg("|".join, axis=1)
+
+    old_keys = set(_key_df(df_old).tolist()) if (df_old is not None and not df_old.empty) else set()
+    new_keys = _key_df(df_new).tolist()
+
+    keep_mask = [k not in old_keys for k in new_keys]
+    df_add = df_new.loc[keep_mask].copy()
+    skipped = int(len(df_new) - len(df_add))
+
+    if df_add.empty:
+        print(f"[SKIP] append-only: no new rows for {path} (skipped={skipped})")
+        return {"appended": 0, "skipped": skipped, "total": int(len(df_old))}
+
+    # 追加写入（不重写旧内容）
+    # 用 mode='a' 追加，避免覆盖
+    with path.open("a", encoding="utf-8-sig", newline="") as f:
+        df_add.to_csv(f, index=False, header=False)
+
+    total = int(len(df_old) + len(df_add))
+    print(f"[APPEND] {path} appended={len(df_add)} skipped={skipped} total={total}")
+    return {"appended": int(len(df_add)), "skipped": skipped, "total": total}
+
+
+# =========================
+# Markdown helpers
+# =========================
 def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> str:
     if df is None or df.empty:
         return ""
@@ -155,10 +288,6 @@ def _ctx_path(ctx: Any, keys: Sequence[str]) -> Optional[Path]:
 
 
 def _ctx_trade_date(ctx: Any) -> str:
-    """
-    尝试从 ctx 里提取“这份 ctx 数据对应的 trade_date”。
-    若无法判断，返回空串。
-    """
     if not isinstance(ctx, dict):
         return ""
     for k in ("trade_date", "TRADE_DATE", "asof", "date", "snapshot_date"):
@@ -197,11 +326,6 @@ def _build_code_sets(df: pd.DataFrame, candidates: Sequence[str]) -> Tuple[str, 
 
 
 def _count_limitups(limit_df: Optional[pd.DataFrame]) -> int:
-    """
-    ✅ 统一口径：统计“当日涨停家数”
-    - 优先按代码列规范化后去重统计
-    - 若无代码列：退化为行数
-    """
     if limit_df is None or limit_df.empty:
         return 0
 
@@ -283,11 +407,6 @@ def _resolve_snapshot_dir(settings, ctx, trade_date: str) -> Optional[Path]:
 
 
 def _load_limit_df(settings, ctx, trade_date: str) -> pd.DataFrame:
-    """
-    ✅ 关键修复（“55问题”）：
-    - ctx 里的 limit_df 往往只对应“当前 trade_date”
-    - 当我们请求别的日期（例如历史回测 next_td）时，不能盲用 ctx，否则会把同一份数据套到所有天上
-    """
     ctx_td = _ctx_trade_date(ctx)
     if ctx_td and ctx_td == trade_date:
         df = _ctx_df(ctx, ["limit_df", "limit_list", "limit", "limit_list_d", "limit_up", "limitup"])
@@ -366,10 +485,6 @@ def _topN_to_hit_df(topN_df: Optional[pd.DataFrame], limit_df: pd.DataFrame) -> 
 
 
 def _list_trade_dates(settings) -> List[str]:
-    """
-    用 DataRepo 自带 list_snapshot_dates 作为交易日历（最稳）。
-    找不到就返回空。
-    """
     dates: List[str] = []
     dr = getattr(settings, "data_repo", None)
     if dr is not None:
@@ -433,16 +548,11 @@ def _load_json_topN(outdir: Path, td: str) -> Optional[pd.DataFrame]:
 
 
 def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    把“强度列表”标准化成报告需要的列：
-      排名 / 代码 / 股票 / Probability / 强度得分 / 题材加成 / 板块
-    """
     if df is None or df.empty:
         return pd.DataFrame()
 
     d = df.copy()
 
-    # rank
     if "排名" in d.columns:
         pass
     elif "rank_limit" in d.columns:
@@ -452,32 +562,26 @@ def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
     else:
         d.insert(0, "排名", range(1, len(d) + 1))
 
-    # code
     if "代码" not in d.columns:
         c = _first_existing_col(d, ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"])
         d["代码"] = d[c] if c else ""
 
-    # name
     if "股票" not in d.columns:
         n = _first_existing_col(d, ["name", "stock_name", "名称", "证券名称", "股票简称"])
         d["股票"] = d[n] if n else ""
 
-    # prob
     if "Probability" not in d.columns:
         p = _first_existing_col(d, ["prob", "Probability", "概率", "涨停概率"])
         d["Probability"] = d[p] if p else ""
 
-    # strength
     if "强度得分" not in d.columns:
         s = _first_existing_col(d, ["_strength", "StrengthScore", "强度得分", "强度"])
         d["强度得分"] = d[s] if s else ""
 
-    # theme
     if "题材加成" not in d.columns:
         t = _first_existing_col(d, ["ThemeBoost", "题材加成", "题材", "_theme"])
         d["题材加成"] = d[t] if t else ""
 
-    # board
     if "板块" not in d.columns:
         b = _first_existing_col(d, ["board", "板块", "industry", "行业", "所属行业", "concept", "题材"])
         d["板块"] = d[b] if b else ""
@@ -550,10 +654,6 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
 
 
 def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.DataFrame:
-    """
-    近10日命中率口径：predict_date -> next_trade_date 的 limit_list。
-    注意：latest（未来没有 next_td 的）会被跳过。
-    """
     calendar = _list_trade_dates(settings)
     files = sorted(outdir.glob("predict_top10_*.json"), key=lambda p: p.name, reverse=True)
     rows: List[Dict[str, Any]] = []
@@ -569,8 +669,6 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
             continue
 
         topN_df = _load_json_topN(outdir, d)
-
-        # ✅ 验证日涨停：用 next_td 的 limit_list（且不盲用 ctx）
         ldf_verify = _load_limit_df(settings, ctx, next_td)
 
         _, mres = _topN_to_hit_df(topN_df, ldf_verify)
@@ -596,12 +694,84 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
     return pd.DataFrame(rows)
 
 
+def _standardize_topN_for_csv(topN_df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """
+    统一 topN 的字段，便于写 CSV / history：
+    rank, ts_code, name, prob, StrengthScore, ThemeBoost, board
+    """
+    if topN_df is None or topN_df.empty:
+        return pd.DataFrame(columns=["rank", "ts_code", "name", "prob", "StrengthScore", "ThemeBoost", "board"])
+
+    df = topN_df.copy()
+
+    # rank
+    if "rank" not in df.columns:
+        if "排名" in df.columns:
+            df["rank"] = df["排名"]
+        else:
+            df["rank"] = range(1, len(df) + 1)
+
+    # ts_code
+    c = _first_existing_col(df, CODE_COL_CANDIDATES)
+    if c and c != "ts_code":
+        df["ts_code"] = df[c]
+    elif "ts_code" not in df.columns:
+        df["ts_code"] = ""
+
+    # name
+    n = _first_existing_col(df, NAME_COL_CANDIDATES)
+    if n and n != "name":
+        df["name"] = df[n]
+    elif "name" not in df.columns:
+        df["name"] = ""
+
+    # prob
+    p = _first_existing_col(df, PROB_COL_CANDIDATES)
+    if p and p != "prob":
+        df["prob"] = df[p]
+    elif "prob" not in df.columns:
+        df["prob"] = ""
+
+    # board
+    b = _first_existing_col(df, BOARD_COL_CANDIDATES)
+    if b and b != "board":
+        df["board"] = df[b]
+    elif "board" not in df.columns:
+        df["board"] = ""
+
+    # StrengthScore / ThemeBoost
+    if "StrengthScore" not in df.columns:
+        if "强度得分" in df.columns:
+            df["StrengthScore"] = df["强度得分"]
+        else:
+            df["StrengthScore"] = ""
+    if "ThemeBoost" not in df.columns:
+        if "题材加成" in df.columns:
+            df["ThemeBoost"] = df["题材加成"]
+        else:
+            df["ThemeBoost"] = ""
+
+    use_cols = ["rank", "ts_code", "name", "prob", "StrengthScore", "ThemeBoost", "board"]
+    df = df[[c for c in use_cols if c in df.columns]].copy()
+    return df
+
+
 def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     outdir = getattr(getattr(settings, "io", None), "outputs_dir", None)
     if not outdir:
         outdir = "outputs"
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+
+    # P1 meta
+    run_meta = _get_run_meta()
+    force_overwrite = str(os.getenv("FORCE_OVERWRITE", "0")).strip() in ("1", "true", "True", "YES", "yes")
+
+    # learning + warehouse dirs
+    learning_dir = outdir / "learning"
+    wh_pred_dir = outdir / "_warehouse" / "pred_top10"
+    _ensure_dir(learning_dir)
+    _ensure_dir(wh_pred_dir)
 
     topN_df: Optional[pd.DataFrame] = None
     full_df: Optional[pd.DataFrame] = None
@@ -621,7 +791,6 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     calendar = _list_trade_dates(settings)
     prev_td, next_td = _prev_next_trade_date_with_fallback(calendar, trade_date)
 
-    # 当前 trade_date：如果 ctx 带了 trade_date，会命中；否则走 snapshot（通常也有）
     limit_df_current = _load_limit_df(settings, ctx, trade_date)
 
     _hit_df_same_day, metrics_same_day = _topN_to_hit_df(topN_df, limit_df_current)
@@ -636,11 +805,17 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         "learn": learn,
         "metrics": metrics_same_day,
         "metrics_same_day": metrics_same_day,
+        "run_meta": run_meta,
     }
 
+    # ================
+    # P1: write-once daily json/md (freeze history)
+    # ================
     json_path = outdir / f"predict_top10_{trade_date}.json"
-    json_path.write_text(
+    _write_text_once(
+        json_path,
         json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
+        force=force_overwrite,
         encoding="utf-8",
     )
 
@@ -706,9 +881,62 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         lines.append(_df_to_md_table(hist_df, cols=["日期", "命中数", "命中率", "当日涨停家数"]))
         lines.append("\n")
 
-    md_path.write_text("\n".join(lines), encoding="utf-8")
+    md_text = "\n".join(lines)
+    _write_text_once(md_path, md_text, force=force_overwrite, encoding="utf-8")
 
+    # latest.md（允许覆盖，属于“当前展示”）
     latest = outdir / "latest.md"
-    latest.write_text(md_path.read_text(encoding="utf-8"), encoding="utf-8")
+    latest.write_text(md_text, encoding="utf-8")
+    print(f"[WRITE] {latest} (latest)")
+
+    # ================
+    # P1: CSV outputs
+    # - immutable warehouse
+    # - learning per-day (write-once)
+    # - history append-only
+    # ================
+    topN_std = _standardize_topN_for_csv(topN_df)
+
+    # enrich
+    if topN_std is not None and not topN_std.empty:
+        topN_std = topN_std.copy()
+        topN_std.insert(0, "trade_date", trade_date)
+        topN_std.insert(1, "verify_date", next_td)
+        topN_std["run_id"] = run_meta["run_id"]
+        topN_std["run_attempt"] = run_meta["run_attempt"]
+        topN_std["commit_sha"] = run_meta["commit_sha"]
+        topN_std["generated_at_utc"] = run_meta["generated_at_utc"]
+
+    # 1) immutable archive (always write, never overwrite)
+    wh_csv = wh_pred_dir / f"pred_top10_{trade_date}_{run_meta['run_id']}.csv"
+    _write_csv_once(topN_std, wh_csv, force=False)
+
+    # 2) learning per-day (write-once unless FORCE_OVERWRITE=1)
+    learn_csv = learning_dir / f"pred_top10_{trade_date}.csv"
+    _write_csv_once(topN_std, learn_csv, force=force_overwrite)
+
+    # 3) pred_top10_history.csv append-only (no rewrite)
+    hist_path = learning_dir / "pred_top10_history.csv"
+    # 只按 (trade_date, ts_code) 去重：一旦该票当日已记录，就不再追加（防止历史变动）
+    if topN_std is not None and not topN_std.empty:
+        hist_stats = _append_csv_unique(
+            topN_std,
+            hist_path,
+            key_cols=["trade_date", "ts_code"],
+        )
+        print(f"[HISTORY] pred_top10_history.csv appended={hist_stats['appended']} skipped={hist_stats['skipped']} total={hist_stats['total']}")
+
+    # 4) _last_run.txt (overwrite is OK)
+    last_run = learning_dir / "_last_run.txt"
+    last_text = (
+        f"trade_date={trade_date}\n"
+        f"verify_date={next_td}\n"
+        f"run_id={run_meta['run_id']}\n"
+        f"run_attempt={run_meta['run_attempt']}\n"
+        f"commit_sha={run_meta['commit_sha']}\n"
+        f"generated_at_utc={run_meta['generated_at_utc']}\n"
+    )
+    last_run.write_text(last_text, encoding="utf-8")
+    print(f"[WRITE] {last_run} (latest)")
 
     print(f"✅ Outputs written: {md_path}")
