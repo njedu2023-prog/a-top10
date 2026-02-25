@@ -18,9 +18,9 @@
       margin:0; background:var(--bg); color:var(--fg);
     }
     .wrap{max-width: 980px; margin: 0 auto; padding: 24px 16px 60px;}
-    header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px;}
+    header{display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:16px;}
     h1{font-size:16px; margin:0; letter-spacing:.5px;}
-    .sub{color:var(--muted); font-size:14px; margin-top:6px;}
+    .sub{color:var(--muted); font-size:13px; margin-top:6px; line-height:1.5;}
     .nav{display:flex; gap:10px; align-items:center;}
     button{
       border:1px solid var(--line);
@@ -55,6 +55,16 @@
       border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:14px;
       background:#fff;
     }
+    .badge{
+      display:inline-block;
+      border:1px solid var(--line);
+      background:#fff;
+      border-radius:999px;
+      padding:4px 10px;
+      font-size:12px;
+      color:var(--muted);
+      margin-right:8px;
+    }
   </style>
 
   <script>
@@ -85,6 +95,7 @@
       const [y,m,d] = v.split('-').map(x=>parseInt(x,10));
       return new Date(y, m-1, d);
     }
+
     function getQueryDate(){
       const p = new URLSearchParams(location.search);
       const d = p.get('d');
@@ -96,18 +107,27 @@
       }
       return new Date(); // 默认今天
     }
+
     function setQueryDate(date){
       const d = yyyymmdd(date);
       const url = new URL(location.href);
       url.searchParams.set('d', d);
       location.href = url.toString();
     }
+
+    function cacheBust(url){
+      const u = new URL(url, location.href);
+      u.searchParams.set("v", String(Date.now()));
+      return u.toString();
+    }
+
     function mdPathFor(date){
+      // ✅ P1：此文件由 writers.py 写一次锁定（历史冻结）
       return `outputs/predict_top10_${yyyymmdd(date)}.md`;
     }
 
     async function fetchText(path){
-      const res = await fetch(path, { cache: "no-store" });
+      const res = await fetch(cacheBust(path), { cache: "no-store" });
       if(!res.ok) throw new Error(`${res.status} -> ${path}`);
       return await res.text();
     }
@@ -118,10 +138,51 @@
         const d = new Date(startDate);
         d.setDate(d.getDate() - i);
         const path = mdPathFor(d);
-        const res = await fetch(path, { method: "GET", cache: "no-store" });
+        const res = await fetch(cacheBust(path), { method: "GET", cache: "no-store" });
         if(res.ok) return d;
       }
       return null;
+    }
+
+    // =============== 读取运行信息 _last_run.txt ===============
+    function parseKeyValueText(text){
+      const out = {};
+      (text || "").split(/\r?\n/).forEach(line=>{
+        const s = line.trim();
+        if(!s) return;
+        const idx = s.indexOf("=");
+        if(idx <= 0) return;
+        const k = s.slice(0, idx).trim();
+        const v = s.slice(idx+1).trim();
+        out[k] = v;
+      });
+      return out;
+    }
+
+    async function loadRunStamp(){
+      const box = document.getElementById("run_stamp");
+      if(!box) return;
+
+      const path = "outputs/learning/_last_run.txt";
+      try{
+        const txt = await fetchText(path);
+        const kv = parseKeyValueText(txt);
+
+        const td = kv.trade_date || "";
+        const rid = kv.run_id || "";
+        const sha = kv.commit_sha || "";
+        const utc = kv.utc || kv.generated_at_utc || "";
+
+        const parts = [];
+        if(td) parts.push(`trade_date=${td}`);
+        if(rid) parts.push(`run_id=${rid}`);
+        if(sha) parts.push(`sha=${sha.slice(0,8)}`);
+        if(utc) parts.push(`utc=${utc}`);
+
+        box.textContent = parts.length ? parts.join("  ·  ") : "未读取到 run stamp";
+      }catch(e){
+        box.textContent = "未能读取 run stamp（_last_run.txt）";
+      }
     }
 
     // =============== 加载日报 ===============
@@ -151,8 +212,8 @@
       const targetStr = yyyymmdd(targetDate);
       const useStr = yyyymmdd(useDate);
       navHint.textContent = (useStr !== targetStr)
-        ? `提示：你选择的 ${targetStr} 无日报，已自动回退到最近可用日报 ${useStr}`
-        : `提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告`;
+        ? `提示：你选择的 ${targetStr} 无日报，已自动回退到最近可用日报 ${useStr}（历史冻结版）`
+        : `提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告（历史冻结版）`;
 
       // 3) 标题强制使用统一格式（动态日期）
       const niceDate = yyyy_mm_dd(useDate);
@@ -206,7 +267,7 @@
         const d = new Date(currentDate);
         d.setDate(d.getDate() + delta * i);
         const path = mdPathFor(d);
-        const res = await fetch(path, { method: "GET", cache: "no-store" });
+        const res = await fetch(cacheBust(path), { method: "GET", cache: "no-store" });
         if(res.ok) return d;
       }
       return null;
@@ -240,6 +301,7 @@
       const date = getQueryDate();
       bindNav(date);
 
+      await loadRunStamp();
       await loadDailyReport(date);
       await loadLearningStatus();
     };
@@ -251,6 +313,10 @@
     <header>
       <div>
         <h1 id="title">A-Share TOP10</h1>
+        <div class="sub">
+          <span class="badge">历史冻结</span>
+          <span id="run_stamp">正在读取运行信息…</span>
+        </div>
       </div>
       <div class="nav">
         <button id="btn_prev">←</button>
@@ -263,7 +329,7 @@
         <span>选择日期：</span>
         <input id="date_picker" type="date" />
       </div>
-      <div id="nav_hint" class="hint">提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告</div>
+      <div id="nav_hint" class="hint">提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告（历史冻结版）</div>
     </div>
 
     <div class="card">
