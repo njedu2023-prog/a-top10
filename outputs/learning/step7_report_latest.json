@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-25 19:45:09",
+  "ts": "2026-02-25 20:04:32",
   "topn": 10,
   "lookback_days": 150,
   "today_yyyymmdd": "20260225",
@@ -332,7 +332,7 @@
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.20257173543542328,
+          "std": 0.20209041130350835,
           "unique_count": 1261
         }
       },
@@ -367,8 +367,8 @@
     },
     "pseudo_ratio": 0.06626047220106626,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-25T11:45:08Z",
-    "model_version": "60e13a1fbb789fcfc1cef6fea071e0e0828e255a",
+    "updated_at_utc": "2026-02-25T12:04:31Z",
+    "model_version": "6c1d9c94422680560ff9799439180a6823f629ad",
     "today_yyyymmdd": "20260225",
     "latest_snapshot_yyyymmdd": "20260225",
     "label_upper_bound_yyyymmdd": "20260225"
