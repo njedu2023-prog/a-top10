@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-02-27 05:49:06
+- 生成时间：2026-02-27 06:12:54
 - Today：20260227
 - LatestSnapshot：20260226
 - LabelUpperBound：20260226
@@ -34,11 +34,11 @@
 ## 2) 训练数据概况
 
 - 特征历史文件：outputs/learning/feature_history.csv
-- 原始行数：1376
-- 过滤后行数：1284
+- 原始行数：1451
+- 过滤后行数：1359
 - 丢弃全零特征行：29
-- 日期总数：19
-- 使用日期：19
+- 日期总数：20
+- 使用日期：20
 
 ## 3) 训练执行结果
 
@@ -46,8 +46,8 @@
 - lr_saved：True
 - lgbm_saved：True
 - models_dir：models
-- train_rows：1284
-- pos/neg：225/1059
+- train_rows：1359
+- pos/neg：236/1123
 - reason：ok
 - lr_path：models/step5_lr.joblib
 - lgbm_path：models/step5_lgbm.joblib
