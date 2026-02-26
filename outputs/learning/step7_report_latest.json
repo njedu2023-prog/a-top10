@@ -1,5 +1,5 @@
 {
-  "ts": "2026-02-27 06:12:54",
+  "ts": "2026-02-27 06:37:27",
   "topn": 10,
   "lookback_days": 150,
   "today_yyyymmdd": "20260227",
@@ -23,6 +23,15 @@
       "hit": "",
       "hit_rate": "",
       "note": "pending_label: no next snapshot available yet"
+    },
+    {
+      "trade_date": "20260122",
+      "expected_next_trade_date": "20260123",
+      "actual_next_trade_date": "20260123",
+      "topn": "10",
+      "hit": "3",
+      "hit_rate": "0.3",
+      "note": "src=pred_top10_history"
     },
     {
       "trade_date": "20260123",
@@ -185,15 +194,6 @@
       "hit": "4",
       "hit_rate": "0.4",
       "note": "src=pred_top10_history"
-    },
-    {
-      "trade_date": "20260122",
-      "expected_next_trade_date": "20260123",
-      "actual_next_trade_date": "20260123",
-      "topn": "10",
-      "hit": "3",
-      "hit_rate": "0.3",
-      "note": "src=pred_top10_history"
     }
   ],
   "hit_rows_done_last10": [
@@ -352,7 +352,7 @@
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.2085184645475077,
+          "std": 0.2041837956663824,
           "unique_count": 1399
         }
       },
@@ -389,8 +389,8 @@
     },
     "pseudo_ratio": 0.05995864920744314,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-26T22:12:53Z",
-    "model_version": "e26e5e7d875691950ff910e967cd246e4d33ea07",
+    "updated_at_utc": "2026-02-26T22:37:26Z",
+    "model_version": "f851e73bc5ee77848a9596eb9946832244a7941a",
     "today_yyyymmdd": "20260227",
     "latest_snapshot_yyyymmdd": "20260226",
     "label_upper_bound_yyyymmdd": "20260226"
