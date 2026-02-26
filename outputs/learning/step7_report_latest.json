@@ -1,8 +1,8 @@
 {
-  "ts": "2026-02-26 20:05:29",
+  "ts": "2026-02-27 05:49:06",
   "topn": 10,
   "lookback_days": 150,
-  "today_yyyymmdd": "20260226",
+  "today_yyyymmdd": "20260227",
   "latest_snapshot_yyyymmdd": "20260226",
   "label_upper_bound_yyyymmdd": "20260226",
   "latest_hit": {
@@ -378,9 +378,9 @@
     },
     "pseudo_ratio": 0.06322674418604651,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-02-26T12:05:28Z",
-    "model_version": "84e1264aa069947dc7083c327123bed5399c2499",
-    "today_yyyymmdd": "20260226",
+    "updated_at_utc": "2026-02-26T21:49:05Z",
+    "model_version": "23b795ceb9e20db2d0c57aff3fa212a4746847fd",
+    "today_yyyymmdd": "20260227",
     "latest_snapshot_yyyymmdd": "20260226",
     "label_upper_bound_yyyymmdd": "20260226"
   },
