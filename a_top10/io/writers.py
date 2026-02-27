@@ -756,6 +756,92 @@ def _standardize_topN_for_csv(topN_df: Optional[pd.DataFrame]) -> pd.DataFrame:
     return df
 
 
+def _merge_strengthscore_from_step3(full_std: Optional[pd.DataFrame], outdir: Path, trade_date: str) -> Optional[pd.DataFrame]:
+    """
+    兜底修复：
+    - 如果 full_std 的 StrengthScore 缺失/全 0，则尝试从 step3 输出 CSV 回填。
+    - 只回填 StrengthScore 为 NaN/空/0 的位置（避免覆盖上游正确值）。
+    - 主要目标：修复 outputs/decisio/pred_decisio_latest.csv StrengthScore 全 0。
+    """
+    if full_std is None or full_std.empty:
+        return full_std
+
+    if "ts_code" not in full_std.columns:
+        return full_std
+
+    # 如果 StrengthScore 列都不存在，先补出来（后续回填）
+    if "StrengthScore" not in full_std.columns:
+        full_std = full_std.copy()
+        full_std["StrengthScore"] = ""
+
+    base_num = pd.to_numeric(full_std["StrengthScore"], errors="coerce")
+    nonzero_cnt = int((base_num.fillna(0) != 0).sum())
+    if nonzero_cnt > 0:
+        # 已经有非零值，仍允许部分回填（只对 0/NaN 的行）
+        pass
+
+    # step3 候选文件（按优先级）
+    candidates: List[Path] = [
+        outdir / f"step3_strength_{trade_date}.csv",
+        outdir / "step3_strength.csv",
+        outdir / f"outputs/step3_strength_{trade_date}.csv",
+        outdir / "outputs/step3_strength.csv",
+    ]
+    step3_path = None
+    for p in candidates:
+        try:
+            if p.exists():
+                step3_path = p
+                break
+        except Exception:
+            continue
+
+    if step3_path is None:
+        return full_std
+
+    df_step3 = _read_csv_guess(step3_path)
+    if df_step3 is None or df_step3.empty:
+        return full_std
+
+    code_col = _first_existing_col(df_step3, CODE_COL_CANDIDATES)
+    if not code_col:
+        return full_std
+
+    strength_col = _first_existing_col(df_step3, ["StrengthScore", "强度得分", "_strength", "strength", "强度", "strengthscore"])
+    if not strength_col:
+        return full_std
+
+    s = df_step3[[code_col, strength_col]].copy()
+    if code_col != "ts_code":
+        s["ts_code"] = s[code_col]
+    s["StrengthScore_step3"] = pd.to_numeric(s[strength_col], errors="coerce")
+    s = s[["ts_code", "StrengthScore_step3"]].dropna(subset=["ts_code"])
+    s = s.drop_duplicates(subset=["ts_code"], keep="last")
+
+    m = full_std.merge(s, on="ts_code", how="left")
+
+    base = pd.to_numeric(m["StrengthScore"], errors="coerce")
+    fill_mask = base.isna() | (base == 0)
+
+    before_fill = int(fill_mask.sum())
+    if before_fill <= 0:
+        return full_std
+
+    # 只有 step3 有值的才回填
+    step3_v = m["StrengthScore_step3"]
+    can_fill = fill_mask & step3_v.notna()
+    filled = int(can_fill.sum())
+
+    if filled > 0:
+        m.loc[can_fill, "StrengthScore"] = m.loc[can_fill, "StrengthScore_step3"]
+        m["StrengthScore"] = pd.to_numeric(m["StrengthScore"], errors="coerce")
+
+    m = m.drop(columns=["StrengthScore_step3"], errors="ignore")
+
+    print(f"[FIX] StrengthScore backfill from {step3_path.name}: fill_candidates={before_fill} filled={filled}")
+    return m
+
+
 def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     outdir = getattr(getattr(settings, "io", None), "outputs_dir", None)
     if not outdir:
@@ -907,15 +993,14 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         topN_std["commit_sha"] = run_meta["commit_sha"]
         topN_std["generated_at_utc"] = run_meta["generated_at_utc"]
 
-
     # =========================
     # ✅ NEW: decisio full ranking outputs (TopK/Full list)
     # outputs/decisio/
     # - pred_decisio_{trade_date}.csv   (write-once, archive)
     # - pred_decisio_latest.csv         (overwrite, latest)
     # =========================
-
     full_std = _standardize_topN_for_csv(full_df)
+    full_std = _merge_strengthscore_from_step3(full_std, outdir, trade_date)
 
     # enrich（与 topN_std 保持一致字段，保证下游可直接复用）
     if full_std is not None and not full_std.empty:
@@ -940,10 +1025,6 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         print(f"[WRITE] {decisio_latest} rows={len(full_std)} (latest)")
     else:
         print("[WARN] full_df empty -> skip outputs/decisio")
-
-
-
-    
 
     # 1) immutable archive (always write, never overwrite)
     wh_csv = wh_pred_dir / f"pred_top10_{trade_date}_{run_meta['run_id']}.csv"
