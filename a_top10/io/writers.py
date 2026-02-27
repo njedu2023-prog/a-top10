@@ -907,6 +907,44 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         topN_std["commit_sha"] = run_meta["commit_sha"]
         topN_std["generated_at_utc"] = run_meta["generated_at_utc"]
 
+
+    # =========================
+    # ✅ NEW: decisio full ranking outputs (TopK/Full list)
+    # outputs/decisio/
+    # - pred_decisio_{trade_date}.csv   (write-once, archive)
+    # - pred_decisio_latest.csv         (overwrite, latest)
+    # =========================
+
+    full_std = _standardize_topN_for_csv(full_df)
+
+    # enrich（与 topN_std 保持一致字段，保证下游可直接复用）
+    if full_std is not None and not full_std.empty:
+        full_std = full_std.copy()
+        full_std.insert(0, "trade_date", trade_date)
+        full_std.insert(1, "verify_date", next_td)
+        full_std["run_id"] = run_meta["run_id"]
+        full_std["run_attempt"] = run_meta["run_attempt"]
+        full_std["commit_sha"] = run_meta["commit_sha"]
+        full_std["generated_at_utc"] = run_meta["generated_at_utc"]
+
+        decisio_dir = outdir / "decisio"
+        _ensure_dir(decisio_dir)
+
+        # 1) 日归档（write-once；除非 FORCE_OVERWRITE=1 才允许覆盖）
+        decisio_dated = decisio_dir / f"pred_decisio_{trade_date}.csv"
+        _write_csv_once(full_std, decisio_dated, force=force_overwrite)
+
+        # 2) latest（覆盖，用于下游拉取）
+        decisio_latest = decisio_dir / "pred_decisio_latest.csv"
+        full_std.to_csv(decisio_latest, index=False, encoding="utf-8-sig")
+        print(f"[WRITE] {decisio_latest} rows={len(full_std)} (latest)")
+    else:
+        print("[WARN] full_df empty -> skip outputs/decisio")
+
+
+
+    
+
     # 1) immutable archive (always write, never overwrite)
     wh_csv = wh_pred_dir / f"pred_top10_{trade_date}_{run_meta['run_id']}.csv"
     _write_csv_once(topN_std, wh_csv, force=False)
