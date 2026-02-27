@@ -932,7 +932,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
         # 1) 日归档（write-once；除非 FORCE_OVERWRITE=1 才允许覆盖）
         decisio_dated = decisio_dir / f"pred_decisio_{trade_date}.csv"
-        _write_csv_once(full_std, decisio_dated, force=force_overwrite)
+        _write_csv_once(full_std, decisio_dated, force=False)
 
         # 2) latest（覆盖，用于下游拉取）
         decisio_latest = decisio_dir / "pred_decisio_latest.csv"
@@ -949,9 +949,15 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     wh_csv = wh_pred_dir / f"pred_top10_{trade_date}_{run_meta['run_id']}.csv"
     _write_csv_once(topN_std, wh_csv, force=False)
 
-    # 2) learning per-day (write-once unless FORCE_OVERWRITE=1)
+    # 2) learning per-day (STRICT write-once, NEVER overwrite)
     learn_csv = learning_dir / f"pred_top10_{trade_date}.csv"
-    _write_csv_once(topN_std, learn_csv, force=force_overwrite)
+    _write_csv_once(topN_std, learn_csv, force=False)
+
+    # 2b) learning latest (overwrite OK, for downstream consumption)
+    learn_latest = learning_dir / "pred_top10_latest.csv"
+    _ensure_dir(learn_latest.parent)
+    (topN_std if topN_std is not None else pd.DataFrame()).to_csv(learn_latest, index=False, encoding="utf-8-sig")
+    print(f"[WRITE] {learn_latest} rows={0 if topN_std is None else len(topN_std)} (latest)")
 
     # 3) pred_top10_history.csv append-only (no rewrite)
     hist_path = learning_dir / "pred_top10_history.csv"
