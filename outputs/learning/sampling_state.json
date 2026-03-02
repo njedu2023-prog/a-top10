@@ -1,7 +1,7 @@
 {
   "sampling_stage": "S1_MVP",
   "target_rows_per_day": 200,
-  "days_covered": 21,
+  "days_covered": 22,
   "rows_per_day_last_N": [
     75,
     104,
@@ -23,7 +23,8 @@
     93,
     75,
     63,
-    75
+    75,
+    88
   ],
   "quality_gate_pass": true,
   "quality_gate_details": {
@@ -44,51 +45,50 @@
     "metrics": {
       "StrengthScore": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.9429882044560943,
-        "std": 18.489089679069856,
-        "unique_count": 1393
+        "non_zero_rate": 0.9460966542750929,
+        "std": 18.25692544229066,
+        "unique_count": 1478
       },
       "ThemeBoost": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.7267365661861075,
-        "std": 0.37372240212198937,
+        "non_zero_rate": 0.7298636926889716,
+        "std": 0.3752228396543651,
         "unique_count": 19
       },
       "turnover_rate": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.9429882044560943,
-        "std": 11.919901266339386,
-        "unique_count": 1436
+        "non_zero_rate": 0.9460966542750929,
+        "std": 11.840510187414004,
+        "unique_count": 1524
       },
       "seal_amount": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.9148099606815203,
-        "std": 221816085.84475055,
-        "unique_count": 1397
+        "non_zero_rate": 0.919454770755886,
+        "std": 220654195.35786292,
+        "unique_count": 1485
       },
       "open_times": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.4416775884665793,
-        "std": 3.610223625965906,
+        "non_zero_rate": 0.4448574969021066,
+        "std": 3.5740794502529787,
         "unique_count": 27
       },
       "Probability": {
         "non_null_rate": 1.0,
         "non_zero_rate": 1.0,
-        "std": 0.2031945885682882,
-        "unique_count": 1474
+        "std": 0.2028648729169585,
+        "unique_count": 1562
       }
     },
-    "pseudo_ratio": 0.05701179554390563,
-    "window_days": 21,
-    "rows_in_window": 1526,
+    "pseudo_ratio": 0.05390334572490706,
+    "window_days": 22,
+    "rows_in_window": 1614,
     "pass": true
   },
   "stage_debug": {
     "prev_stage": "S1_MVP",
-    "days_covered": 21,
+    "days_covered": 22,
     "rows_last": [
-      104,
       71,
       53,
       80,
@@ -107,14 +107,15 @@
       93,
       75,
       63,
-      75
+      75,
+      88
     ]
   },
-  "pseudo_ratio": 0.05701179554390563,
+  "pseudo_ratio": 0.05390334572490706,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-02-27T21:32:33Z",
-  "model_version": "edaf56def8490817de3d2b73bafa61daa0eda1de",
-  "today_yyyymmdd": "20260228",
-  "latest_snapshot_yyyymmdd": "20260227",
-  "label_upper_bound_yyyymmdd": "20260227"
+  "updated_at_utc": "2026-03-02T11:57:24Z",
+  "model_version": "25518345798015602b304b3f88cedd5815e60e38",
+  "today_yyyymmdd": "20260302",
+  "latest_snapshot_yyyymmdd": "20260302",
+  "label_upper_bound_yyyymmdd": "20260302"
 }
