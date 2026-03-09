@@ -1,16 +1,16 @@
 # Step3 Debug Report
 
-- trade_date: `20260306`
-- rows: 74
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260306`
+- trade_date: `20260309`
+- rows: 42
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260309`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5477
-- daily_basic.csv: 5477
-- top_list.csv: 68
+- daily.csv: 5481
+- daily_basic.csv: 5481
+- top_list.csv: 70
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 74
+- limit_list_d.csv: 42
 - limit_break_d.csv: 0
 
 ## Missing rate
@@ -28,18 +28,18 @@
 - StrengthScore: 1.0000
 - turnover_rate: 1.0000
 - seal_amount: 1.0000
-- open_times: 0.4459
+- open_times: 0.3095
 
 ```json
 {
-  "trade_date": "20260306",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260306",
+  "trade_date": "20260309",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260309",
   "files": {
-    "daily.csv": 5477,
-    "daily_basic.csv": 5477,
-    "top_list.csv": 68,
+    "daily.csv": 5481,
+    "daily_basic.csv": 5481,
+    "top_list.csv": 70,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 74,
+    "limit_list_d.csv": 42,
     "limit_break_d.csv": 0
   },
   "missing_rate": {
@@ -57,7 +57,7 @@
     "StrengthScore": 1.0,
     "turnover_rate": 1.0,
     "seal_amount": 1.0,
-    "open_times": 0.44594594594594594
+    "open_times": 0.30952380952380953
   }
 }
 ```
