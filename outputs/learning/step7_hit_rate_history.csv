@@ -1,5 +1,5 @@
 ﻿trade_date,expected_next_trade_date,actual_next_trade_date,topn,hit,hit_rate,note
-20260309,,,10,,,pending_label: no next snapshot available yet
+20260310,,,10,,,pending_label: no next snapshot available yet
 20260122,20260123,20260123,10,3,0.3,src=pred_top10_history
 20260123,20260126,20260126,10,3,0.3,src=pred_top10_history
 20260126,20260127,20260127,10,6,0.6,src=pred_top10_history
@@ -26,3 +26,4 @@
 20260304,20260305,20260305,10,3,0.3,src=pred_top10_history
 20260305,20260306,20260306,10,3,0.3,src=pred_top10_history
 20260306,20260309,20260309,10,3,0.3,src=pred_top10_history
+20260309,20260310,20260310,10,0,0.0,src=pred_top10_history

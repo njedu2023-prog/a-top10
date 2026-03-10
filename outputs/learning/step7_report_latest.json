@@ -1,27 +1,27 @@
 {
-  "ts": "2026-03-09 20:00:12",
+  "ts": "2026-03-10 19:58:53",
   "topn": 10,
   "lookback_days": 150,
-  "today_yyyymmdd": "20260309",
-  "latest_snapshot_yyyymmdd": "20260309",
-  "label_upper_bound_yyyymmdd": "20260309",
+  "today_yyyymmdd": "20260310",
+  "latest_snapshot_yyyymmdd": "20260310",
+  "label_upper_bound_yyyymmdd": "20260310",
   "latest_hit": {
-    "trade_date": "20260306",
-    "expected_next_trade_date": "20260309",
-    "actual_next_trade_date": "20260309",
+    "trade_date": "20260309",
+    "expected_next_trade_date": "20260310",
+    "actual_next_trade_date": "20260310",
     "topn": "10",
-    "hit": "3",
-    "hit_rate": "0.3",
+    "hit": "0",
+    "hit_rate": "0.0",
     "note": "src=pred_top10_history"
   },
   "hit_rows_all": [
     {
-      "trade_date": "20260306",
-      "expected_next_trade_date": "20260309",
-      "actual_next_trade_date": "20260309",
+      "trade_date": "20260309",
+      "expected_next_trade_date": "20260310",
+      "actual_next_trade_date": "20260310",
       "topn": "10",
-      "hit": "3",
-      "hit_rate": "0.3",
+      "hit": "0",
+      "hit_rate": "0.0",
       "note": "src=pred_top10_history"
     },
     {
@@ -250,7 +250,16 @@
       "note": "src=pred_top10_history"
     },
     {
-      "trade_date": "20260309",
+      "trade_date": "20260306",
+      "expected_next_trade_date": "20260309",
+      "actual_next_trade_date": "20260309",
+      "topn": "10",
+      "hit": "3",
+      "hit_rate": "0.3",
+      "note": "src=pred_top10_history"
+    },
+    {
+      "trade_date": "20260310",
       "expected_next_trade_date": "",
       "actual_next_trade_date": "",
       "topn": "10",
@@ -260,13 +269,6 @@
     }
   ],
   "hit_rows_done_last10": [
-    {
-      "trade_date": "20260213",
-      "actual_next_trade_date": "20260224",
-      "topn": "10",
-      "hit": "3",
-      "hit_rate": "0.3"
-    },
     {
       "trade_date": "20260224",
       "actual_next_trade_date": "20260225",
@@ -329,20 +331,27 @@
       "topn": "10",
       "hit": "3",
       "hit_rate": "0.3"
+    },
+    {
+      "trade_date": "20260309",
+      "actual_next_trade_date": "20260310",
+      "topn": "10",
+      "hit": "0",
+      "hit_rate": "0.0"
     }
   ],
   "train_meta": {
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "rows_raw": 1926,
-    "rows_used": 1855,
+    "rows_raw": 1982,
+    "rows_used": 1897,
     "rows_dropped_allzero": 29,
-    "dates_total": 27,
-    "dates_used": 27
+    "dates_total": 28,
+    "dates_used": 28
   },
   "sampling_state": {
     "sampling_stage": "S1_MVP",
     "target_rows_per_day": 200,
-    "days_covered": 27,
+    "days_covered": 28,
     "rows_per_day_last_N": [
       75,
       104,
@@ -370,7 +379,8 @@
       44,
       69,
       74,
-      42
+      42,
+      56
     ],
     "quality_gate_pass": true,
     "quality_gate_details": {
@@ -391,51 +401,50 @@
       "metrics": {
         "StrengthScore": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.9548286604361371,
-          "std": 17.69054298460215,
-          "unique_count": 1768
+          "non_zero_rate": 0.9561049445005045,
+          "std": 17.610572091427965,
+          "unique_count": 1821
         },
         "ThemeBoost": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.7440290758047767,
-          "std": 0.3819639408267823,
+          "non_zero_rate": 0.7436932391523713,
+          "std": 0.38226113806588113,
           "unique_count": 19
         },
         "turnover_rate": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.9548286604361371,
-          "std": 12.086501409540162,
-          "unique_count": 1835
+          "non_zero_rate": 0.9561049445005045,
+          "std": 12.073932827993476,
+          "unique_count": 1890
         },
         "seal_amount": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.9319833852544133,
-          "std": 212989766.77167794,
-          "unique_count": 1796
+          "non_zero_rate": 0.9339051463168516,
+          "std": 210924269.86786067,
+          "unique_count": 1852
         },
         "open_times": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.4522326064382139,
-          "std": 3.568627224630123,
+          "non_zero_rate": 0.44954591321897075,
+          "std": 3.5417035881577728,
           "unique_count": 27
         },
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.2208266201138216,
-          "unique_count": 1874
+          "std": 0.22005318907092147,
+          "unique_count": 1930
         }
       },
-      "pseudo_ratio": 0.045171339563862926,
-      "window_days": 27,
-      "rows_in_window": 1926,
+      "pseudo_ratio": 0.04389505549949546,
+      "window_days": 28,
+      "rows_in_window": 1982,
       "pass": true
     },
     "stage_debug": {
       "prev_stage": "S1_MVP",
-      "days_covered": 27,
+      "days_covered": 28,
       "rows_last": [
-        36,
         69,
         68,
         44,
@@ -454,16 +463,17 @@
         44,
         69,
         74,
-        42
+        42,
+        56
       ]
     },
-    "pseudo_ratio": 0.045171339563862926,
+    "pseudo_ratio": 0.04389505549949546,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-03-09T12:00:11Z",
-    "model_version": "ac19738686fe704fd24a95f354e29092d2ebf95a",
-    "today_yyyymmdd": "20260309",
-    "latest_snapshot_yyyymmdd": "20260309",
-    "label_upper_bound_yyyymmdd": "20260309"
+    "updated_at_utc": "2026-03-10T11:58:52Z",
+    "model_version": "e1b5fb4e6bfdca7742d413a4fab93e3640380e89",
+    "today_yyyymmdd": "20260310",
+    "latest_snapshot_yyyymmdd": "20260310",
+    "label_upper_bound_yyyymmdd": "20260310"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
@@ -472,9 +482,9 @@
     "lgbm_saved": true,
     "models_dir": "models",
     "detail": {
-      "train_rows": 1855,
-      "pos": 336,
-      "neg": 1519,
+      "train_rows": 1897,
+      "pos": 342,
+      "neg": 1555,
       "lr_path": "models/step5_lr.joblib",
       "lgbm_path": "models/step5_lgbm.joblib",
       "reason": "ok"
