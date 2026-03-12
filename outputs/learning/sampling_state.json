@@ -1,7 +1,7 @@
 {
   "sampling_stage": "S1_MVP",
   "target_rows_per_day": 200,
-  "days_covered": 29,
+  "days_covered": 30,
   "rows_per_day_last_N": [
     75,
     104,
@@ -31,7 +31,8 @@
     74,
     42,
     56,
-    53
+    53,
+    52
   ],
   "quality_gate_pass": true,
   "quality_gate_details": {
@@ -52,51 +53,50 @@
     "metrics": {
       "StrengthScore": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.9572481572481573,
-        "std": 17.478836761552614,
-        "unique_count": 1872
+        "non_zero_rate": 0.9583133684714902,
+        "std": 17.386406562318815,
+        "unique_count": 1922
       },
       "ThemeBoost": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.743980343980344,
-        "std": 0.3822986449622768,
+        "non_zero_rate": 0.7431720172496407,
+        "std": 0.38229001378903693,
         "unique_count": 19
       },
       "turnover_rate": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.9572481572481573,
-        "std": 12.095593487413353,
-        "unique_count": 1943
+        "non_zero_rate": 0.9583133684714902,
+        "std": 12.100178369611058,
+        "unique_count": 1995
       },
       "seal_amount": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.9356265356265356,
-        "std": 209098417.86235023,
-        "unique_count": 1905
+        "non_zero_rate": 0.9372304743651174,
+        "std": 207075042.08870715,
+        "unique_count": 1957
       },
       "open_times": {
         "non_null_rate": 1.0,
-        "non_zero_rate": 0.4511056511056511,
-        "std": 3.5317087837396683,
+        "non_zero_rate": 0.4523239099185434,
+        "std": 3.5139455805794855,
         "unique_count": 27
       },
       "Probability": {
         "non_null_rate": 1.0,
         "non_zero_rate": 1.0,
-        "std": 0.2191327485738443,
-        "unique_count": 1983
+        "std": 0.2184806042420256,
+        "unique_count": 2035
       }
     },
-    "pseudo_ratio": 0.04275184275184275,
-    "window_days": 29,
-    "rows_in_window": 2035,
+    "pseudo_ratio": 0.04168663152850982,
+    "window_days": 30,
+    "rows_in_window": 2087,
     "pass": true
   },
   "stage_debug": {
     "prev_stage": "S1_MVP",
-    "days_covered": 29,
+    "days_covered": 30,
     "rows_last": [
-      68,
       44,
       86,
       112,
@@ -115,14 +115,15 @@
       74,
       42,
       56,
-      53
+      53,
+      52
     ]
   },
-  "pseudo_ratio": 0.04275184275184275,
+  "pseudo_ratio": 0.04168663152850982,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-03-11T11:59:22Z",
-  "model_version": "8e255df74b4c8815075bac684c4296bcd9bcdb36",
-  "today_yyyymmdd": "20260311",
-  "latest_snapshot_yyyymmdd": "20260311",
-  "label_upper_bound_yyyymmdd": "20260311"
+  "updated_at_utc": "2026-03-12T11:54:56Z",
+  "model_version": "18238ae6063a2dbf19cd512e096b4fa69d6b241a",
+  "today_yyyymmdd": "20260312",
+  "latest_snapshot_yyyymmdd": "20260312",
+  "label_upper_bound_yyyymmdd": "20260312"
 }
