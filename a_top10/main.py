@@ -65,9 +65,9 @@ def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Any) -> bool:
         return bool(gate.get("pass"))
 
     # 2) 取市场指标（优先 gate，其次 ctx.market）
-    E1 = int(gate.get("E1", _safe_get(ctx, "market.E1", 0)) or 0)  # 涨停家数
-    E2 = float(gate.get("E2", _safe_get(ctx, "market.E2", 0.0)) or 0.0)  # 炸板率（%）
-    E3 = int(gate.get("E3", _safe_get(ctx, "market.E3", 0)) or 0)  # 最高连板高度
+    E1 = int(gate.get("E1", _safe_get(ctx, "market.E1", 0)) or 0)       # 涨停家数
+    E2 = float(gate.get("E2", _safe_get(ctx, "market.E2", 0.0)) or 0.0) # 炸板率（%）
+    E3 = int(gate.get("E3", _safe_get(ctx, "market.E3", 0)) or 0)       # 最高连板高度
 
     # 3) 从配置读取阈值（兼容多种字段命名）
     min_limit_up_cnt = _safe_get_any(
@@ -107,16 +107,19 @@ def _infer_gate_pass(settings: Any, gate: Dict[str, Any], ctx: Any) -> bool:
 
     # 5) 有阈值则按阈值判断（缺的阈值不参与）
     ok = True
+
     if min_limit_up_cnt is not None:
         try:
             ok = ok and (E1 >= int(min_limit_up_cnt))
         except Exception:
             pass
+
     if max_broken_rate is not None:
         try:
             ok = ok and (E2 <= float(max_broken_rate))
         except Exception:
             pass
+
     if min_max_lianban is not None:
         try:
             ok = ok and (E3 >= int(min_max_lianban))
@@ -147,7 +150,7 @@ def _chdir(path: Path):
 
 def _force_outputs_dir(settings: Any) -> Path:
     """
-    强制输出目录固定为 <repo_root>/outputs （即 a-top10/outputs/）。
+    强制输出目录固定为 /outputs （即 a-top10/outputs/）。
     - 通过 __file__ 推断 repo 根目录
     - 尝试写回 settings 里常见字段名（兼容不同配置结构）
     - 同时设置环境变量，方便 writers 或其他模块读取
@@ -194,6 +197,7 @@ def _force_outputs_dir(settings: Any) -> Path:
         parts = p.split(".")
         cur = settings
         ok = True
+
         for k in parts[:-1]:
             try:
                 if isinstance(cur, dict):
@@ -205,8 +209,10 @@ def _force_outputs_dir(settings: Any) -> Path:
             if cur is None:
                 ok = False
                 break
+
         if not ok:
             continue
+
         last = parts[-1]
         try:
             if isinstance(cur, dict):
@@ -233,6 +239,69 @@ def _ensure_step4_debug_compat(ctx: Dict[str, Any]) -> None:
         dbg["step4"] = dbg["step4_theme"]
 
 
+def _ensure_step5_v2_fields(prob_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    入口层兜底：
+    即使 Step5 还没完全升级，入口也尽量补齐 V2 字段，避免 Step6 断链。
+    规则：
+    - prob_final 缺失 -> fallback 到 Probability / prob / probability
+    - Probability 缺失 -> 回填为 prob_final
+    - prob_rule / prob_ml 缺失 -> 建空列
+    """
+    if not isinstance(prob_df, pd.DataFrame):
+        return pd.DataFrame()
+
+    df = prob_df.copy()
+
+    lower_map = {str(c).lower(): c for c in df.columns}
+
+    def find_col(cands: list[str]) -> Optional[str]:
+        for c in cands:
+            hit = lower_map.get(c.lower())
+            if hit is not None:
+                return hit
+        return None
+
+    prob_final_col = find_col(["prob_final"])
+    if prob_final_col is None:
+        fallback = find_col(["Probability", "probability", "prob"])
+        if fallback is not None:
+            df["prob_final"] = pd.to_numeric(df[fallback], errors="coerce").fillna(0.0)
+        else:
+            df["prob_final"] = 0.0
+    elif prob_final_col != "prob_final":
+        df["prob_final"] = pd.to_numeric(df[prob_final_col], errors="coerce").fillna(0.0)
+    else:
+        df["prob_final"] = pd.to_numeric(df["prob_final"], errors="coerce").fillna(0.0)
+
+    if "Probability" not in df.columns:
+        df["Probability"] = df["prob_final"]
+    else:
+        df["Probability"] = pd.to_numeric(df["Probability"], errors="coerce").fillna(df["prob_final"])
+
+    if "prob_rule" not in df.columns:
+        df["prob_rule"] = 0.0
+    else:
+        df["prob_rule"] = pd.to_numeric(df["prob_rule"], errors="coerce").fillna(0.0)
+
+    if "prob_ml" not in df.columns:
+        df["prob_ml"] = pd.Series([None] * len(df), index=df.index, dtype="object")
+
+    if "prob_ml_available" not in df.columns:
+        df["prob_ml_available"] = pd.to_numeric(df["prob_ml"], errors="coerce").notna()
+
+    if "prob_src" not in df.columns:
+        df["prob_src"] = df["prob_ml_available"].map(lambda x: "ml" if bool(x) else "rule_only")
+
+    if "prob_fusion_mode" not in df.columns:
+        df["prob_fusion_mode"] = df["prob_ml_available"].map(lambda x: "ml_first" if bool(x) else "fallback_rule")
+
+    for c in ["prob_rule", "prob_final", "Probability"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").clip(0.0, 1.0).fillna(0.0)
+
+    return df
+
+
 def run_pipeline(
     config_path: str,
     trade_date: str = "",
@@ -242,6 +311,7 @@ def run_pipeline(
     """
     完整闭环 Pipeline（Step0 → Step6）
     """
+
     # ---- Load Settings ----
     s = load_settings(config_path)
     td = trade_date.strip() or s.trade_date_resolver()
@@ -267,10 +337,17 @@ def run_pipeline(
     gate_pass = _infer_gate_pass(s, gate, ctx)
 
     # ---- Step2–6 ----
-    topn_result: Dict[str, Optional[pd.DataFrame]] = {"topN": None, "full": None}
+    topn_result: Dict[str, Optional[pd.DataFrame]] = {
+        "topN": None,
+        "topn": None,
+        "full": None,
+    }
 
     if gate_pass:
+        # Step2
         candidates = step2_build_candidates(s, ctx)
+
+        # Step3
         strength_df = run_step3(candidates)
 
         # Step3 结果写入 ctx，供 Step4 主线入口读取
@@ -279,27 +356,59 @@ def run_pipeline(
         # Step4 按主线接口运行，返回更新后的 ctx
         ctx = run_step4(s, ctx)
 
-        # ✅ 兼容：把 step4_theme 映射到 step4（避免 DEBUG.step4=None）
+        # 兼容：把 step4_theme 映射到 step4（避免 DEBUG.step4=None）
         _ensure_step4_debug_compat(ctx)
 
-        # ✅ 优先用 Step4 的输出 theme_df（没有再退回 strength_df）
+        # 优先用 Step4 的输出 theme_df（没有再退回 strength_df）
         theme_df = ctx.get("theme_df")
         if not isinstance(theme_df, pd.DataFrame) or theme_df.empty:
             theme_df = ctx.get("strength_df", strength_df)
 
+        # Step5: 进入 V2 概率语义层
         prob_df = run_step5(theme_df, s=s)
+        prob_df = _ensure_step5_v2_fields(prob_df)
 
-        # Step6 返回 dict = {"topN": df, "full": df_full}
+        # 关键：把 Step5 V2 结果显式放回 ctx，方便 writer/debug/后续步骤读取
+        ctx["prob_df"] = prob_df
+        ctx["step5_df"] = prob_df
+
+        # Step6: 纯终排器，只认 prob_final 为主口径
         topn_result = run_step6_final_topn(prob_df, s=s)
+
+        # 兼容桥接：把 full/topN 再挂回 ctx，避免旧 writer 或旧调试逻辑拿不到
+        if isinstance(topn_result, dict):
+            if isinstance(topn_result.get("full"), pd.DataFrame):
+                ctx["final_full_df"] = topn_result["full"]
+            if isinstance(topn_result.get("topN"), pd.DataFrame):
+                ctx["topn_df"] = topn_result["topN"]
+                ctx["topN_df"] = topn_result["topN"]
+
+            # 附带 step6 元信息，方便后续排查
+            ctx.setdefault("debug", {})
+            if isinstance(ctx["debug"], dict):
+                ctx["debug"]["step5_v2"] = {
+                    "columns": list(prob_df.columns),
+                    "rows": int(len(prob_df)),
+                    "has_prob_rule": "prob_rule" in prob_df.columns,
+                    "has_prob_ml": "prob_ml" in prob_df.columns,
+                    "has_prob_final": "prob_final" in prob_df.columns,
+                    "has_Probability": "Probability" in prob_df.columns,
+                }
+                ctx["debug"]["step6_v2"] = {
+                    "meta": topn_result.get("meta", {}),
+                    "warnings": topn_result.get("warnings", []),
+                }
+
     else:
         gate["reason"] = (gate.get("reason", "") + " | pipeline_skipped(step2-6)").strip()
 
     # ---- 写出结果（新版 writers.py 自动识别 dict 结构）----
     # 额外保险：切到 repo_root 再写，避免 writers 使用相对路径写到别处
-
     dbg = ctx.get("debug", {}) if isinstance(ctx, dict) else {}
     print("DEBUG.step4 =", (dbg.get("step4") if isinstance(dbg, dict) else None))
     print("DEBUG.step4_theme =", (dbg.get("step4_theme") if isinstance(dbg, dict) else None))
+    print("DEBUG.step5_v2 =", (dbg.get("step5_v2") if isinstance(dbg, dict) else None))
+    print("DEBUG.step6_v2 =", (dbg.get("step6_v2") if isinstance(dbg, dict) else None))
 
     if not dry_run:
         with _chdir(out_dir.parent):
