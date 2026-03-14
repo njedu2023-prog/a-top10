@@ -3,38 +3,41 @@ from __future__ import annotations
 import json
 import os
 import re
-from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, List
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-import numpy as np
 import pandas as pd
 
 
-CODE_COL_CANDIDATES = [
-    "ts_code",
-    "code",
-    "TS_CODE",
-    "证券代码",
-    "股票代码",
-]
+CODE_COL_CANDIDATES = ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"]
 NAME_COL_CANDIDATES = ["name", "stock_name", "名称", "股票", "证券名称", "股票简称"]
-PROB_COL_CANDIDATES = ["prob_final", "prob", "Probability", "probability", "概率", "涨停概率"]
-FINAL_SCORE_COL_CANDIDATES = ["final_score", "score", "Score", "最终得分"]
 BOARD_COL_CANDIDATES = ["board", "板块", "industry", "行业", "所属行业", "concept", "题材"]
 
-LEARN_TOPN_BASE_COLS = [
-    "rank", "ts_code", "name",
-    "prob_rule", "prob_ml", "prob_final", "prob", "Probability",
-    "final_score", "score",
-    "StrengthScore", "ThemeBoost", "board",
+# =========================
+# V2 canonical schema
+# =========================
+V2_BASE_COLS = [
+    "rank",
+    "ts_code",
+    "name",
+    "prob_rule",
+    "prob_ml",
+    "prob_final",
+    "prob",         # thin output alias of prob_final
+    "Probability",  # thin output alias of prob_final
+    "final_score",
+    "score",        # thin output alias of final_score
+    "StrengthScore",
+    "ThemeBoost",
+    "board",
 ]
-LEARN_META_COLS = ["trade_date", "verify_date", "run_id", "run_attempt", "commit_sha", "generated_at_utc"]
-LEARN_TOPN_COLS = LEARN_META_COLS[:2] + LEARN_TOPN_BASE_COLS + LEARN_META_COLS[2:]
+V2_META_COLS = ["trade_date", "verify_date", "run_id", "run_attempt", "commit_sha", "generated_at_utc"]
+V2_ALL_COLS = V2_META_COLS[:2] + V2_BASE_COLS + V2_META_COLS[2:]
 
 
 # =========================
-# P1: immutable + run meta
+# basic utils
 # =========================
 def _utc_now_iso() -> str:
     try:
@@ -44,18 +47,11 @@ def _utc_now_iso() -> str:
 
 
 def _get_run_meta() -> Dict[str, str]:
-    """
-    统一从 GitHub Actions 环境变量取 run meta。
-    - RUN_ID / GITHUB_RUN_ID
-    - RUN_ATTEMPT / GITHUB_RUN_ATTEMPT
-    - COMMIT_SHA / GITHUB_SHA
-    """
     run_id = (os.getenv("RUN_ID") or os.getenv("GITHUB_RUN_ID") or "").strip()
     run_attempt = (os.getenv("RUN_ATTEMPT") or os.getenv("GITHUB_RUN_ATTEMPT") or "").strip()
     sha = (os.getenv("COMMIT_SHA") or os.getenv("GITHUB_SHA") or "").strip()
 
     if not run_id:
-        # 兜底：时间戳（保证归档文件名不会冲突）
         run_id = datetime.utcnow().strftime("ts%Y%m%d%H%M%S")
     if not run_attempt:
         run_attempt = "1"
@@ -72,162 +68,20 @@ def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
-def _write_text_once(path: Path, text: str, *, force: bool = False, encoding: str = "utf-8") -> bool:
-    """
-    写一次锁定：
-    - 若文件已存在且 force=False：不覆盖，返回 False
-    - 否则写入，返回 True
-    """
-    _ensure_dir(path.parent)
-    if path.exists() and not force:
-        print(f"[SKIP] exists (write-once): {path}")
-        return False
-    path.write_text(text, encoding=encoding)
-    print(f"[WRITE] {path}")
-    return True
-
-
-def _write_csv_once(df: pd.DataFrame, path: Path, *, force: bool = False) -> bool:
-    _ensure_dir(path.parent)
-    if path.exists() and not force:
-        print(f"[SKIP] exists (write-once): {path}")
-        return False
-    if df is None:
-        df = pd.DataFrame()
-    df.to_csv(path, index=False, encoding="utf-8-sig")
-    print(f"[WRITE] {path} rows={len(df)}")
-    return True
-
-
-def _append_csv_unique(
-    df_new: pd.DataFrame,
-    path: Path,
-    *,
-    key_cols: Sequence[str],
-) -> Dict[str, int]:
-    """
-    append-only（不回写历史）：
-    - 读取已有 CSV
-    - 若 key_cols 相同的行已存在：跳过
-    - 只追加新行
-    返回统计：{"appended": x, "skipped": y, "total": z}
-    """
-    _ensure_dir(path.parent)
-
-    if df_new is None or df_new.empty:
-        return {"appended": 0, "skipped": 0, "total": int(path.exists())}
-
-    df_new = df_new.copy()
-
-    # 若文件不存在，直接写
-    if not path.exists():
-        df_new.to_csv(path, index=False, encoding="utf-8-sig")
-        print(f"[WRITE] {path} rows={len(df_new)} (new)")
-        return {"appended": int(len(df_new)), "skipped": 0, "total": int(len(df_new))}
-
-    # 读旧
-    try:
-        df_old = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
-    except Exception:
-        df_old = pd.DataFrame()
-
-    # 确保 key 列存在
-    for c in key_cols:
-        if c not in df_old.columns:
-            df_old[c] = ""
-        if c not in df_new.columns:
-            df_new[c] = ""
-
-    def _key_df(d: pd.DataFrame) -> pd.Series:
-        return d[list(key_cols)].astype(str).fillna("").agg("|".join, axis=1)
-
-    old_keys = set(_key_df(df_old).tolist()) if (df_old is not None and not df_old.empty) else set()
-    new_keys = _key_df(df_new).tolist()
-
-    keep_mask = [k not in old_keys for k in new_keys]
-    df_add = df_new.loc[keep_mask].copy()
-    skipped = int(len(df_new) - len(df_add))
-
-    if df_add.empty:
-        print(f"[SKIP] append-only: no new rows for {path} (skipped={skipped})")
-        return {"appended": 0, "skipped": skipped, "total": int(len(df_old))}
-
-    # 追加写入（不重写旧内容）
-    # 用 mode='a' 追加，避免覆盖
-    with path.open("a", encoding="utf-8-sig", newline="") as f:
-        df_add.to_csv(f, index=False, header=False)
-
-    total = int(len(df_old) + len(df_add))
-    print(f"[APPEND] {path} appended={len(df_add)} skipped={skipped} total={total}")
-    return {"appended": int(len(df_add)), "skipped": skipped, "total": total}
-
-
-# =========================
-# Markdown helpers
-# =========================
-def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> str:
-    if df is None or df.empty:
+def _safe_str(x: Any) -> str:
+    if x is None:
         return ""
-
-    d = df
-    if cols is not None:
-        use_cols = [c for c in cols if c in d.columns]
-        if use_cols:
-            d = d[use_cols].copy()
-
-    col_map = {
-        "rank": "排名",
-        "rank_limit": "排名",
-        "排名": "排名",
-        "ts_code": "代码",
-        "code": "代码",
-        "代码": "代码",
-        "name": "股票",
-        "stock_name": "股票",
-        "股票": "股票",
-        "score": "Score",
-        "Score": "Score",
-        "prob": "Probability",
-        "Probability": "Probability",
-        "prob_rule": "prob_rule",
-        "prob_ml": "prob_ml",
-        "prob_final": "prob_final",
-        "final_score": "final_score",
-        "StrengthScore": "强度得分",
-        "强度得分": "强度得分",
-        "ThemeBoost": "题材加成",
-        "题材加成": "题材加成",
-        "board": "板块",
-        "板块": "板块",
-    }
-    d = d.rename(columns=col_map)
-
-    try:
-        return d.to_markdown(index=False)
-    except Exception:
-        x = d.copy().fillna("")
-        headers = list(x.columns)
-
-        def esc(v: Any) -> str:
-            s = str(v)
-            s = s.replace("\n", " ").replace("\r", " ")
-            s = s.replace("|", "\\|")
-            return s
-
-        lines = []
-        lines.append("| " + " | ".join(esc(h) for h in headers) + " |")
-        lines.append("| " + " | ".join("---" for _ in headers) + " |")
-        for _, row in x.iterrows():
-            lines.append("| " + " | ".join(esc(row[h]) for h in headers) + " |")
-        return "\n".join(lines)
+    return str(x).strip()
 
 
-def _pick_first_not_none(d: Mapping[str, Any], keys: Sequence[str]) -> Any:
-    for k in keys:
-        if k in d:
-            v = d.get(k)
-            if v is not None:
-                return v
+def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
+    if df is None or df.empty:
+        return None
+    lower_map = {str(c).lower(): c for c in df.columns}
+    for name in candidates:
+        key = str(name).lower()
+        if key in lower_map:
+            return lower_map[key]
     return None
 
 
@@ -249,33 +103,42 @@ def _json_default(o: Any) -> str:
         return repr(o)
 
 
-def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
-    if df is None or df.empty:
-        return None
-    lower_map = {str(c).lower(): c for c in df.columns}
-    for name in candidates:
-        key = str(name).lower()
-        if key in lower_map:
-            return lower_map[key]
-    return None
+def _read_csv_guess(p: Path) -> pd.DataFrame:
+    if p is None or not p.exists():
+        return pd.DataFrame()
+    for enc in ("utf-8", "utf-8-sig", "gbk"):
+        try:
+            return pd.read_csv(p, encoding=enc)
+        except Exception:
+            pass
+    return pd.DataFrame()
 
 
-def _safe_str(x: Any) -> str:
-    if x is None:
-        return ""
-    return str(x).strip()
+def _write_text_once(path: Path, text: str, *, force: bool = False, encoding: str = "utf-8") -> bool:
+    _ensure_dir(path.parent)
+    if path.exists() and not force:
+        print(f"[SKIP] exists (write-once): {path}")
+        return False
+    path.write_text(text, encoding=encoding)
+    print(f"[WRITE] {path}")
+    return True
 
 
-def _norm_code(code: Any) -> Tuple[str, str]:
-    s = _safe_str(code).upper()
-    if not s:
-        return "", ""
-    code6 = s.split(".")[0]
-    if len(code6) > 6 and code6.isdigit():
-        code6 = code6[-6:]
-    return s, code6
+def _write_csv_once(df: pd.DataFrame, path: Path, *, force: bool = False) -> bool:
+    _ensure_dir(path.parent)
+    if path.exists() and not force:
+        print(f"[SKIP] exists (write-once): {path}")
+        return False
+    if df is None:
+        df = pd.DataFrame(columns=V2_ALL_COLS)
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+    print(f"[WRITE] {path} rows={len(df)}")
+    return True
 
 
+# =========================
+# market / calendar helpers
+# =========================
 def _ctx_df(ctx: Any, keys: Sequence[str]) -> Optional[pd.DataFrame]:
     if not isinstance(ctx, dict):
         return None
@@ -294,8 +157,7 @@ def _ctx_path(ctx: Any, keys: Sequence[str]) -> Optional[Path]:
         if v is None:
             continue
         try:
-            p = Path(v)
-            return p
+            return Path(v)
         except Exception:
             continue
     return None
@@ -306,23 +168,20 @@ def _ctx_trade_date(ctx: Any) -> str:
         return ""
     for k in ("trade_date", "TRADE_DATE", "asof", "date", "snapshot_date"):
         v = ctx.get(k)
-        if v is None:
-            continue
         s = _safe_str(v)
         if len(s) == 8 and s.isdigit():
             return s
     return ""
 
 
-def _read_csv_guess(p: Path) -> pd.DataFrame:
-    if p is None or not p.exists():
-        return pd.DataFrame()
-    for enc in ("utf-8", "utf-8-sig", "gbk"):
-        try:
-            return pd.read_csv(p, dtype=str, encoding=enc)
-        except Exception:
-            pass
-    return pd.DataFrame()
+def _norm_code(code: Any) -> Tuple[str, str]:
+    s = _safe_str(code).upper()
+    if not s:
+        return "", ""
+    code6 = s.split(".")[0]
+    if len(code6) > 6 and code6.isdigit():
+        code6 = code6[-6:]
+    return s, code6
 
 
 def _build_code_sets(df: pd.DataFrame, candidates: Sequence[str]) -> Tuple[str, set, set]:
@@ -360,6 +219,7 @@ def _count_limitups(limit_df: Optional[pd.DataFrame]) -> int:
 
 def _resolve_snapshot_dir(settings, ctx, trade_date: str) -> Optional[Path]:
     cands: List[Path] = []
+
     p = _ctx_path(ctx, ["snapshot_dir", "snap_dir", "snapshot_path"])
     if p:
         cands.append(p)
@@ -438,66 +298,6 @@ def _load_limit_df(settings, ctx, trade_date: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def _topN_to_hit_df(topN_df: Optional[pd.DataFrame], limit_df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    metrics: Dict[str, Any] = {}
-    if topN_df is None or topN_df.empty:
-        metrics.update({"hit_count": 0, "top_count": 0, "limit_count": _count_limitups(limit_df), "hit_rate": ""})
-        return pd.DataFrame(), metrics
-
-    df = topN_df.copy()
-
-    code_col = _first_existing_col(df, CODE_COL_CANDIDATES)
-    if not code_col:
-        metrics.update({"hit_count": 0, "top_count": len(df), "limit_count": _count_limitups(limit_df), "hit_rate": ""})
-        df["命中"] = ""
-        df["板块"] = df.get("board", "")
-        return df, metrics
-
-    if code_col != "ts_code":
-        df["ts_code"] = df[code_col]
-
-    prob_col = _first_existing_col(df, PROB_COL_CANDIDATES)
-    if prob_col and prob_col != "prob":
-        df["prob"] = df[prob_col]
-
-    name_col = _first_existing_col(df, NAME_COL_CANDIDATES)
-    if name_col and name_col != "name":
-        df["name"] = df[name_col]
-
-    board_col = _first_existing_col(df, BOARD_COL_CANDIDATES)
-    if board_col and board_col != "板块":
-        df["板块"] = df[board_col].fillna("")
-    elif "板块" not in df.columns:
-        df["板块"] = df.get("board", "").fillna("")
-
-    top_count = len(df)
-    limit_count = _count_limitups(limit_df)
-
-    _, limit_ts, limit_c6 = _build_code_sets(limit_df, CODE_COL_CANDIDATES)
-
-    hits = []
-    hit_count = 0
-    for v in df["ts_code"].tolist():
-        ts, c6 = _norm_code(v)
-        ok = (ts in limit_ts) or (c6 in limit_c6)
-        hits.append("是" if ok else "否")
-        if ok:
-            hit_count += 1
-
-    df["命中"] = hits
-
-    rate = 0.0
-    if top_count > 0:
-        rate = hit_count * 100.0 / float(top_count)
-    metrics.update({
-        "hit_count": int(hit_count),
-        "top_count": int(top_count),
-        "limit_count": int(limit_count),
-        "hit_rate": f"{round(rate)}%" if top_count > 0 else "",
-    })
-    return df, metrics
-
-
 def _list_trade_dates(settings) -> List[str]:
     dates: List[str] = []
     dr = getattr(settings, "data_repo", None)
@@ -546,7 +346,145 @@ def _prev_next_trade_date_with_fallback(calendar: List[str], trade_date: str) ->
     return prev_td, next_td
 
 
-def _load_json_topN(outdir: Path, td: str) -> Optional[pd.DataFrame]:
+# =========================
+# V2 canonicalization
+# =========================
+def _normalize_rank(df: pd.DataFrame) -> pd.Series:
+    if "rank" in df.columns:
+        s = pd.to_numeric(df["rank"], errors="coerce")
+        if s.notna().any():
+            return s
+    if "排名" in df.columns:
+        s = pd.to_numeric(df["排名"], errors="coerce")
+        if s.notna().any():
+            return s
+    return pd.Series(range(1, len(df) + 1), index=df.index, dtype="int64")
+
+
+def _canonicalize_v2_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """
+    V2 唯一标准化入口。
+    核心主语义只认：
+    - prob_final
+    - final_score
+    其它别名仅在产物层镜像，不参与核心语义竞争。
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=V2_BASE_COLS)
+
+    src = df.copy()
+    out = pd.DataFrame(index=src.index)
+
+    code_col = _first_existing_col(src, CODE_COL_CANDIDATES)
+    name_col = _first_existing_col(src, NAME_COL_CANDIDATES)
+    board_col = _first_existing_col(src, BOARD_COL_CANDIDATES)
+
+    out["rank"] = _normalize_rank(src)
+    out["ts_code"] = src[code_col] if code_col else ""
+    out["name"] = src[name_col] if name_col else ""
+    out["board"] = src[board_col] if board_col else ""
+
+    out["prob_rule"] = src["prob_rule"] if "prob_rule" in src.columns else ""
+    out["prob_ml"] = src["prob_ml"] if "prob_ml" in src.columns else ""
+
+    if "prob_final" in src.columns:
+        out["prob_final"] = src["prob_final"]
+    else:
+        out["prob_final"] = ""
+
+    if "final_score" in src.columns:
+        out["final_score"] = src["final_score"]
+    else:
+        out["final_score"] = ""
+
+    out["StrengthScore"] = src["StrengthScore"] if "StrengthScore" in src.columns else (
+        src["强度得分"] if "强度得分" in src.columns else ""
+    )
+    out["ThemeBoost"] = src["ThemeBoost"] if "ThemeBoost" in src.columns else (
+        src["题材加成"] if "题材加成" in src.columns else ""
+    )
+
+    for col in ["prob_rule", "prob_ml", "prob_final", "final_score", "StrengthScore", "ThemeBoost"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+
+    # thin output aliases only
+    out["prob"] = out["prob_final"]
+    out["Probability"] = out["prob_final"]
+    out["score"] = out["final_score"]
+
+    out["rank"] = pd.to_numeric(out["rank"], errors="coerce")
+    out = out.reindex(columns=V2_BASE_COLS, fill_value="")
+    return out
+
+
+def _enrich_v2_with_meta(df: Optional[pd.DataFrame], trade_date: str, verify_date: str, run_meta: Dict[str, str]) -> pd.DataFrame:
+    base = _canonicalize_v2_frame(df)
+    out = base.copy()
+    out.insert(0, "trade_date", trade_date)
+    out.insert(1, "verify_date", verify_date)
+    out["run_id"] = run_meta["run_id"]
+    out["run_attempt"] = run_meta["run_attempt"]
+    out["commit_sha"] = run_meta["commit_sha"]
+    out["generated_at_utc"] = run_meta["generated_at_utc"]
+    out = out.reindex(columns=V2_ALL_COLS, fill_value="")
+    return out
+
+
+# =========================
+# markdown helpers
+# =========================
+def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> str:
+    if df is None or df.empty:
+        return ""
+
+    d = df.copy()
+    if cols is not None:
+        use_cols = [c for c in cols if c in d.columns]
+        if use_cols:
+            d = d[use_cols].copy()
+
+    col_map = {
+        "rank": "排名",
+        "rank_limit": "排名",
+        "ts_code": "代码",
+        "name": "股票",
+        "prob_final": "prob_final",
+        "final_score": "final_score",
+        "StrengthScore": "强度得分",
+        "ThemeBoost": "题材加成",
+        "board": "板块",
+        "命中": "命中",
+        "日期": "日期",
+        "命中数": "命中数",
+        "命中率": "命中率",
+        "当日涨停家数": "当日涨停家数",
+        "Probability": "Probability",
+    }
+    d = d.rename(columns=col_map)
+
+    try:
+        return d.to_markdown(index=False)
+    except Exception:
+        x = d.copy().fillna("")
+        headers = list(x.columns)
+
+        def esc(v: Any) -> str:
+            s = str(v)
+            s = s.replace("\n", " ").replace("\r", " ").replace("|", "\\|")
+            return s
+
+        lines = []
+        lines.append("| " + " | ".join(esc(h) for h in headers) + " |")
+        lines.append("| " + " | ".join("---" for _ in headers) + " |")
+        for _, row in x.iterrows():
+            lines.append("| " + " | ".join(esc(row[h]) for h in headers) + " |")
+        return "\n".join(lines)
+
+
+# =========================
+# report helpers
+# =========================
+def _load_json_topn(outdir: Path, td: str) -> Optional[pd.DataFrame]:
     if not td:
         return None
     p = outdir / f"predict_top10_{td}.json"
@@ -556,9 +494,42 @@ def _load_json_topN(outdir: Path, td: str) -> Optional[pd.DataFrame]:
         payload = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
+    return _to_df(payload.get("topN") or [])
 
-    top = payload.get("topN") or payload.get("topn") or []
-    return _to_df(top)
+
+def _topn_to_hit_df(topn_df: Optional[pd.DataFrame], limit_df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    metrics: Dict[str, Any] = {}
+    v2 = _canonicalize_v2_frame(topn_df)
+
+    if v2.empty:
+        metrics.update({"hit_count": 0, "top_count": 0, "limit_count": _count_limitups(limit_df), "hit_rate": ""})
+        return pd.DataFrame(), metrics
+
+    _, limit_ts, limit_c6 = _build_code_sets(limit_df, CODE_COL_CANDIDATES)
+
+    hits: List[str] = []
+    hit_count = 0
+    for v in v2["ts_code"].tolist():
+        ts, c6 = _norm_code(v)
+        ok = (ts in limit_ts) or (c6 in limit_c6)
+        hits.append("是" if ok else "否")
+        if ok:
+            hit_count += 1
+
+    out = v2.copy()
+    out["命中"] = hits
+
+    top_count = int(len(out))
+    limit_count = int(_count_limitups(limit_df))
+    hit_rate = f"{round(hit_count * 100.0 / float(top_count))}%" if top_count > 0 else ""
+
+    metrics.update({
+        "hit_count": int(hit_count),
+        "top_count": top_count,
+        "limit_count": limit_count,
+        "hit_rate": hit_rate,
+    })
+    return out, metrics
 
 
 def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -567,52 +538,49 @@ def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
 
     d = df.copy()
 
-    if "排名" in d.columns:
-        pass
-    elif "rank_limit" in d.columns:
-        d["排名"] = d["rank_limit"]
-    elif "rank" in d.columns:
-        d["排名"] = d["rank"]
-    else:
-        d.insert(0, "排名", range(1, len(d) + 1))
+    if "排名" not in d.columns:
+        if "rank_limit" in d.columns:
+            d["排名"] = d["rank_limit"]
+        elif "rank" in d.columns:
+            d["排名"] = d["rank"]
+        else:
+            d["排名"] = range(1, len(d) + 1)
 
     if "代码" not in d.columns:
-        c = _first_existing_col(d, ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"])
+        c = _first_existing_col(d, CODE_COL_CANDIDATES)
         d["代码"] = d[c] if c else ""
 
     if "股票" not in d.columns:
-        n = _first_existing_col(d, ["name", "stock_name", "名称", "证券名称", "股票简称"])
+        n = _first_existing_col(d, NAME_COL_CANDIDATES)
         d["股票"] = d[n] if n else ""
 
-    if "prob_final" not in d.columns:
-        p0 = _first_existing_col(d, ["prob_final", "Probability", "prob", "概率", "涨停概率"])
-        d["prob_final"] = d[p0] if p0 else ""
-
     if "Probability" not in d.columns:
-        p = _first_existing_col(d, ["Probability", "prob_final", "prob", "概率", "涨停概率"])
-        d["Probability"] = d[p] if p else ""
+        if "prob_final" in d.columns:
+            d["Probability"] = d["prob_final"]
+        else:
+            d["Probability"] = ""
 
     if "强度得分" not in d.columns:
-        s = _first_existing_col(d, ["_strength", "StrengthScore", "强度得分", "强度"])
-        d["强度得分"] = d[s] if s else ""
+        if "StrengthScore" in d.columns:
+            d["强度得分"] = d["StrengthScore"]
+        else:
+            d["强度得分"] = ""
 
     if "题材加成" not in d.columns:
-        t = _first_existing_col(d, ["ThemeBoost", "题材加成", "题材", "_theme"])
-        d["题材加成"] = d[t] if t else ""
+        if "ThemeBoost" in d.columns:
+            d["题材加成"] = d["ThemeBoost"]
+        else:
+            d["题材加成"] = ""
 
     if "板块" not in d.columns:
-        b = _first_existing_col(d, ["board", "板块", "industry", "行业", "所属行业", "concept", "题材"])
+        b = _first_existing_col(d, BOARD_COL_CANDIDATES)
         d["板块"] = d[b] if b else ""
 
-    out_cols = ["排名", "代码", "股票", "prob_final", "Probability", "强度得分", "题材加成", "板块"]
-    d = d[[c for c in out_cols if c in d.columns]].copy()
-
-    if "强度得分" in d.columns:
-        d["强度得分"] = pd.to_numeric(d["强度得分"], errors="coerce")
-        d = d.sort_values(by="强度得分", ascending=False, na_position="last").reset_index(drop=True)
-        d["排名"] = d.index + 1
-
-    return d
+    out = d[["排名", "代码", "股票", "Probability", "强度得分", "题材加成", "板块"]].copy()
+    out["强度得分"] = pd.to_numeric(out["强度得分"], errors="coerce")
+    out = out.sort_values(by="强度得分", ascending=False, na_position="last").reset_index(drop=True)
+    out["排名"] = range(1, len(out) + 1)
+    return out
 
 
 def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
@@ -623,56 +591,26 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
     if not lcode:
         return None
 
-    if full_df is None or full_df.empty:
-        df = limit_df[[lcode]].copy()
-        df = df.rename(columns={lcode: "ts_code"})
-        df["name"] = ""
-        df["prob"] = ""
-        df["StrengthScore"] = ""
-        df["ThemeBoost"] = ""
-        df["board"] = ""
-        return df
-
-    fcode = _first_existing_col(full_df, CODE_COL_CANDIDATES)
-    if not fcode:
-        return None
-
     l = limit_df[[lcode]].copy()
-    f = full_df.copy()
-
     if lcode != "ts_code":
         l["ts_code"] = l[lcode]
-    if fcode != "ts_code":
-        f["ts_code"] = f[fcode]
 
-    m = pd.merge(l[["ts_code"]], f, on="ts_code", how="left")
+    full_v2 = _canonicalize_v2_frame(full_df)
+    if full_v2.empty:
+        out = l[["ts_code"]].copy()
+        out["name"] = ""
+        out["prob_final"] = ""
+        out["StrengthScore"] = ""
+        out["ThemeBoost"] = ""
+        out["board"] = ""
+        out.insert(0, "rank_limit", range(1, len(out) + 1))
+        return out
 
-    if "name" not in m.columns:
-        nc = _first_existing_col(m, NAME_COL_CANDIDATES)
-        m["name"] = m[nc] if nc else ""
-
-    if "board" not in m.columns:
-        bc = _first_existing_col(m, BOARD_COL_CANDIDATES)
-        m["board"] = m[bc] if bc else ""
-
-    sort_cols = []
-    if "StrengthScore" in m.columns:
-        sort_cols = ["StrengthScore"]
-    elif "final_score" in m.columns:
-        sort_cols = ["final_score"]
-    elif "score" in m.columns:
-        sort_cols = ["score"]
-    elif "prob_final" in m.columns:
-        sort_cols = ["prob_final"]
-    elif "prob" in m.columns:
-        sort_cols = ["prob"]
-
-    if sort_cols:
-        m = m.sort_values(by=sort_cols, ascending=False)
-
-    m = m.reset_index(drop=True)
-    m.insert(0, "rank_limit", m.index + 1)
-    return m
+    merged = pd.merge(l[["ts_code"]], full_v2, on="ts_code", how="left")
+    merged = merged.sort_values(by=["StrengthScore", "final_score", "prob_final"], ascending=False, na_position="last")
+    merged = merged.reset_index(drop=True)
+    merged.insert(0, "rank_limit", range(1, len(merged) + 1))
+    return merged
 
 
 def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.DataFrame:
@@ -684,329 +622,125 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
         m = re.match(r"predict_top10_(\d{8})\.json", f.name)
         if not m:
             continue
-        d = m.group(1)
+        pred_date = m.group(1)
 
-        _, next_td = _prev_next_trade_date(calendar, d)
-        if not next_td:
+        _, verify_date = _prev_next_trade_date(calendar, pred_date)
+        if not verify_date:
             continue
 
-        topN_df = _load_json_topN(outdir, d)
-        ldf_verify = _load_limit_df(settings, ctx, next_td)
-
-        _, mres = _topN_to_hit_df(topN_df, ldf_verify)
-
-        hit_count = mres.get("hit_count")
-        top_count = mres.get("top_count")
-        hit_rate = mres.get("hit_rate")
-
-        if hit_count is None or top_count is None:
-            continue
+        topn_df = _load_json_topn(outdir, pred_date)
+        limit_df_verify = _load_limit_df(settings, ctx, verify_date)
+        _, metrics = _topn_to_hit_df(topn_df, limit_df_verify)
 
         rows.append({
-            "日期": d,
-            "命中数": int(hit_count),
-            "命中率": str(hit_rate) if hit_rate is not None else "",
-            "当日涨停家数": _count_limitups(ldf_verify),
+            "日期": pred_date,
+            "命中数": int(metrics.get("hit_count") or 0),
+            "命中率": str(metrics.get("hit_rate") or ""),
+            "当日涨停家数": _count_limitups(limit_df_verify),
         })
         if len(rows) >= max_days:
             break
 
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
-def _standardize_topN_for_csv(topN_df: Optional[pd.DataFrame]) -> pd.DataFrame:
+# =========================
+# V2 history rebuild
+# =========================
+def _is_exact_v2_schema(df: pd.DataFrame) -> bool:
+    return list(df.columns) == V2_ALL_COLS
+
+
+def _rebuild_v2_history(learning_dir: Path) -> pd.DataFrame:
     """
-    统一 topN / full ranking 字段，兼容 V1/V2：
-    rank, ts_code, name, prob_rule, prob_ml, prob_final, prob, Probability,
-    final_score, score, StrengthScore, ThemeBoost, board
-    其中：
-    - prob_final 是 V2 主概率口径
-    - Probability / prob 是兼容别名
-    - final_score 是 V2 主终排口径
+    只从 V2 的 pred_top10_YYYYMMDD.csv 日文件重建 history。
+    旧 schema 文件直接跳过，不再混写，不再兼容。
     """
-    if topN_df is None or topN_df.empty:
-        return pd.DataFrame(columns=LEARN_TOPN_BASE_COLS)
+    parts: List[pd.DataFrame] = []
+    skipped: List[str] = []
 
-    df = topN_df.copy()
-
-    # rank
-    if "rank" not in df.columns:
-        if "排名" in df.columns:
-            df["rank"] = df["排名"]
-        else:
-            df["rank"] = range(1, len(df) + 1)
-
-    # ts_code
-    c = _first_existing_col(df, CODE_COL_CANDIDATES)
-    if c and c != "ts_code":
-        df["ts_code"] = df[c]
-    elif "ts_code" not in df.columns:
-        df["ts_code"] = ""
-
-    # name
-    n = _first_existing_col(df, NAME_COL_CANDIDATES)
-    if n and n != "name":
-        df["name"] = df[n]
-    elif "name" not in df.columns:
-        df["name"] = ""
-
-    # V2 probability fields：prob_final 为主语义；prob / Probability 为兼容别名
-    p_final = _first_existing_col(df, ["prob_final", "prob", "Probability", "probability", "概率", "涨停概率"])
-    if p_final and p_final != "prob_final":
-        df["prob_final"] = df[p_final]
-    elif "prob_final" not in df.columns:
-        df["prob_final"] = ""
-
-    if "prob" not in df.columns:
-        df["prob"] = df["prob_final"]
-    else:
-        prob_num = pd.to_numeric(df["prob"], errors="coerce")
-        final_num = pd.to_numeric(df["prob_final"], errors="coerce")
-        fill_mask = final_num.isna() & prob_num.notna()
-        if fill_mask.any():
-            df.loc[fill_mask, "prob_final"] = df.loc[fill_mask, "prob"]
-
-    if "Probability" not in df.columns:
-        df["Probability"] = df["prob_final"]
-    else:
-        p_alias_num = pd.to_numeric(df["Probability"], errors="coerce")
-        final_num = pd.to_numeric(df["prob_final"], errors="coerce")
-        fill_mask = final_num.isna() & p_alias_num.notna()
-        if fill_mask.any():
-            df.loc[fill_mask, "prob_final"] = df.loc[fill_mask, "Probability"]
-
-    # 回填兼容别名，确保三列显式对齐
-    prob_final_num = pd.to_numeric(df["prob_final"], errors="coerce")
-    prob_num = pd.to_numeric(df["prob"], errors="coerce")
-    fill_prob_mask = prob_num.isna() & prob_final_num.notna()
-    if fill_prob_mask.any():
-        df.loc[fill_prob_mask, "prob"] = df.loc[fill_prob_mask, "prob_final"]
-
-    prob_alias_num = pd.to_numeric(df["Probability"], errors="coerce")
-    fill_probability_mask = prob_alias_num.isna() & prob_final_num.notna()
-    if fill_probability_mask.any():
-        df.loc[fill_probability_mask, "Probability"] = df.loc[fill_probability_mask, "prob_final"]
-
-    if "prob_rule" not in df.columns:
-        df["prob_rule"] = ""
-    if "prob_ml" not in df.columns:
-        df["prob_ml"] = ""
-
-    # V2 final score fields：final_score 为主语义；score 为兼容别名
-    s_final = _first_existing_col(df, ["final_score", "score", "Score", "最终得分"])
-    if s_final and s_final != "final_score":
-        df["final_score"] = df[s_final]
-    elif "final_score" not in df.columns:
-        df["final_score"] = ""
-
-    if "score" not in df.columns:
-        df["score"] = df["final_score"]
-    else:
-        score_num = pd.to_numeric(df["score"], errors="coerce")
-        final_score_num = pd.to_numeric(df["final_score"], errors="coerce")
-        fill_mask = final_score_num.isna() & score_num.notna()
-        if fill_mask.any():
-            df.loc[fill_mask, "final_score"] = df.loc[fill_mask, "score"]
-
-    final_score_num = pd.to_numeric(df["final_score"], errors="coerce")
-    score_num = pd.to_numeric(df["score"], errors="coerce")
-    fill_score_mask = score_num.isna() & final_score_num.notna()
-    if fill_score_mask.any():
-        df.loc[fill_score_mask, "score"] = df.loc[fill_score_mask, "final_score"]
-
-    # board
-    b = _first_existing_col(df, BOARD_COL_CANDIDATES)
-    if b and b != "board":
-        df["board"] = df[b]
-    elif "board" not in df.columns:
-        df["board"] = ""
-
-    # StrengthScore / ThemeBoost
-    if "StrengthScore" not in df.columns:
-        if "强度得分" in df.columns:
-            df["StrengthScore"] = df["强度得分"]
-        else:
-            df["StrengthScore"] = ""
-    if "ThemeBoost" not in df.columns:
-        if "题材加成" in df.columns:
-            df["ThemeBoost"] = df["题材加成"]
-        else:
-            df["ThemeBoost"] = ""
-
-    # normalize numeric-ish fields
-    for col in ["prob_rule", "prob_ml", "prob_final", "prob", "Probability", "final_score", "score", "StrengthScore", "ThemeBoost"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    df = df.reindex(columns=LEARN_TOPN_BASE_COLS, fill_value="")
-    return df
-
-
-def _enrich_learning_topn_df(topN_std: Optional[pd.DataFrame], trade_date: str, verify_date: str, run_meta: Dict[str, str]) -> pd.DataFrame:
-    """
-    learning 侧 schema 统一入口：
-    - 即使 topN_std 为空，也返回完整 LEARN_TOPN_COLS
-    - trade_date / verify_date / run_meta 永远显式存在
-    """
-    if topN_std is None or topN_std.empty:
-        df = pd.DataFrame(columns=LEARN_TOPN_COLS)
-    else:
-        df = topN_std.copy()
-        df = df.reindex(columns=LEARN_TOPN_BASE_COLS, fill_value="")
-
-    df.insert(0, "trade_date", trade_date)
-    df.insert(1, "verify_date", verify_date)
-    df["run_id"] = run_meta["run_id"]
-    df["run_attempt"] = run_meta["run_attempt"]
-    df["commit_sha"] = run_meta["commit_sha"]
-    df["generated_at_utc"] = run_meta["generated_at_utc"]
-    df = df.reindex(columns=LEARN_TOPN_COLS, fill_value="")
-    return df
-
-
-def _merge_strengthscore_from_step3(full_std: Optional[pd.DataFrame], outdir: Path, trade_date: str) -> Optional[pd.DataFrame]:
-    """
-    兜底修复：
-    - 如果 full_std 的 StrengthScore 缺失/全 0，则尝试从 step3 输出 CSV 回填。
-    - 只回填 StrengthScore 为 NaN/空/0 的位置（避免覆盖上游正确值）。
-    - 主要目标：修复 outputs/decisio/pred_decisio_latest.csv StrengthScore 全 0。
-    """
-    if full_std is None or full_std.empty:
-        return full_std
-
-    if "ts_code" not in full_std.columns:
-        return full_std
-
-    # 如果 StrengthScore 列都不存在，先补出来（后续回填）
-    if "StrengthScore" not in full_std.columns:
-        full_std = full_std.copy()
-        full_std["StrengthScore"] = ""
-
-    base_num = pd.to_numeric(full_std["StrengthScore"], errors="coerce")
-    nonzero_cnt = int((base_num.fillna(0) != 0).sum())
-    if nonzero_cnt > 0:
-        # 已经有非零值，仍允许部分回填（只对 0/NaN 的行）
-        pass
-
-    # step3 候选文件（按优先级）
-    candidates: List[Path] = [
-        outdir / f"step3_strength_{trade_date}.csv",
-        outdir / "step3_strength.csv",
-        outdir / f"outputs/step3_strength_{trade_date}.csv",
-        outdir / "outputs/step3_strength.csv",
-    ]
-    step3_path = None
-    for p in candidates:
-        try:
-            if p.exists():
-                step3_path = p
-                break
-        except Exception:
+    for p in sorted(learning_dir.glob("pred_top10_*.csv")):
+        m = re.match(r"pred_top10_(\d{8})\.csv$", p.name)
+        if not m:
             continue
 
-    if step3_path is None:
-        return full_std
+        df = _read_csv_guess(p)
+        if df.empty:
+            continue
 
-    df_step3 = _read_csv_guess(step3_path)
-    if df_step3 is None or df_step3.empty:
-        return full_std
+        if not _is_exact_v2_schema(df):
+            skipped.append(p.name)
+            continue
 
-    code_col = _first_existing_col(df_step3, CODE_COL_CANDIDATES)
-    if not code_col:
-        return full_std
+        parts.append(df.copy())
 
-    strength_col = _first_existing_col(df_step3, ["StrengthScore", "强度得分", "_strength", "strength", "强度", "strengthscore"])
-    if not strength_col:
-        return full_std
+    if not parts:
+        hist = pd.DataFrame(columns=V2_ALL_COLS)
+    else:
+        hist = pd.concat(parts, ignore_index=True)
+        hist = hist.reindex(columns=V2_ALL_COLS, fill_value="")
+        hist["trade_date"] = hist["trade_date"].astype(str)
+        hist["rank"] = pd.to_numeric(hist["rank"], errors="coerce")
+        hist = hist.sort_values(by=["trade_date", "rank", "ts_code"], ascending=[True, True, True], na_position="last")
+        hist = hist.drop_duplicates(subset=["trade_date", "ts_code"], keep="last").reset_index(drop=True)
 
-    s = df_step3[[code_col, strength_col]].copy()
-    if code_col != "ts_code":
-        s["ts_code"] = s[code_col]
-    s["StrengthScore_step3"] = pd.to_numeric(s[strength_col], errors="coerce")
-    s = s[["ts_code", "StrengthScore_step3"]].dropna(subset=["ts_code"])
-    s = s.drop_duplicates(subset=["ts_code"], keep="last")
-
-    m = full_std.merge(s, on="ts_code", how="left")
-
-    base = pd.to_numeric(m["StrengthScore"], errors="coerce")
-    fill_mask = base.isna() | (base == 0)
-
-    before_fill = int(fill_mask.sum())
-    if before_fill <= 0:
-        return full_std
-
-    # 只有 step3 有值的才回填
-    step3_v = m["StrengthScore_step3"]
-    can_fill = fill_mask & step3_v.notna()
-    filled = int(can_fill.sum())
-
-    if filled > 0:
-        m.loc[can_fill, "StrengthScore"] = m.loc[can_fill, "StrengthScore_step3"]
-        m["StrengthScore"] = pd.to_numeric(m["StrengthScore"], errors="coerce")
-
-    m = m.drop(columns=["StrengthScore_step3"], errors="ignore")
-
-    print(f"[FIX] StrengthScore backfill from {step3_path.name}: fill_candidates={before_fill} filled={filled}")
-    return m
+    if skipped:
+        print(f"[HISTORY] skipped non-V2 daily files: {', '.join(skipped)}")
+    print(f"[HISTORY] rebuild rows={len(hist)}")
+    return hist
 
 
+# =========================
+# main writer
+# =========================
 def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
-    outdir = getattr(getattr(settings, "io", None), "outputs_dir", None)
-    if not outdir:
-        outdir = "outputs"
+    outdir = getattr(getattr(settings, "io", None), "outputs_dir", None) or "outputs"
     outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
+    _ensure_dir(outdir)
 
-    # P1 meta
     run_meta = _get_run_meta()
-    force_overwrite = str(os.getenv("FORCE_OVERWRITE", "0")).strip() in ("1", "true", "True", "YES", "yes")
+    force_overwrite = str(os.getenv("FORCE_OVERWRITE", "0")).strip().lower() in ("1", "true", "yes")
 
-    # learning + warehouse dirs
     learning_dir = outdir / "learning"
-    wh_pred_dir = outdir / "_warehouse" / "pred_top10"
-    _ensure_dir(learning_dir)
-    _ensure_dir(wh_pred_dir)
+    warehouse_dir = outdir / "_warehouse" / "pred_top10"
+    decisio_dir = outdir / "decisio"
 
-    topN_df: Optional[pd.DataFrame] = None
+    _ensure_dir(learning_dir)
+    _ensure_dir(warehouse_dir)
+    _ensure_dir(decisio_dir)
+
+    topn_df: Optional[pd.DataFrame] = None
     full_df: Optional[pd.DataFrame] = None
     limit_up_table_df: Optional[pd.DataFrame] = None
 
     if isinstance(topn, dict):
-        topN_df = _pick_first_not_none(topn, ["topN", "topn", "TopN", "top"])
-        full_df = topn.get("full") if "full" in topn else None
-        limit_up_table_df = topn.get("limit_up_table") if "limit_up_table" in topn else None
+        topn_df = _to_df(topn.get("topN") or topn.get("topn") or topn.get("TopN") or topn.get("top"))
+        full_df = _to_df(topn.get("full"))
+        limit_up_table_df = _to_df(topn.get("limit_up_table"))
     else:
-        topN_df = topn
-
-    topN_df = _to_df(topN_df)
-    full_df = _to_df(full_df)
-    limit_up_table_df = _to_df(limit_up_table_df)
+        topn_df = _to_df(topn)
 
     calendar = _list_trade_dates(settings)
     prev_td, next_td = _prev_next_trade_date_with_fallback(calendar, trade_date)
 
     limit_df_current = _load_limit_df(settings, ctx, trade_date)
-
-    _hit_df_same_day, metrics_same_day = _topN_to_hit_df(topN_df, limit_df_current)
+    _, metrics_same_day = _topn_to_hit_df(topn_df, limit_df_current)
 
     payload: Dict[str, Any] = {
         "trade_date": trade_date,
         "verify_date": next_td,
         "gate": gate,
-        "topN": [] if topN_df is None else topN_df.to_dict(orient="records"),
+        "topN": [] if topn_df is None else topn_df.to_dict(orient="records"),
         "full": [] if full_df is None else full_df.to_dict(orient="records"),
         "limit_up_table": [] if limit_up_table_df is None else limit_up_table_df.to_dict(orient="records"),
         "learn": learn,
         "metrics": metrics_same_day,
-        "metrics_same_day": metrics_same_day,
         "run_meta": run_meta,
     }
 
-    # ================
-    # P1: write-once daily json/md (freeze history)
-    # ================
+    # -----------------
+    # JSON / MD
+    # -----------------
     json_path = outdir / f"predict_top10_{trade_date}.json"
     _write_text_once(
         json_path,
@@ -1015,155 +749,114 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         encoding="utf-8",
     )
 
-    md_path = outdir / f"predict_top10_{trade_date}.md"
-    lines = [f"# {trade_date} 预测报告\n"]
+    md_lines: List[str] = [f"# {trade_date} 预测报告\n"]
+    md_lines.append(f"## 《{trade_date} 预测：{next_td} 涨停 TOP 10》\n")
 
-    # 第1块：预测（trade_date -> next_td）
-    lines.append(f"## 《{trade_date} 预测：{next_td} 涨停 TOP 10》\n")
-
-    if topN_df is None or topN_df.empty:
+    topn_v2 = _canonicalize_v2_frame(topn_df)
+    if topn_v2.empty:
         reason = ""
-        try:
-            if isinstance(gate, dict):
-                r = gate.get("reason") or gate.get("msg") or ""
-                if r:
-                    reason = f"（{r}）"
-        except Exception:
-            pass
-        lines.append(f"⚠️ Gate 未通过，Top10 为空。{reason}\n\n")
+        if isinstance(gate, dict):
+            msg = _safe_str(gate.get("reason") or gate.get("msg") or "")
+            if msg:
+                reason = f"（{msg}）"
+        md_lines.append(f"⚠️ Gate 未通过，Top10 为空。{reason}\n")
     else:
-        lines.append(_df_to_md_table(
-            topN_df,
-            cols=["rank", "ts_code", "name", "prob_final", "final_score", "StrengthScore", "ThemeBoost", "board"],
-        ))
-        lines.append("\n")
+        md_lines.append(
+            _df_to_md_table(
+                topn_v2,
+                cols=["rank", "ts_code", "name", "prob_final", "final_score", "StrengthScore", "ThemeBoost", "board"],
+            )
+        )
+        md_lines.append("")
 
-    # 第2块：强度列表（trade_date 所有涨停）
-    lines.append(f"## 《{trade_date} 所有涨停股票的强度列表》\n")
-
+    md_lines.append(f"## 《{trade_date} 所有涨停股票的强度列表》\n")
     strength_limit_df = None
     if limit_up_table_df is not None and not limit_up_table_df.empty:
         strength_limit_df = _standardize_strength_table(limit_up_table_df)
     else:
-        j = _join_limit_strength(limit_df_current, full_df)
-        if j is not None and not j.empty:
-            strength_limit_df = _standardize_strength_table(j)
+        joined = _join_limit_strength(limit_df_current, full_df)
+        if joined is not None and not joined.empty:
+            strength_limit_df = _standardize_strength_table(joined)
 
     if strength_limit_df is None or strength_limit_df.empty:
-        lines.append("(未能生成强度列表：limit_list 或 full_df 空，且未提供 limit_up_table)\n\n")
+        md_lines.append("(未能生成强度列表：limit_list 或 full 排名为空)\n")
     else:
-        lines.append(_df_to_md_table(
-            strength_limit_df,
-            cols=["排名", "代码", "股票", "Probability", "强度得分", "题材加成", "板块"],
-        ))
-        lines.append("\n")
+        md_lines.append(
+            _df_to_md_table(
+                strength_limit_df,
+                cols=["排名", "代码", "股票", "Probability", "强度得分", "题材加成", "板块"],
+            )
+        )
+        md_lines.append("")
 
-    # 第3块：命中情况（prev_td -> trade_date）
     prev_title = prev_td if prev_td else "上一交易日"
-    lines.append(f"## 《{prev_title} 预测：{trade_date} 命中情况》\n")
-
-    prev_topN_df = _load_json_topN(outdir, prev_td)
-    prev_hit_df, _prev_metrics = _topN_to_hit_df(prev_topN_df, limit_df_current)
-    if prev_topN_df is None or prev_topN_df.empty:
-        lines.append("（未找到上一交易日预测文件或上一交易日 Top10 为空）\n\n")
+    md_lines.append(f"## 《{prev_title} 预测：{trade_date} 命中情况》\n")
+    prev_topn_df = _load_json_topn(outdir, prev_td)
+    prev_hit_df, _prev_metrics = _topn_to_hit_df(prev_topn_df, limit_df_current)
+    if prev_hit_df.empty:
+        md_lines.append("（未找到上一交易日预测文件或上一交易日 Top10 为空）\n")
     else:
-        lines.append(_df_to_md_table(prev_hit_df, cols=["ts_code", "name", "prob_final", "命中", "板块"]))
-        lines.append("\n")
+        md_lines.append(_df_to_md_table(prev_hit_df, cols=["ts_code", "name", "prob_final", "命中", "board"]))
+        md_lines.append("")
 
-    # 第4块：近10日命中率（predict_date -> next_trade_date 验证日）
-    hist_df = _recent_hit_history(outdir, settings, ctx, max_days=10)
-    if hist_df is not None and not hist_df.empty:
-        lines.append("## 《近10日 Top10 命中率》\n")
-        lines.append(_df_to_md_table(hist_df, cols=["日期", "命中数", "命中率", "当日涨停家数"]))
-        lines.append("\n")
+    hist10 = _recent_hit_history(outdir, settings, ctx, max_days=10)
+    if not hist10.empty:
+        md_lines.append("## 《近10日 Top10 命中率》\n")
+        md_lines.append(_df_to_md_table(hist10, cols=["日期", "命中数", "命中率", "当日涨停家数"]))
+        md_lines.append("")
 
-    md_text = "\n".join(lines)
+    md_text = "\n".join(md_lines)
+    md_path = outdir / f"predict_top10_{trade_date}.md"
     _write_text_once(md_path, md_text, force=force_overwrite, encoding="utf-8")
 
-    # latest.md（允许覆盖，属于“当前展示”）
-    latest = outdir / "latest.md"
-    latest.write_text(md_text, encoding="utf-8")
-    print(f"[WRITE] {latest} (latest)")
+    latest_md = outdir / "latest.md"
+    latest_md.write_text(md_text, encoding="utf-8")
+    print(f"[WRITE] {latest_md} (latest)")
 
-    # ================
-    # P1: CSV outputs
-    # - immutable warehouse
-    # - learning per-day (write-once)
-    # - history append-only
-    # ================
-    topN_std = _standardize_topN_for_csv(topN_df)
-    topN_std = _enrich_learning_topn_df(topN_std, trade_date, next_td, run_meta)
+    # -----------------
+    # V2 CSV outputs
+    # -----------------
+    topn_out = _enrich_v2_with_meta(topn_df, trade_date, next_td, run_meta)
+    full_out = _enrich_v2_with_meta(full_df, trade_date, next_td, run_meta)
 
-    # =========================
-    # ✅ NEW: decisio full ranking outputs (TopK/Full list)
-    # outputs/decisio/
-    # - pred_decisio_{trade_date}.csv   (write-once, archive)
-    # - pred_decisio_latest.csv         (overwrite, latest)
-    # =========================
-    full_std = _standardize_topN_for_csv(full_df)
-    full_std = _merge_strengthscore_from_step3(full_std, outdir, trade_date)
-
-    # enrich（与 learning/TopN 保持一致字段，保证下游可直接复用）
-    if full_std is not None and not full_std.empty:
-        full_std = full_std.copy()
-        full_std.insert(0, "trade_date", trade_date)
-        full_std.insert(1, "verify_date", next_td)
-        full_std["run_id"] = run_meta["run_id"]
-        full_std["run_attempt"] = run_meta["run_attempt"]
-        full_std["commit_sha"] = run_meta["commit_sha"]
-        full_std["generated_at_utc"] = run_meta["generated_at_utc"]
-        full_std = full_std.reindex(columns=LEARN_TOPN_COLS, fill_value="")
-
-        decisio_dir = outdir / "decisio"
-        _ensure_dir(decisio_dir)
-
-        # 1) 日归档（write-once；除非 FORCE_OVERWRITE=1 才允许覆盖）
-        decisio_dated = decisio_dir / f"pred_decisio_{trade_date}.csv"
-        _write_csv_once(full_std, decisio_dated, force=False)
-
-        # 2) latest（覆盖，用于下游拉取）
-        decisio_latest = decisio_dir / "pred_decisio_latest.csv"
-        full_std.to_csv(decisio_latest, index=False, encoding="utf-8-sig")
-        print(f"[WRITE] {decisio_latest} rows={len(full_std)} (latest)")
-    else:
-        print("[WARN] full_df empty -> skip outputs/decisio")
-
-    # 1) immutable archive (always write, never overwrite)
-    wh_csv = wh_pred_dir / f"pred_top10_{trade_date}_{run_meta['run_id']}.csv"
-    _write_csv_once(topN_std, wh_csv, force=False)
-
-    # 2) learning per-day (STRICT write-once, NEVER overwrite)
+    # learning daily / latest / warehouse
     learn_csv = learning_dir / f"pred_top10_{trade_date}.csv"
-    _write_csv_once(topN_std, learn_csv, force=False)
+    _write_csv_once(topn_out, learn_csv, force=force_overwrite)
 
-    # 2b) learning latest (overwrite OK, for downstream consumption)
     learn_latest = learning_dir / "pred_top10_latest.csv"
-    _ensure_dir(learn_latest.parent)
-    (topN_std if topN_std is not None else pd.DataFrame()).to_csv(learn_latest, index=False, encoding="utf-8-sig")
-    print(f"[WRITE] {learn_latest} rows={0 if topN_std is None else len(topN_std)} (latest)")
+    topn_out.to_csv(learn_latest, index=False, encoding="utf-8-sig")
+    print(f"[WRITE] {learn_latest} rows={len(topn_out)} (latest)")
 
-    # 3) pred_top10_history.csv append-only (no rewrite)
+    wh_csv = warehouse_dir / f"pred_top10_{trade_date}_{run_meta['run_id']}.csv"
+    _write_csv_once(topn_out, wh_csv, force=False)
+
+    # history: V2 rebuild only
     hist_path = learning_dir / "pred_top10_history.csv"
-    # 只按 (trade_date, ts_code) 去重：一旦该票当日已记录，就不再追加（防止历史变动）
-    if topN_std is not None and not topN_std.empty:
-        hist_stats = _append_csv_unique(
-            topN_std,
-            hist_path,
-            key_cols=["trade_date", "ts_code"],
-        )
-        print(f"[HISTORY] pred_top10_history.csv appended={hist_stats['appended']} skipped={hist_stats['skipped']} total={hist_stats['total']}")
+    hist_df = _rebuild_v2_history(learning_dir)
+    hist_df.to_csv(hist_path, index=False, encoding="utf-8-sig")
+    print(f"[WRITE] {hist_path} rows={len(hist_df)} (rebuilt-v2)")
 
-    # 4) _last_run.txt (overwrite is OK)
+    # decisio: same old path / file names, V2 schema inside
+    decisio_dated = decisio_dir / f"pred_decisio_{trade_date}.csv"
+    _write_csv_once(full_out, decisio_dated, force=force_overwrite)
+
+    decisio_latest = decisio_dir / "pred_decisio_latest.csv"
+    full_out.to_csv(decisio_latest, index=False, encoding="utf-8-sig")
+    print(f"[WRITE] {decisio_latest} rows={len(full_out)} (latest)")
+
+    # last run
     last_run = learning_dir / "_last_run.txt"
-    last_text = (
-        f"trade_date={trade_date}\n"
-        f"verify_date={next_td}\n"
-        f"run_id={run_meta['run_id']}\n"
-        f"run_attempt={run_meta['run_attempt']}\n"
-        f"commit_sha={run_meta['commit_sha']}\n"
-        f"generated_at_utc={run_meta['generated_at_utc']}\n"
+    last_run.write_text(
+        (
+            f"trade_date={trade_date}\n"
+            f"verify_date={next_td}\n"
+            f"run_id={run_meta['run_id']}\n"
+            f"run_attempt={run_meta['run_attempt']}\n"
+            f"commit_sha={run_meta['commit_sha']}\n"
+            f"generated_at_utc={run_meta['generated_at_utc']}\n"
+        ),
+        encoding="utf-8",
     )
-    last_run.write_text(last_text, encoding="utf-8")
     print(f"[WRITE] {last_run} (latest)")
 
-    print(f"✅ Outputs written: {md_path}")
+    print(f"✅ V2 outputs written: {md_path}")
