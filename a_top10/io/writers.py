@@ -134,6 +134,13 @@ def _write_text_once(path: Path, text: str, *, force: bool = False, encoding: st
     return True
 
 
+def _write_text_overwrite(path: Path, text: str, *, encoding: str = "utf-8") -> bool:
+    _ensure_dir(path.parent)
+    path.write_text(text, encoding=encoding)
+    print(f"[WRITE] {path} (overwrite)")
+    return True
+
+
 def _write_csv_once(df: pd.DataFrame, path: Path, *, force: bool = False) -> bool:
     _ensure_dir(path.parent)
     if path.exists() and not force:
@@ -143,6 +150,15 @@ def _write_csv_once(df: pd.DataFrame, path: Path, *, force: bool = False) -> boo
         df = pd.DataFrame(columns=V2_ALL_COLS)
     df.to_csv(path, index=False, encoding="utf-8-sig")
     print(f"[WRITE] {path} rows={len(df)}")
+    return True
+
+
+def _write_csv_overwrite(df: pd.DataFrame, path: Path) -> bool:
+    _ensure_dir(path.parent)
+    if df is None:
+        df = pd.DataFrame(columns=V2_ALL_COLS)
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+    print(f"[WRITE] {path} rows={len(df)} (overwrite)")
     return True
 
 
@@ -723,7 +739,6 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     _ensure_dir(outdir)
 
     run_meta = _get_run_meta()
-    force_overwrite = str(os.getenv("FORCE_OVERWRITE", "0")).strip().lower() in ("1", "true", "yes")
 
     learning_dir = outdir / "learning"
     warehouse_dir = outdir / "_warehouse" / "pred_top10"
@@ -775,11 +790,13 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     # -----------------
     # JSON / MD
     # -----------------
+    # V2 壳层收口：
+    # dated json/md 不能再 write-once，否则同一 trade_date rerun 后
+    # CSV 已更新而 md/json 不更新，会制造“同日多真相”。
     json_path = outdir / f"predict_top10_{trade_date}.json"
-    _write_text_once(
+    _write_text_overwrite(
         json_path,
         json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
-        force=force_overwrite,
         encoding="utf-8",
     )
 
@@ -841,7 +858,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
     md_text = "\n".join(md_lines)
     md_path = outdir / f"predict_top10_{trade_date}.md"
-    _write_text_once(md_path, md_text, force=force_overwrite, encoding="utf-8")
+    _write_text_overwrite(md_path, md_text, encoding="utf-8")
 
     latest_md = outdir / "latest.md"
     latest_md.write_text(md_text, encoding="utf-8")
@@ -856,31 +873,29 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     # learning daily / latest / warehouse
     # 这里必须直接覆盖写：
     # pred_top10_{trade_date}.csv 现在是 V2 history 的正式源文件，
-    # 不能再被 write-once 旧文件钉死。
+    # 不能再被旧文件钉死。
     learn_csv = learning_dir / f"pred_top10_{trade_date}.csv"
-    topn_out.to_csv(learn_csv, index=False, encoding="utf-8-sig")
-    print(f"[WRITE] {learn_csv} rows={len(topn_out)} (dated)")
+    _write_csv_overwrite(topn_out, learn_csv)
 
     learn_latest = learning_dir / "pred_top10_latest.csv"
-    topn_out.to_csv(learn_latest, index=False, encoding="utf-8-sig")
-    print(f"[WRITE] {learn_latest} rows={len(topn_out)} (latest)")
+    _write_csv_overwrite(topn_out, learn_latest)
 
+    # warehouse 仍保留归档语义：write-once
     wh_csv = warehouse_dir / f"pred_top10_{trade_date}_{run_meta['run_id']}.csv"
     _write_csv_once(topn_out, wh_csv, force=False)
 
     # history: V2 rebuild only
     hist_path = learning_dir / "pred_top10_history.csv"
     hist_df = _rebuild_v2_history(learning_dir)
-    hist_df.to_csv(hist_path, index=False, encoding="utf-8-sig")
-    print(f"[WRITE] {hist_path} rows={len(hist_df)} (rebuilt-v2)")
+    _write_csv_overwrite(hist_df, hist_path)
 
     # decisio: same old path / file names, V2 schema inside
+    # dated decisio 也要覆盖写，避免 rerun 后 latest 已更新但 dated 旧壳残留
     decisio_dated = decisio_dir / f"pred_decisio_{trade_date}.csv"
-    _write_csv_once(full_out, decisio_dated, force=force_overwrite)
+    _write_csv_overwrite(full_out, decisio_dated)
 
     decisio_latest = decisio_dir / "pred_decisio_latest.csv"
-    full_out.to_csv(decisio_latest, index=False, encoding="utf-8-sig")
-    print(f"[WRITE] {decisio_latest} rows={len(full_out)} (latest)")
+    _write_csv_overwrite(full_out, decisio_latest)
 
     # last run
     last_run = learning_dir / "_last_run.txt"
