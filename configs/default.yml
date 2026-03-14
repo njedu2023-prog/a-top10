@@ -2,13 +2,8 @@ version: "0.1"
 timezone: "Asia/Shanghai"
 
 data_repo:
-  # Top10 外部数据仓库统一放在 _warehouse 目录下
   warehouse_root: "_warehouse"
-  # 你的真实数据仓库名（GitHub 仓库名）
   repo_name: "a-share-top3-data"
-  # 数据仓库内部 RAW 数据所在路径（相对 repo 根目录）
-  # 最终路径会自动解析为：
-  #   _warehouse/a-share-top3-data/data/raw/YYYY/YYYYMMDD/
   raw_dir: "data/raw"
 
 io:
@@ -19,13 +14,11 @@ io:
   candidate_size_hint: [30, 200]
 
 filters:
-  # Step1 情绪开关
   emotion_gate:
     min_limit_up_cnt: 50
     max_broken_rate: 0.35
     min_max连板高度: 3
 
-  # Step2 候选池
   candidate_pool:
     must_close_limit_up: true
     exclude_st: true
@@ -33,7 +26,6 @@ filters:
     exclude_extreme_one_word: false
 
 scores:
-  # Step3 StrengthScore 权重
   strength:
     w_seal_early: 0.35
     w_break_less: 0.25
@@ -41,21 +33,52 @@ scores:
     w_turnover_ok: 0.20
 
 theme:
-  # Step4 ThemeBoost 配置
   sigmoid_k: 0.18
   use_dragon_leader_rank: true
 
 ml:
-  # Step5 模型（目前先允许 placeholder）
   model: "placeholder"      # placeholder | logistic | lightgbm
   features_dim: 30
 
+  # ===== V2 新增：Step5 概率语义配置 =====
+  enable_rule: true
+  enable_ml: true
+
+  # ml_first: 有 ml 用 ml，无 ml 回退 rule
+  # weighted:  rule/ml 按权重融合
+  fusion_mode: "ml_first"
+
+  fallback_to_rule: true
+
+  clip_min: 0.0
+  clip_max: 1.0
+
+  rule_weight: 0.30
+  ml_weight: 0.70
+
 risk:
-  # Step6 风险剔除（剔除 ST、龙虎榜大卖、次日大面 等）
   remove_st: true
   remove_dragon_net_sell: true
   remove_high_accel: true
   remove_next_day_nuke: true
+
+# ===== V2 新增：Step6 纯终排配置 =====
+step6:
+  score_mode: "add"      # add | geo
+
+  # final_score = w_prob * prob_final + w_strength * strength01 + w_theme * theme01
+  w_prob: 0.70
+  w_strength: 0.20
+  w_theme: 0.10
+
+  min_prob: 0.0
+  min_score: null
+
+  strength_scale: 100.0
+  theme_scale: 1.30
+
+  dedup_by_ts_code: true
+  stable_hash_tiebreak: true
 
 output:
   md:
