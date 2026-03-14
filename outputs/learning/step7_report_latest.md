@@ -1,6 +1,7 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-03-15 02:37:37
+- 生成时间：2026-03-15 04:13:29
+- RunMode：auto_daily
 - Today：20260315
 - LatestSnapshot：20260313
 - LabelUpperBound：20260313
@@ -39,15 +40,19 @@
 - 丢弃全零特征行：29
 - 日期总数：31
 - 使用日期：31
+- 特征覆盖率：0.7252030355478631
 
 ## 3) 训练执行结果
 
 - trained：False
+- updated：False
 - lr_saved：False
 - lgbm_saved：False
 - models_dir：
+- level：level3
 - train_rows：2058
 - pos/neg：368/1690
+- feature_coverage：0.7252030355478631
 - reason：skip_train: quality_gate_fail
 
 ## 4) Warnings

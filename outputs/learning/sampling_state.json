@@ -1,6 +1,8 @@
 {
+  "run_mode": "auto_daily",
+  "allow_model_update": true,
   "sampling_stage": "S1_MVP",
-  "target_rows_per_day": 200,
+  "target_rows_per_day": 80,
   "days_covered": 31,
   "rows_per_day_last_N": [
     75,
@@ -130,8 +132,15 @@
   },
   "pseudo_ratio": 0.042008691453404155,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-03-14T18:37:36Z",
-  "model_version": "eb854b23a53799d19c69f86cffa83e000f6270f5",
+  "thresholds": {
+    "min_level1_samples": 80,
+    "min_train_samples": 120,
+    "min_stable_samples": 150,
+    "min_positive_samples": 12,
+    "min_feature_coverage": 0.85
+  },
+  "updated_at_utc": "2026-03-14T20:13:29Z",
+  "model_version": "c9cc30e844801dcd96d117fc7ad34610cf0f9a4e",
   "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
   "label_upper_bound_yyyymmdd": "20260313"
