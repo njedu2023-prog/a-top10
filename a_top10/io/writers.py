@@ -854,8 +854,12 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     full_out = _enrich_v2_with_meta(full_df, trade_date, next_td, run_meta)
 
     # learning daily / latest / warehouse
+    # 这里必须直接覆盖写：
+    # pred_top10_{trade_date}.csv 现在是 V2 history 的正式源文件，
+    # 不能再被 write-once 旧文件钉死。
     learn_csv = learning_dir / f"pred_top10_{trade_date}.csv"
-    _write_csv_once(topn_out, learn_csv, force=force_overwrite)
+    topn_out.to_csv(learn_csv, index=False, encoding="utf-8-sig")
+    print(f"[WRITE] {learn_csv} rows={len(topn_out)} (dated)")
 
     learn_latest = learning_dir / "pred_top10_latest.csv"
     topn_out.to_csv(learn_latest, index=False, encoding="utf-8-sig")
