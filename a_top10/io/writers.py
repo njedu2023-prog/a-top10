@@ -5,7 +5,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -494,7 +494,11 @@ def _load_json_topn(outdir: Path, td: str) -> Optional[pd.DataFrame]:
         payload = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
-    return _to_df(payload.get("topN") or [])
+
+    raw_topn = payload.get("topN")
+    if raw_topn is None:
+        raw_topn = []
+    return _to_df(raw_topn)
 
 
 def _topn_to_hit_df(topn_df: Optional[pd.DataFrame], limit_df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -714,9 +718,19 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     limit_up_table_df: Optional[pd.DataFrame] = None
 
     if isinstance(topn, dict):
-        topn_df = _to_df(topn.get("topN") or topn.get("topn") or topn.get("TopN") or topn.get("top"))
-        full_df = _to_df(topn.get("full"))
-        limit_up_table_df = _to_df(topn.get("limit_up_table"))
+        raw_topn = None
+        for k in ["topN", "topn", "TopN", "top"]:
+            if k in topn and topn.get(k) is not None:
+                raw_topn = topn.get(k)
+                break
+
+        topn_df = _to_df(raw_topn)
+
+        raw_full = topn.get("full") if "full" in topn else None
+        full_df = _to_df(raw_full)
+
+        raw_limit_up_table = topn.get("limit_up_table") if "limit_up_table" in topn else None
+        limit_up_table_df = _to_df(raw_limit_up_table)
     else:
         topn_df = _to_df(topn)
 
