@@ -356,13 +356,27 @@ def _get_pred_codes_for_date(pred_df: pd.DataFrame, trade_date: str, topn: int) 
     if d.empty:
         return [], "pred_no_rows_for_date"
 
+    if "prob_final" not in d.columns:
+        if "Probability" in d.columns:
+            d["prob_final"] = d["Probability"]
+        elif "prob" in d.columns:
+            d["prob_final"] = d["prob"]
+    if "final_score" not in d.columns and "score" in d.columns:
+        d["final_score"] = d["score"]
+
     # rank 若存在，优先用 rank 排序取前 N
     if "rank" in d.columns:
         d["rank"] = pd.to_numeric(d["rank"], errors="coerce")
         d = d.sort_values("rank", kind="mergesort")
     else:
-        # 兜底：按 Probability/score 排序（但最好还是 rank）
-        if "Probability" in d.columns:
+        # V2 主语义优先：prob_final / final_score；旧字段仅作兼容 fallback
+        if "prob_final" in d.columns:
+            d["prob_final"] = pd.to_numeric(d["prob_final"], errors="coerce")
+            d = d.sort_values("prob_final", ascending=False, kind="mergesort")
+        elif "final_score" in d.columns:
+            d["final_score"] = pd.to_numeric(d["final_score"], errors="coerce")
+            d = d.sort_values("final_score", ascending=False, kind="mergesort")
+        elif "Probability" in d.columns:
             d["Probability"] = pd.to_numeric(d["Probability"], errors="coerce")
             d = d.sort_values("Probability", ascending=False, kind="mergesort")
         elif "prob" in d.columns:
@@ -829,8 +843,44 @@ def _train_and_save_models(s: Settings, train_df: pd.DataFrame, warnings: List[s
 # ============================================================
 
 SAMPLING_STATE_FILE = "sampling_state.json"
-CORE_FEATURE_COLS_V1 = ["StrengthScore", "ThemeBoost", "turnover_rate", "seal_amount", "open_times", "Probability"]
+CORE_FEATURE_COLS_V1 = ["StrengthScore", "ThemeBoost", "turnover_rate", "seal_amount", "open_times", "prob_final", "final_score"]
 META_COLS_V1 = ["trade_date", "ts_code", "_prob_src"]
+
+
+def _normalize_feature_history_v2(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Step7 内部统一：
+    - prob_final / final_score 为主语义
+    - Probability / prob / score 仅作兼容别名
+    不改旧文件，不破坏旧消费链，只在 Step7 内部标准化。
+    """
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df.copy()
+
+    d = df.copy()
+
+    if "prob_final" not in d.columns:
+        if "Probability" in d.columns:
+            d["prob_final"] = d["Probability"]
+        elif "prob" in d.columns:
+            d["prob_final"] = d["prob"]
+        else:
+            d["prob_final"] = ""
+
+    if "final_score" not in d.columns:
+        if "score" in d.columns:
+            d["final_score"] = d["score"]
+        else:
+            d["final_score"] = ""
+
+    if "Probability" not in d.columns:
+        d["Probability"] = d["prob_final"]
+    if "prob" not in d.columns:
+        d["prob"] = d["prob_final"]
+    if "score" not in d.columns:
+        d["score"] = d["final_score"]
+
+    return d
 
 
 def _read_feature_history(outputs_dir: Path) -> Tuple[pd.DataFrame, str]:
@@ -864,6 +914,8 @@ def _quality_gate_v1(df: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
         details["reason"] = "feature_history empty"
         details["pass"] = False
         return False, details
+
+    df = _normalize_feature_history_v2(df)
 
     missing = [c for c in (META_COLS_V1 + CORE_FEATURE_COLS_V1) if c not in df.columns]
     details["missing_cols"] = missing
@@ -910,7 +962,7 @@ def _quality_gate_v1(df: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
     for c in CORE_FEATURE_COLS_V1:
         if metrics[c]["non_null_rate"] < 0.90:
             ok = False
-    for c in ["StrengthScore", "ThemeBoost", "Probability"]:
+    for c in ["StrengthScore", "ThemeBoost", "prob_final", "final_score"]:
         if metrics.get(c, {}).get("std", 0.0) <= 0.0:
             ok = False
     if metrics.get("StrengthScore", {}).get("non_zero_rate", 0.0) < 0.30:
