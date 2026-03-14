@@ -2,14 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-Step2：Candidate Pool（终版，工程对齐）
+Step2：Candidate Pool（V2 收口版）
 - 主程序依赖：from a_top10.steps.step2_candidate_pool import step2_build_candidates
-- 关键修复/增强：
-  1) ✅ 统一 ts_code 列（兼容 ts_code/code/symbol/证券代码 等）
-  2) ✅ 强制补齐 industry（来自 stock_basic.csv / ctx["stock_basic"]）
-  3) ✅ 输出旁路 debug：outputs/debug_step2_candidate_YYYYMMDD.json
-  4) ✅ 返回值类型对齐：必须返回 DataFrame（避免 Step3 收到 dict 崩溃）
-  5) ✅ 更强健：ctx 为空/脏数据/异常写盘都不崩（尽量落 debug）
+- 关键目标：
+  1) 统一 ts_code 列（兼容 ts_code/code/symbol/证券代码 等）
+  2) 强制补齐 industry，并显式补齐 board（V2 主字段）
+  3) 输出旁路 debug：outputs/debug_step2_candidate_YYYYMMDD.json
+  4) 返回值类型对齐：必须返回 DataFrame（避免 Step3 收到 dict 崩溃）
+  5) ctx 回写稳定：candidates / step2 / candidate_pool / step2_candidates
+  6) 不破坏旧字段、旧路径、旧消费链
 """
 
 from __future__ import annotations
@@ -69,7 +70,6 @@ def _to_str_series(df: Optional[pd.DataFrame], col: Optional[str]) -> pd.Series:
         return pd.Series([], dtype="string")
     if df.empty or not col or col not in df.columns:
         return pd.Series([""] * len(df), dtype="string")
-    # 注意：astype("string") 可能把非标对象变为 <NA>，这里统一 strip
     return df[col].astype("string").fillna("").map(lambda x: str(x).strip())
 
 
@@ -170,6 +170,50 @@ def _ctx_get_df(ctx: Dict[str, Any], keys: List[str]) -> Optional[pd.DataFrame]:
     return None
 
 
+def _ensure_name_col(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    name_col = _first_existing_col(out, ["name", "名称", "股票简称", "ts_name"])
+    if name_col and name_col != "name":
+        out["name"] = _to_str_series(out, name_col)
+    elif "name" not in out.columns:
+        out["name"] = ""
+    return out
+
+
+def _ensure_board_col(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    V2：显式补 board 主字段，但保留 industry 兼容旧链路
+    """
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+
+    if "industry" not in out.columns:
+        out["industry"] = ""
+
+    if "board" not in out.columns:
+        out["board"] = out["industry"].astype("string").fillna("").map(lambda x: str(x).strip())
+    else:
+        board_s = out["board"].astype("string").fillna("").map(lambda x: str(x).strip())
+        ind_s = out["industry"].astype("string").fillna("").map(lambda x: str(x).strip())
+        out["board"] = board_s.where(board_s != "", ind_s)
+
+    return out
+
+
+def _reorder_candidate_cols(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+
+    front = [c for c in ["ts_code", "name", "industry", "board"] if c in df.columns]
+    rest = [c for c in df.columns if c not in front]
+    return df[front + rest].copy()
+
+
 # =========================
 # Step2 main
 # =========================
@@ -179,7 +223,9 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
     ✅ 返回：candidates_df（DataFrame）
     同时把 candidates_df 写回 ctx，供后续步骤取用：
       ctx["candidates"] = candidates_df
-      ctx["step2"] = candidates_df   # 兼容旧链路
+      ctx["step2"] = candidates_df
+      ctx["candidate_pool"] = candidates_df
+      ctx["step2_candidates"] = candidates_df
     """
     if ctx is None:
         ctx = {}
@@ -200,6 +246,10 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
             "industry_nonblank_ratio_before": 0.0,
             "industry_nonblank_ratio_after": 0.0,
         },
+        "board_fill": {
+            "board_nonblank_ratio": 0.0,
+            "board_from_industry": True,
+        },
         "filters": {"drop_st": 0, "drop_delist": 0},
         "final_rows": 0,
         "final_cols": [],
@@ -208,14 +258,28 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
     }
 
     def _finalize(df: pd.DataFrame) -> pd.DataFrame:
-        # 兜底：保证返回 DataFrame
         if df is None or not isinstance(df, pd.DataFrame):
-            df = pd.DataFrame()
+            df = pd.DataFrame(columns=["ts_code", "name", "industry", "board"])
+
+        if not df.empty:
+            df = _ensure_name_col(df)
+            df = _ensure_board_col(df)
+            df = _reorder_candidate_cols(df)
+        else:
+            # 空表也保持 schema 稳定
+            for c in ["ts_code", "name", "industry", "board"]:
+                if c not in df.columns:
+                    df[c] = ""
+            df = df[["ts_code", "name", "industry", "board"]].copy()
+
+        if "board" in df.columns and len(df) > 0:
+            debug["board_fill"]["board_nonblank_ratio"] = float(
+                (df["board"].astype("string").fillna("") != "").mean()
+            )
 
         debug["final_rows"] = int(len(df))
         debug["final_cols"] = list(df.columns)
 
-        # 尽量写盘（失败不影响主流程）
         try:
             df.to_csv(Path(debug["out_csv"]), index=False, encoding="utf-8-sig")
         except Exception:
@@ -223,9 +287,10 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
 
         _safe_json_dump(debug, Path(debug["debug_file"]))
 
-        # 写回 ctx（始终写 DataFrame）
         ctx["candidates"] = df
         ctx["step2"] = df
+        ctx["candidate_pool"] = df
+        ctx["step2_candidates"] = df
         return df
 
     # 1) base：优先涨停列表
@@ -247,7 +312,6 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
     debug["code_norm"] = code_dbg
 
     if "ts_code" not in base_df.columns:
-        # 没有代码列就不继续做 merge/去重（但仍保证返回 df）
         return _finalize(base_df)
 
     # 3) 补 industry
@@ -267,7 +331,6 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
 
         sb, sb_code_dbg = _normalize_id_columns(sb)
 
-        # stock_basic 必须也有 ts_code 才能 merge
         if "ts_code" not in sb.columns:
             debug["industry_merge"]["ok"] = False
             debug["industry_merge"]["reason"] = "ts_code missing in stock_basic after normalization"
@@ -283,7 +346,6 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
                 sb2["industry"] = sb2["industry"].astype("string").fillna("").map(lambda x: str(x).strip())
 
                 candidates_df = base_df.merge(sb2, on="ts_code", how="left", suffixes=("", "_sb"))
-                # 理论上 sb2 已经叫 industry，不会有 industry_sb；这里保留兼容逻辑
                 if "industry_sb" in candidates_df.columns:
                     if "industry" in candidates_df.columns:
                         base_ind = candidates_df["industry"].astype("string").fillna("")
@@ -315,7 +377,7 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
         debug["filters"]["drop_delist"] = int(mask_delist.sum())
         candidates_df = candidates_df.loc[~mask_delist].copy()
 
-    # 5) 去重 & 列前置
+    # 5) 去重
     candidates_df["ts_code"] = (
         candidates_df["ts_code"]
         .astype("string")
@@ -325,9 +387,10 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
     candidates_df = candidates_df.loc[candidates_df["ts_code"] != ""].copy()
     candidates_df = candidates_df.drop_duplicates(subset=["ts_code"]).reset_index(drop=True)
 
-    front = [c for c in ["ts_code", "name", "industry"] if c in candidates_df.columns]
-    rest = [c for c in candidates_df.columns if c not in front]
-    candidates_df = candidates_df[front + rest]
+    # 6) V2 schema：补 name / board，保留 industry
+    candidates_df = _ensure_name_col(candidates_df)
+    candidates_df = _ensure_board_col(candidates_df)
+    candidates_df = _reorder_candidate_cols(candidates_df)
 
     return _finalize(candidates_df)
 
@@ -344,11 +407,9 @@ def run(df: Any, s: Optional[Settings] = None, ctx: Optional[Dict[str, Any]] = N
         ctx.setdefault("limit_list_d", df)
 
     if s is None:
-        # 兜底：如果外部没给 Settings，尽量构造一个
         try:
             s = Settings()
         except Exception:
-            # 极端情况下用一个空壳，outputs_dir 等会走默认
             class _S:  # type: ignore
                 pass
             s = _S()  # type: ignore
