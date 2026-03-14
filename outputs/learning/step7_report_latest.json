@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 02:26:12",
+  "ts": "2026-03-15 02:37:37",
   "topn": 10,
   "lookback_days": 150,
   "today_yyyymmdd": "20260315",
@@ -461,10 +461,10 @@
           "unique_count": 27
         },
         "prob_final": {
-          "non_null_rate": 0.053597295992274266,
-          "non_zero_rate": 0.053597295992274266,
-          "std": 0.05546169072690116,
-          "unique_count": 111
+          "non_null_rate": 0.07918879768227909,
+          "non_zero_rate": 0.07918879768227909,
+          "std": 0.07261908174378756,
+          "unique_count": 164
         },
         "final_score": {
           "non_null_rate": 1.0,
@@ -507,8 +507,8 @@
     },
     "pseudo_ratio": 0.042008691453404155,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-03-14T18:26:12Z",
-    "model_version": "4b72c47e303f26761fcb92e660d37b13dce2111a",
+    "updated_at_utc": "2026-03-14T18:37:36Z",
+    "model_version": "eb854b23a53799d19c69f86cffa83e000f6270f5",
     "today_yyyymmdd": "20260315",
     "latest_snapshot_yyyymmdd": "20260313",
     "label_upper_bound_yyyymmdd": "20260313"
