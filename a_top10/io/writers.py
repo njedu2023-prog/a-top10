@@ -35,6 +35,16 @@ V2_BASE_COLS = [
 V2_META_COLS = ["trade_date", "verify_date", "run_id", "run_attempt", "commit_sha", "generated_at_utc"]
 V2_ALL_COLS = V2_META_COLS[:2] + V2_BASE_COLS + V2_META_COLS[2:]
 
+V2_REQUIRED_HISTORY_COLS = {
+    "trade_date",
+    "verify_date",
+    "rank",
+    "ts_code",
+    "name",
+    "prob_final",
+    "final_score",
+}
+
 
 # =========================
 # basic utils
@@ -651,14 +661,18 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
 # =========================
 # V2 history rebuild
 # =========================
-def _is_exact_v2_schema(df: pd.DataFrame) -> bool:
-    return list(df.columns) == V2_ALL_COLS
+def _is_v2_compatible_schema(df: pd.DataFrame) -> bool:
+    cols = set(str(c).strip() for c in df.columns)
+    return V2_REQUIRED_HISTORY_COLS.issubset(cols)
 
 
 def _rebuild_v2_history(learning_dir: Path) -> pd.DataFrame:
     """
     只从 V2 的 pred_top10_YYYYMMDD.csv 日文件重建 history。
-    旧 schema 文件直接跳过，不再混写，不再兼容。
+    判定标准改为“V2 兼容 schema”：
+    - 必需列存在即可
+    - 允许额外列存在
+    - 允许列顺序不同
     """
     parts: List[pd.DataFrame] = []
     skipped: List[str] = []
@@ -672,11 +686,17 @@ def _rebuild_v2_history(learning_dir: Path) -> pd.DataFrame:
         if df.empty:
             continue
 
-        if not _is_exact_v2_schema(df):
+        if not _is_v2_compatible_schema(df):
             skipped.append(p.name)
             continue
 
-        parts.append(df.copy())
+        d = df.copy()
+        for c in V2_ALL_COLS:
+            if c not in d.columns:
+                d[c] = ""
+
+        d = d.reindex(columns=V2_ALL_COLS, fill_value="")
+        parts.append(d)
 
     if not parts:
         hist = pd.DataFrame(columns=V2_ALL_COLS)
