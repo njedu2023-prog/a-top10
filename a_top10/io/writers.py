@@ -23,6 +23,15 @@ PROB_COL_CANDIDATES = ["prob_final", "prob", "Probability", "probability", "概�
 FINAL_SCORE_COL_CANDIDATES = ["final_score", "score", "Score", "最终得分"]
 BOARD_COL_CANDIDATES = ["board", "板块", "industry", "行业", "所属行业", "concept", "题材"]
 
+LEARN_TOPN_BASE_COLS = [
+    "rank", "ts_code", "name",
+    "prob_rule", "prob_ml", "prob_final", "prob", "Probability",
+    "final_score", "score",
+    "StrengthScore", "ThemeBoost", "board",
+]
+LEARN_META_COLS = ["trade_date", "verify_date", "run_id", "run_attempt", "commit_sha", "generated_at_utc"]
+LEARN_TOPN_COLS = LEARN_META_COLS[:2] + LEARN_TOPN_BASE_COLS + LEARN_META_COLS[2:]
+
 
 # =========================
 # P1: immutable + run meta
@@ -717,14 +726,8 @@ def _standardize_topN_for_csv(topN_df: Optional[pd.DataFrame]) -> pd.DataFrame:
     - Probability / prob 是兼容别名
     - final_score 是 V2 主终排口径
     """
-    base_cols = [
-        "rank", "ts_code", "name",
-        "prob_rule", "prob_ml", "prob_final", "prob", "Probability",
-        "final_score", "score",
-        "StrengthScore", "ThemeBoost", "board",
-    ]
     if topN_df is None or topN_df.empty:
-        return pd.DataFrame(columns=base_cols)
+        return pd.DataFrame(columns=LEARN_TOPN_BASE_COLS)
 
     df = topN_df.copy()
 
@@ -749,24 +752,49 @@ def _standardize_topN_for_csv(topN_df: Optional[pd.DataFrame]) -> pd.DataFrame:
     elif "name" not in df.columns:
         df["name"] = ""
 
-    # V2 probability fields
-    p_final = _first_existing_col(df, ["prob_final", "Probability", "prob", "probability", "概率", "涨停概率"])
+    # V2 probability fields：prob_final 为主语义；prob / Probability 为兼容别名
+    p_final = _first_existing_col(df, ["prob_final", "prob", "Probability", "probability", "概率", "涨停概率"])
     if p_final and p_final != "prob_final":
         df["prob_final"] = df[p_final]
     elif "prob_final" not in df.columns:
         df["prob_final"] = ""
 
-    if "Probability" not in df.columns:
-        df["Probability"] = df["prob_final"]
     if "prob" not in df.columns:
         df["prob"] = df["prob_final"]
+    else:
+        prob_num = pd.to_numeric(df["prob"], errors="coerce")
+        final_num = pd.to_numeric(df["prob_final"], errors="coerce")
+        fill_mask = final_num.isna() & prob_num.notna()
+        if fill_mask.any():
+            df.loc[fill_mask, "prob_final"] = df.loc[fill_mask, "prob"]
+
+    if "Probability" not in df.columns:
+        df["Probability"] = df["prob_final"]
+    else:
+        p_alias_num = pd.to_numeric(df["Probability"], errors="coerce")
+        final_num = pd.to_numeric(df["prob_final"], errors="coerce")
+        fill_mask = final_num.isna() & p_alias_num.notna()
+        if fill_mask.any():
+            df.loc[fill_mask, "prob_final"] = df.loc[fill_mask, "Probability"]
+
+    # 回填兼容别名，确保三列显式对齐
+    prob_final_num = pd.to_numeric(df["prob_final"], errors="coerce")
+    prob_num = pd.to_numeric(df["prob"], errors="coerce")
+    fill_prob_mask = prob_num.isna() & prob_final_num.notna()
+    if fill_prob_mask.any():
+        df.loc[fill_prob_mask, "prob"] = df.loc[fill_prob_mask, "prob_final"]
+
+    prob_alias_num = pd.to_numeric(df["Probability"], errors="coerce")
+    fill_probability_mask = prob_alias_num.isna() & prob_final_num.notna()
+    if fill_probability_mask.any():
+        df.loc[fill_probability_mask, "Probability"] = df.loc[fill_probability_mask, "prob_final"]
 
     if "prob_rule" not in df.columns:
         df["prob_rule"] = ""
     if "prob_ml" not in df.columns:
         df["prob_ml"] = ""
 
-    # V2 final score fields
+    # V2 final score fields：final_score 为主语义；score 为兼容别名
     s_final = _first_existing_col(df, ["final_score", "score", "Score", "最终得分"])
     if s_final and s_final != "final_score":
         df["final_score"] = df[s_final]
@@ -775,6 +803,18 @@ def _standardize_topN_for_csv(topN_df: Optional[pd.DataFrame]) -> pd.DataFrame:
 
     if "score" not in df.columns:
         df["score"] = df["final_score"]
+    else:
+        score_num = pd.to_numeric(df["score"], errors="coerce")
+        final_score_num = pd.to_numeric(df["final_score"], errors="coerce")
+        fill_mask = final_score_num.isna() & score_num.notna()
+        if fill_mask.any():
+            df.loc[fill_mask, "final_score"] = df.loc[fill_mask, "score"]
+
+    final_score_num = pd.to_numeric(df["final_score"], errors="coerce")
+    score_num = pd.to_numeric(df["score"], errors="coerce")
+    fill_score_mask = score_num.isna() & final_score_num.notna()
+    if fill_score_mask.any():
+        df.loc[fill_score_mask, "score"] = df.loc[fill_score_mask, "final_score"]
 
     # board
     b = _first_existing_col(df, BOARD_COL_CANDIDATES)
@@ -795,13 +835,34 @@ def _standardize_topN_for_csv(topN_df: Optional[pd.DataFrame]) -> pd.DataFrame:
         else:
             df["ThemeBoost"] = ""
 
-    # normalize numeric-ish fields, but keep empty string if full column missing
+    # normalize numeric-ish fields
     for col in ["prob_rule", "prob_ml", "prob_final", "prob", "Probability", "final_score", "score", "StrengthScore", "ThemeBoost"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    use_cols = [c for c in base_cols if c in df.columns]
-    df = df[use_cols].copy()
+    df = df.reindex(columns=LEARN_TOPN_BASE_COLS, fill_value="")
+    return df
+
+
+def _enrich_learning_topn_df(topN_std: Optional[pd.DataFrame], trade_date: str, verify_date: str, run_meta: Dict[str, str]) -> pd.DataFrame:
+    """
+    learning 侧 schema 统一入口：
+    - 即使 topN_std 为空，也返回完整 LEARN_TOPN_COLS
+    - trade_date / verify_date / run_meta 永远显式存在
+    """
+    if topN_std is None or topN_std.empty:
+        df = pd.DataFrame(columns=LEARN_TOPN_COLS)
+    else:
+        df = topN_std.copy()
+        df = df.reindex(columns=LEARN_TOPN_BASE_COLS, fill_value="")
+
+    df.insert(0, "trade_date", trade_date)
+    df.insert(1, "verify_date", verify_date)
+    df["run_id"] = run_meta["run_id"]
+    df["run_attempt"] = run_meta["run_attempt"]
+    df["commit_sha"] = run_meta["commit_sha"]
+    df["generated_at_utc"] = run_meta["generated_at_utc"]
+    df = df.reindex(columns=LEARN_TOPN_COLS, fill_value="")
     return df
 
 
@@ -1031,16 +1092,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     # - history append-only
     # ================
     topN_std = _standardize_topN_for_csv(topN_df)
-
-    # enrich
-    if topN_std is not None and not topN_std.empty:
-        topN_std = topN_std.copy()
-        topN_std.insert(0, "trade_date", trade_date)
-        topN_std.insert(1, "verify_date", next_td)
-        topN_std["run_id"] = run_meta["run_id"]
-        topN_std["run_attempt"] = run_meta["run_attempt"]
-        topN_std["commit_sha"] = run_meta["commit_sha"]
-        topN_std["generated_at_utc"] = run_meta["generated_at_utc"]
+    topN_std = _enrich_learning_topn_df(topN_std, trade_date, next_td, run_meta)
 
     # =========================
     # ✅ NEW: decisio full ranking outputs (TopK/Full list)
@@ -1051,7 +1103,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     full_std = _standardize_topN_for_csv(full_df)
     full_std = _merge_strengthscore_from_step3(full_std, outdir, trade_date)
 
-    # enrich（与 topN_std 保持一致字段，保证下游可直接复用）
+    # enrich（与 learning/TopN 保持一致字段，保证下游可直接复用）
     if full_std is not None and not full_std.empty:
         full_std = full_std.copy()
         full_std.insert(0, "trade_date", trade_date)
@@ -1060,6 +1112,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         full_std["run_attempt"] = run_meta["run_attempt"]
         full_std["commit_sha"] = run_meta["commit_sha"]
         full_std["generated_at_utc"] = run_meta["generated_at_utc"]
+        full_std = full_std.reindex(columns=LEARN_TOPN_COLS, fill_value="")
 
         decisio_dir = outdir / "decisio"
         _ensure_dir(decisio_dir)
