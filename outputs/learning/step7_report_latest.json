@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 04:13:29",
+  "ts": "2026-03-15 04:14:56",
   "run_mode": "auto_daily",
   "allow_model_update": true,
   "topn": 10,
@@ -376,7 +376,7 @@
     "rows_dropped_allzero": 29,
     "dates_total": 31,
     "dates_used": 31,
-    "feature_coverage": 0.7252030355478631
+    "feature_coverage": 0.7289309013446944
   },
   "sampling_state": {
     "run_mode": "auto_daily",
@@ -444,7 +444,7 @@
         "ThemeBoost": {
           "non_null_rate": 1.0,
           "non_zero_rate": 0.7436021245774987,
-          "std": 0.3823028390314334,
+          "std": 0.38230283903143336,
           "unique_count": 19
         },
         "turnover_rate": {
@@ -466,10 +466,10 @@
           "unique_count": 27
         },
         "prob_final": {
-          "non_null_rate": 0.07918879768227909,
-          "non_zero_rate": 0.07918879768227909,
-          "std": 0.07261908174378756,
-          "unique_count": 164
+          "non_null_rate": 0.10622887493964268,
+          "non_zero_rate": 0.10622887493964268,
+          "std": 0.09048340869099468,
+          "unique_count": 220
         },
         "final_score": {
           "non_null_rate": 1.0,
@@ -519,8 +519,8 @@
       "min_positive_samples": 12,
       "min_feature_coverage": 0.85
     },
-    "updated_at_utc": "2026-03-14T20:13:29Z",
-    "model_version": "c9cc30e844801dcd96d117fc7ad34610cf0f9a4e",
+    "updated_at_utc": "2026-03-14T20:14:56Z",
+    "model_version": "a9d52aeafad4ea11a261f1b4a65b2690e914a9ff",
     "today_yyyymmdd": "20260315",
     "latest_snapshot_yyyymmdd": "20260313",
     "label_upper_bound_yyyymmdd": "20260313"
@@ -538,7 +538,7 @@
       "pos": 368,
       "neg": 1690,
       "level": "level3",
-      "feature_coverage": 0.7252030355478631,
+      "feature_coverage": 0.7289309013446944,
       "reason": "skip_train: quality_gate_fail",
       "quality_gate_pass": false,
       "days_covered": 31
