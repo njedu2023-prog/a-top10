@@ -21,8 +21,16 @@ from a_top10.config import Settings
 LR_MODEL_PATH = Path("step5_lr.joblib")
 LGBM_MODEL_PATH = Path("step5_lgbm.joblib")
 
-MIN_SAMPLES = 200
-MIN_POS = 10
+VALID_RUN_MODES = {"replay", "train", "auto_daily"}
+
+# Level 1 / 2 / 3
+MIN_LEVEL1_SAMPLES = 80
+MIN_TRAIN_SAMPLES = 120
+MIN_STABLE_SAMPLES = 150
+
+# 副门槛
+MIN_POS = 12
+MIN_FEATURE_COVERAGE = 0.85
 
 DEFAULT_TZ = os.getenv("A_TOP10_TZ", "Asia/Shanghai")
 SAMPLING_STATE_FILE = "sampling_state.json"
@@ -163,6 +171,55 @@ def _read_csv_guess(p: Path) -> pd.DataFrame:
         return pd.read_csv(p, dtype=str)
     except Exception:
         return pd.DataFrame()
+
+
+# ============================================================
+# Run mode / update policy
+# ============================================================
+def _resolve_run_mode() -> str:
+    mode = os.getenv("A_TOP10_RUN_MODE", os.getenv("TOP10_RUN_MODE", "auto_daily")).strip().lower()
+    if mode not in VALID_RUN_MODES:
+        return "auto_daily"
+    return mode
+
+
+def _resolve_allow_model_update(run_mode: str) -> bool:
+    raw = os.getenv(
+        "A_TOP10_ALLOW_MODEL_UPDATE",
+        os.getenv("TOP10_ALLOW_MODEL_UPDATE", "auto"),
+    ).strip().lower()
+
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+
+    # auto
+    if run_mode == "replay":
+        return False
+    if run_mode == "train":
+        return True
+    # auto_daily: 默认允许进入“正式更新判定链”
+    return True
+
+
+def _classify_level(mature_samples: int) -> str:
+    n = int(mature_samples)
+    if n < MIN_LEVEL1_SAMPLES:
+        return "below_level1"
+    if n < MIN_TRAIN_SAMPLES:
+        return "level1"
+    if n < MIN_STABLE_SAMPLES:
+        return "level2"
+    return "level3"
+
+
+def _can_formal_update(run_mode: str, level: str, allow_model_update: bool) -> bool:
+    if not allow_model_update:
+        return False
+    if run_mode == "replay":
+        return False
+    return level in {"level2", "level3"}
 
 
 # ============================================================
@@ -502,7 +559,7 @@ def _decide_sampling_stage(prev_stage: str, days_covered: int, rows_last: List[i
     debug: Dict[str, Any] = {"prev_stage": prev, "days_covered": int(days_covered), "rows_last": rows[-20:]}
 
     stage = prev if prev else "S1_MVP"
-    target = 200 if stage.startswith("S1") else 500 if stage.startswith("S2") else 1000
+    target = MIN_LEVEL1_SAMPLES if stage.startswith("S1") else MIN_TRAIN_SAMPLES if stage.startswith("S2") else MIN_STABLE_SAMPLES
 
     if not quality_pass:
         debug["reason"] = "quality_gate_fail"
@@ -510,18 +567,18 @@ def _decide_sampling_stage(prev_stage: str, days_covered: int, rows_last: List[i
 
     if stage.startswith("S1"):
         w = rows[-10:]
-        if days_covered >= 30 and _count_ge(w, 200) >= 7:
-            return "S2_STD", 500, {**debug, "upgrade": "S1->S2"}
+        if days_covered >= 30 and _count_ge(w, MIN_LEVEL1_SAMPLES) >= 7:
+            return "S2_STD", MIN_TRAIN_SAMPLES, {**debug, "upgrade": "S1->S2"}
 
     if stage.startswith("S2"):
         w = rows[-15:]
-        if days_covered >= 90 and _count_ge(w, 500) >= 10:
-            return "S3_STRONG", 1000, {**debug, "upgrade": "S2->S3"}
+        if days_covered >= 90 and _count_ge(w, MIN_TRAIN_SAMPLES) >= 10:
+            return "S3_STRONG", MIN_STABLE_SAMPLES, {**debug, "upgrade": "S2->S3"}
 
     if stage.startswith("S3"):
         w = rows[-20:]
-        debug["keep_check_ge_1000"] = _count_ge(w, 1000)
-        return "S3_STRONG", 1000, debug
+        debug["keep_check_ge_stable"] = _count_ge(w, MIN_STABLE_SAMPLES)
+        return "S3_STRONG", MIN_STABLE_SAMPLES, debug
 
     return stage, target, debug
 
@@ -772,6 +829,7 @@ def _build_train_set_from_feature_history(
         "rows_dropped_allzero": 0,
         "dates_total": 0,
         "dates_used": 0,
+        "feature_coverage": 0.0,
     }
 
     if not fp.exists():
@@ -785,6 +843,15 @@ def _build_train_set_from_feature_history(
 
     df = _normalize_feature_history_v2(raw)
     meta["rows_raw"] = int(len(df))
+
+    # 这里用原始 non-null 覆盖率估算特征成熟度
+    coverage_vals = []
+    for c in CORE_FEATURE_COLS_V2:
+        if c not in raw.columns:
+            coverage_vals.append(0.0)
+        else:
+            coverage_vals.append(float(pd.to_numeric(raw[c], errors="coerce").notna().mean()))
+    meta["feature_coverage"] = float(sum(coverage_vals) / len(coverage_vals)) if coverage_vals else 0.0
 
     dates = sorted([d for d in df["trade_date"].unique().tolist() if re.match(r"^\d{8}$", str(d))])
     meta["dates_total"] = int(len(dates))
@@ -908,52 +975,131 @@ def _save_joblib_model(model, path: Path, warnings: List[str]) -> bool:
         return False
 
 
-def _train_and_save_models(s: Settings, train_df: pd.DataFrame, warnings: List[str]) -> Dict[str, Any]:
-    res: Dict[str, Any] = {"trained": False, "lr_saved": False, "lgbm_saved": False, "models_dir": "", "detail": {}}
+def _train_and_save_models(s: Settings, train_df: pd.DataFrame, train_meta: Dict[str, Any], warnings: List[str]) -> Dict[str, Any]:
+    run_mode = _resolve_run_mode()
+    allow_model_update = _resolve_allow_model_update(run_mode)
+
+    res: Dict[str, Any] = {
+        "run_mode": run_mode,
+        "allow_model_update": bool(allow_model_update),
+        "trained": False,
+        "updated": False,
+        "lr_saved": False,
+        "lgbm_saved": False,
+        "models_dir": "",
+        "detail": {},
+    }
 
     if train_df is None or train_df.empty:
         warnings.append("train_df empty: training skipped.")
-        res["detail"] = {"reason": "train_df empty", "train_rows": 0, "pos": 0, "neg": 0}
+        res["detail"] = {
+            "reason": "train_df empty",
+            "train_rows": 0,
+            "pos": 0,
+            "neg": 0,
+            "level": "below_level1",
+            "feature_coverage": float(train_meta.get("feature_coverage", 0.0)),
+        }
         return res
 
     pos = int(train_df["label"].astype(int).sum())
     neg = int(len(train_df) - pos)
     n = int(len(train_df))
+    feature_coverage = float(train_meta.get("feature_coverage", 0.0))
+    level = _classify_level(n)
 
     res["detail"]["train_rows"] = n
     res["detail"]["pos"] = pos
     res["detail"]["neg"] = neg
+    res["detail"]["feature_coverage"] = feature_coverage
+    res["detail"]["level"] = level
+    res["detail"]["thresholds"] = {
+        "min_level1_samples": MIN_LEVEL1_SAMPLES,
+        "min_train_samples": MIN_TRAIN_SAMPLES,
+        "min_stable_samples": MIN_STABLE_SAMPLES,
+        "min_positive_samples": MIN_POS,
+        "min_feature_coverage": MIN_FEATURE_COVERAGE,
+    }
 
-    if n < MIN_SAMPLES:
-        warnings.append(f"not enough samples for cold start: n={n} < {MIN_SAMPLES}")
-        res["detail"]["reason"] = "min_samples"
+    # replay：默认不训练 / 不更新正式模型
+    if run_mode == "replay":
+        warnings.append("replay_mode_default_no_model_update")
+        res["detail"]["reason"] = "replay_mode_default_no_model_update"
         return res
+
+    if level == "below_level1":
+        warnings.append(f"below_level1_min_samples: n={n} < {MIN_LEVEL1_SAMPLES}")
+        res["detail"]["reason"] = "below_level1_min_samples"
+        return res
+
     if pos < MIN_POS:
-        warnings.append(f"not enough positive labels for cold start: pos={pos} < {MIN_POS}")
+        warnings.append(f"not enough positive labels: pos={pos} < {MIN_POS}")
         res["detail"]["reason"] = "min_pos"
         return res
+
+    if feature_coverage < MIN_FEATURE_COVERAGE:
+        warnings.append(
+            f"feature coverage too low: coverage={feature_coverage:.4f} < {MIN_FEATURE_COVERAGE:.4f}"
+        )
+        res["detail"]["reason"] = "min_feature_coverage"
+        return res
+
     if pos == 0 or neg == 0:
         warnings.append("only one class present (all 0 or all 1): training skipped.")
         res["detail"]["reason"] = "single_class"
         return res
 
+    # Level 1：允许试训，但不更新正式模型
+    if level == "level1":
+        try:
+            _ = _train_lr(train_df, warnings)
+            _ = _train_lgbm(train_df, warnings)
+            res["trained"] = True
+            res["updated"] = False
+            res["detail"]["reason"] = "level1_trial_training_no_formal_update"
+            warnings.append("level1_trial_training_no_formal_update")
+            return res
+        except Exception as e:
+            warnings.append(f"level1_trial_training_failed: {e}")
+            res["detail"]["reason"] = f"level1_trial_training_failed: {e}"
+            return res
+
+    # Level 2 / 3：正式训练区；但仍受 allow_model_update 控制
+    if not allow_model_update:
+        warnings.append("model_update_not_allowed_by_run_mode")
+        res["detail"]["reason"] = "model_update_not_allowed_by_run_mode"
+        return res
+
     models_dir = _get_models_dir(s)
     res["models_dir"] = str(models_dir)
 
-    lr_model = _train_lr(train_df, warnings)
+    try:
+        lr_model = _train_lr(train_df, warnings)
+        res["trained"] = True
+    except Exception as e:
+        lr_model = None
+        warnings.append(f"train_lr_failed: {e}")
+
     lr_path = models_dir / LR_MODEL_PATH.name
     lr_saved = _save_joblib_model(lr_model, lr_path, warnings)
     res["lr_saved"] = bool(lr_saved)
 
-    lgbm_model = _train_lgbm(train_df, warnings)
+    try:
+        lgbm_model = _train_lgbm(train_df, warnings)
+        if lgbm_model is not None:
+            res["trained"] = True
+    except Exception as e:
+        lgbm_model = None
+        warnings.append(f"train_lgbm_failed: {e}")
+
     lgbm_path = models_dir / LGBM_MODEL_PATH.name
     lgbm_saved = _save_joblib_model(lgbm_model, lgbm_path, warnings)
     res["lgbm_saved"] = bool(lgbm_saved)
 
-    res["trained"] = bool(lr_saved or lgbm_saved)
+    res["updated"] = bool(lr_saved or lgbm_saved)
     res["detail"]["lr_path"] = str(lr_path) if lr_saved else ""
     res["detail"]["lgbm_path"] = str(lgbm_path) if lgbm_saved else ""
-    res["detail"]["reason"] = "ok" if res["trained"] else "save_failed"
+    res["detail"]["reason"] = "ok" if res["updated"] else "save_failed"
     return res
 
 
@@ -987,6 +1133,7 @@ def render_report_md(report: Dict[str, Any]) -> str:
     md_lines.append("# Step7 自学习报告（latest）")
     md_lines.append("")
     md_lines.append(f"- 生成时间：{report.get('ts','')}")
+    md_lines.append(f"- RunMode：{report.get('run_mode','')}")
     md_lines.append(f"- Today：{today}")
     md_lines.append(f"- LatestSnapshot：{latest_snapshot or 'N/A'}")
     md_lines.append(f"- LabelUpperBound：{upper_bound}")
@@ -1028,18 +1175,22 @@ def render_report_md(report: Dict[str, Any]) -> str:
     md_lines.append(f"- 丢弃全零特征行：{train_meta.get('rows_dropped_allzero',0)}")
     md_lines.append(f"- 日期总数：{train_meta.get('dates_total',0)}")
     md_lines.append(f"- 使用日期：{train_meta.get('dates_used',0)}")
+    md_lines.append(f"- 特征覆盖率：{train_meta.get('feature_coverage',0)}")
 
     md_lines.append("")
     md_lines.append("## 3) 训练执行结果")
     md_lines.append("")
     md_lines.append(f"- trained：{train_result.get('trained')}")
+    md_lines.append(f"- updated：{train_result.get('updated')}")
     md_lines.append(f"- lr_saved：{train_result.get('lr_saved')}")
     md_lines.append(f"- lgbm_saved：{train_result.get('lgbm_saved')}")
     md_lines.append(f"- models_dir：{train_result.get('models_dir','')}")
     if isinstance(train_result.get("detail"), dict):
         d = train_result["detail"]
+        md_lines.append(f"- level：{d.get('level','')}")
         md_lines.append(f"- train_rows：{d.get('train_rows','')}")
         md_lines.append(f"- pos/neg：{d.get('pos','')}/{d.get('neg','')}")
+        md_lines.append(f"- feature_coverage：{d.get('feature_coverage','')}")
         if d.get("reason"):
             md_lines.append(f"- reason：{d.get('reason')}")
         if d.get("lr_path"):
@@ -1075,9 +1226,8 @@ def train_models_pipeline(
         warnings=warnings,
     )
 
-    if bool(sampling_state.get("quality_gate_pass")):
-        train_result = _train_and_save_models(s=s, train_df=train_df, warnings=warnings)
-    else:
+    # 质量闸门只是前置必要条件之一，不再替代 Level 1/2/3
+    if not bool(sampling_state.get("quality_gate_pass")):
         if train_df is None or train_df.empty:
             tr = {"train_rows": 0, "pos": 0, "neg": 0}
         else:
@@ -1086,19 +1236,25 @@ def train_models_pipeline(
             tr = {"train_rows": int(len(train_df)), "pos": pos, "neg": neg}
 
         train_result = {
+            "run_mode": _resolve_run_mode(),
             "trained": False,
+            "updated": False,
             "lr_saved": False,
             "lgbm_saved": False,
             "models_dir": "",
             "detail": {
                 **tr,
+                "level": _classify_level(int(tr["train_rows"])),
+                "feature_coverage": float(train_meta.get("feature_coverage", 0.0)),
                 "reason": "skip_train: quality_gate_fail",
                 "quality_gate_pass": bool(sampling_state.get("quality_gate_pass")),
                 "days_covered": int(sampling_state.get("days_covered", 0)),
             },
         }
         warnings.append("skip_train: quality_gate_fail")
+        return train_df, train_meta, train_result
 
+    train_result = _train_and_save_models(s=s, train_df=train_df, train_meta=train_meta, warnings=warnings)
     return train_df, train_meta, train_result
 
 
@@ -1112,6 +1268,9 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     learning_dir = outputs_dir / "learning"
     _ensure_dir(outputs_dir)
     _ensure_dir(learning_dir)
+
+    run_mode = _resolve_run_mode()
+    allow_model_update = _resolve_allow_model_update(run_mode)
 
     today = _today_yyyymmdd()
     latest_snapshot = _latest_snapshot_yyyymmdd()
@@ -1154,6 +1313,8 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     sampling_state = {
+        "run_mode": run_mode,
+        "allow_model_update": bool(allow_model_update),
         "sampling_stage": stage,
         "target_rows_per_day": int(target_rows),
         "days_covered": int(days_covered),
@@ -1163,6 +1324,13 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         "stage_debug": stage_debug,
         "pseudo_ratio": float(q_details.get("pseudo_ratio", 1.0)),
         "feature_history_file": fh_path,
+        "thresholds": {
+            "min_level1_samples": MIN_LEVEL1_SAMPLES,
+            "min_train_samples": MIN_TRAIN_SAMPLES,
+            "min_stable_samples": MIN_STABLE_SAMPLES,
+            "min_positive_samples": MIN_POS,
+            "min_feature_coverage": MIN_FEATURE_COVERAGE,
+        },
         "updated_at_utc": _utc_now_iso(),
         "model_version": str(os.getenv("GITHUB_SHA") or os.getenv("GITHUB_RUN_ID") or ""),
         "today_yyyymmdd": today,
@@ -1210,6 +1378,8 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     # ---------------------------
     report = {
         "ts": _now_str(),
+        "run_mode": run_mode,
+        "allow_model_update": bool(allow_model_update),
         "topn": topn,
         "lookback_days": lookback_days,
         "today_yyyymmdd": today,
@@ -1233,12 +1403,16 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "step7_learning": {
+            "run_mode": run_mode,
+            "allow_model_update": bool(allow_model_update),
             "hit_history_csv": str(hit_csv),
             "report_json": str(report_json),
             "report_md": str(report_md),
             "models_dir": str(train_result.get("models_dir", "")),
             "trained": bool(train_result.get("trained")),
+            "updated": bool(train_result.get("updated")),
             "train_rows": int(train_result.get("detail", {}).get("train_rows", 0)) if isinstance(train_result.get("detail"), dict) else 0,
+            "level": str(train_result.get("detail", {}).get("level", "")) if isinstance(train_result.get("detail"), dict) else "",
             "warnings": warnings,
         }
     }
