@@ -1215,3 +1215,684 @@ V1 阶段建议结构：
 **版本**：V1  
 **定位**：Top10 V3 前期统一锚点  
 **状态**：可立即落库并作为后续开发总依据
+# 《Top10 V3 前期规划总纲——代码改造总清单 V1》
+
+---
+
+# 0. 文档定位
+
+本文件是《Top10 V3 前期规划总纲.MD》的直接执行层文档。  
+作用不是补充讨论，而是把总纲中的规则，拆成**可以直接落到文件修改、函数修改、字段落库、验收检查**的代码改造清单。
+
+本清单服务目标：
+
+1. 把 V3 总纲映射到具体文件。
+2. 明确每个文件在 V3 中承担什么职责。
+3. 明确每个文件要新增什么、删除什么、重构什么。
+4. 明确哪些改动属于 Phase A / B / C。
+5. 明确开发顺序，避免多文件同时乱改导致主线漂移。
+
+---
+
+# 1. 执行总原则
+
+## 1.1 先主链，后增强
+
+本轮不是做“全面美化重构”，而是先把以下主链锁死：
+
+- 数仓关键字段可得
+- feature_history 成为正式训练样本表
+- Step7 真实执行质量闸门与样本成熟规则
+- Step6 从简单排序升级到明确 RankScore 排序
+
+---
+
+## 1.2 先写入，再优化
+
+优先级顺序：
+
+1. 先把字段写对
+2. 先把标签写对
+3. 先把闸门拦住
+4. 先把排序跑通
+5. 再谈模型增强与权重微调
+
+---
+
+## 1.3 不允许“文档在，代码没接”
+
+总纲中的以下内容，必须有真实代码承接：
+
+- `learnable_flag`
+- `reject_reason`
+- `is_sample_mature`
+- `y_limit_hit`
+- `RankScore`
+- `batch_quality_score`
+- 样本级 / 批级闸门
+
+---
+
+## 1.4 修改方式原则
+
+后续代码修改时统一遵守：
+
+- 若我记得原文件结构，则直接输出完整替换文件
+- 若结构不清晰，则先从仓库文件现状出发再给完整文件
+- 不做零碎片段式补丁为主线交付方式
+- 每改一个主文件，都要说明：
+  - 这个文件为什么改
+  - 改了什么
+  - 如何验收
+
+---
+
+# 2. Phase A / B / C 总体文件映射
+
+| 阶段 | 核心目标 | 主要文件 |
+|---|---|---|
+| Phase A | 数据底座修复对接 | `a_top10/main.py`、`step2_candidate_pool.py`、`step3_strength_score.py`、必要的数据读取/工具模块 |
+| Phase B | 样本链路收口 | `step3_strength_score.py`、`step4_theme_boost.py`、`step5_ml_probability.py`、`step7_self_learning.py`、`io/writers.py` |
+| Phase C | 排序目标优化 | `step5_ml_probability.py`、`step6_final_topn.py`、`io/writers.py`、`main.py` |
+
+---
+
+# 3. 文件级改造总表
+
+---
+
+## 3.1 `a_top10/main.py`
+
+### 当前职责
+主程序编排入口，负责串联 Step2 ~ Step7。
+
+### V3 目标职责
+升级为 V3 主链调度器，显式控制：
+
+- 候选池生成
+- StrengthScore 计算
+- ThemeBoost 计算
+- Probability 计算
+- RankScore 排序
+- feature_history 写入
+- 样本成熟与质量闸门
+- Step7 学习闭环
+
+### 必改内容
+
+#### A. 显式定义 V3 主链执行顺序
+建议主链顺序固定为：
+
+1. Step2 Candidate Pool
+2. Step3 Strength Score
+3. Step4 Theme Boost
+4. Step5 ML Probability
+5. Step6 Final TopN / RankScore
+6. Writers 落库
+7. Step7 Self Learning / Gate / Label
+
+#### B. 增加 V3 运行上下文字段
+建议统一在主链上下文中传递：
+
+- `trade_date`
+- `run_id`
+- `version_tag`
+- `gate_version`
+- `label_version`
+- `rank_version`
+
+#### C. 增加失败拦截点
+主程序必须能在以下场景中止后续训练写入：
+
+- 核心中间表为空
+- 一级关键字段大面积缺失
+- 标签未成熟但被误送训练
+- Step6 无法生成最终排名结果
+
+#### D. 增加阶段日志
+至少打印：
+
+- 候选池数量
+- StrengthScore 可用率
+- ThemeBoost 可用率
+- Probability 可用率
+- feature_history 入池数
+- mature 样本数
+- learnable 样本数
+- 被拒绝样本数
+
+### 验收点
+
+1. 主链执行顺序固定且日志可见
+2. Step3~Step7 中间结果都被主程序真实消费
+3. 若闸门失败，主程序能阻断训练写入
+4. 运行结果能区分“预测产物”和“训练产物”
+
+---
+
+## 3.2 `a_top10/steps/step2_candidate_pool.py`
+
+### 当前职责
+生成候选池。
+
+### V3 目标职责
+继续负责候选池，但要为后续排序和学习链提供**稳定主键样本池**。
+
+### 必改内容
+
+#### A. 候选池输出字段标准化
+至少保证输出：
+
+- `trade_date`
+- `ts_code`
+- `name`
+- `close`
+- `pct_chg`
+- `amount`
+- `vol`
+- `turnover_rate`
+- `circ_mv`
+- `total_mv`
+- `is_st`
+- `list_days`
+- `board_type`
+
+#### B. 候选池主键唯一化
+要求：
+
+- `trade_date + ts_code` 唯一
+- 无重复行
+- 无空代码行
+
+#### C. 候选池异常过滤显式化
+建议明确：
+
+- ST 剔除逻辑
+- 新股过滤逻辑
+- 异常停牌 / 缺价样本过滤逻辑
+
+### 验收点
+
+1. 候选池行唯一
+2. 主键字段稳定
+3. 进入 Step3 的基础字段完整率可统计
+
+---
+
+## 3.3 `a_top10/steps/step3_strength_score.py`
+
+### 当前职责
+计算强度分。
+
+### V3 目标职责
+成为“盘口强弱特征聚合器 + StrengthScore 输出器”。
+
+### 必改内容
+
+#### A. 明确输入字段来源
+优先接入：
+
+- `turnover_rate`
+- `limit_type`
+- `up_limit`
+- `is_limit_up_pool`
+- `open_times`
+- `seal_amount`
+- 可得时再接：
+  - `first_limit_time`
+  - `last_limit_time`
+  - `limit_open_count`
+
+#### B. 区分原始特征与最终得分
+必须区分：
+
+- `limit_strength_raw`
+- `StrengthScore`
+
+不要把原始分和最终分混为一个字段。
+
+#### C. 缺失策略写死
+必须遵守《FeatureHistory 字段入池映射表 V1》：
+
+- `open_times` 缺失：置空，不得伪造0
+- `seal_amount` 缺失：置空，不得伪造0
+- `turnover_rate` 缺失：置空，不得伪造0
+
+#### D. 输出质量标记
+建议额外输出：
+
+- `strength_feature_count`
+- `strength_quality_flag`
+
+用于 Step7 判断样本质量。
+
+### 验收点
+
+1. `StrengthScore` 真正写入下游
+2. 缺失字段未被伪造为0
+3. `StrengthScore` 与原始强度字段可区分
+4. 输出可进入 feature_history
+
+---
+
+## 3.4 `a_top10/steps/step4_theme_boost.py`
+
+### 当前职责
+计算题材加权分。
+
+### V3 目标职责
+成为“题材热度特征聚合器 + ThemeBoost 输出器”。
+
+### 必改内容
+
+#### A. 明确输入字段
+至少支持：
+
+- `theme_main`
+- `theme_count`
+- `theme_heat`
+- `board_rank`
+- `lhb_flag`
+- `lhb_net_buy`
+- `north_money_flag`
+
+#### B. ThemeBoost 输出标准化
+必须显式输出：
+
+- `ThemeBoost`
+- `theme_feature_count`
+- `theme_quality_flag`
+
+#### C. 题材缺失策略显式化
+- `theme_heat` 缺失：置空
+- `lhb_flag` 缺失：可置0
+- `lhb_net_buy` 缺失：置空
+
+### 验收点
+
+1. `ThemeBoost` 稳定输出
+2. 题材层核心字段可统计缺失率
+3. 输出可直接写入 feature_history
+
+---
+
+## 3.5 `a_top10/steps/step5_ml_probability.py`
+
+### 当前职责
+输出涨停概率。
+
+### V3 目标职责
+成为“主概率引擎 + 概率来源记录器 + 排序输入主轴”。
+
+### 必改内容
+
+#### A. 保留多来源概率
+建议输出：
+
+- `prob_lr`
+- `prob_lgbm`
+- `prob_rule`
+- `Probability`
+- `_prob_src`
+
+#### B. 增加概率融合规则显式化
+必须能说明最终 Probability 来自：
+
+- `lr`
+- `lgbm`
+- `blend`
+- `fallback_rule`
+
+#### C. 增加样本质量折扣接口
+为后续 RankScore 预留：
+
+- `quality_adj`
+- 或可用于 Step6 再计算
+
+#### D. 概率缺失阻断
+若 `Probability` 无法得到，则：
+
+- 该样本不得入正式训练
+- TopN 排序不得把该样本当正常样本参与
+
+### 验收点
+
+1. `Probability` 与 `_prob_src` 同时存在
+2. fallback 与 blend 路径可区分
+3. 下游 Step6 能直接消费 Probability
+
+---
+
+## 3.6 `a_top10/steps/step6_final_topn.py`
+
+### 当前职责
+生成最终 TopN。
+
+### V3 目标职责
+从“简单选前10”升级为“显式 RankScore 排序器”。
+
+### 必改内容
+
+#### A. 引入 `RankScore`
+建议结构先固定为：
+
+`RankScore = w1 * Probability + w2 * StrengthScore + w3 * ThemeBoost + w4 * QualityAdj`
+
+V1 阶段先允许权重写在配置或文件内，先锁口径。
+
+#### B. 输出排序解释字段
+至少输出：
+
+- `RankScore`
+- `rank_final`
+- `in_topn`
+
+#### C. 全量排序与 Top10 输出分离
+要求：
+
+- 输出全量排序表
+- 输出 Top10 子集
+- 两者口径一致，不得各算各的
+
+#### D. 同分处理策略
+若 `RankScore` 接近或相同，建议按以下顺序破同分：
+
+1. `Probability`
+2. `StrengthScore`
+3. `ThemeBoost`
+4. `ts_code` 或稳定顺序键
+
+### 验收点
+
+1. RankScore 已真实参与排序
+2. Top10 与全量排序一致
+3. `rank_final`、`in_topn` 能落到 feature_history
+
+---
+
+## 3.7 `a_top10/steps/step7_self_learning.py`
+
+### 当前职责
+自学习与训练闭环。
+
+### V3 目标职责
+升级为“样本成熟判定器 + 质量闸门执行器 + 标签写入器 + 训练放行器”。
+
+### 必改内容
+
+#### A. 写入成熟度逻辑
+必须真实生成：
+
+- `is_sample_mature`
+- `mature_reason`
+- `label_delay_flag`（可选）
+
+#### B. 写入标签
+至少支持：
+
+- `y_limit_hit`
+- `y_next_ret`
+
+建议预留：
+
+- `y_next_high_ret`
+- `y_touch_limit`
+
+#### C. 执行样本级闸门
+根据总纲，至少检查：
+
+- 一级硬字段是否齐全
+- `Probability` 是否存在
+- `StrengthScore` 是否存在
+- `ThemeBoost` 是否存在
+- `y_limit_hit` 是否成熟
+- `turnover_rate/open_times/seal_amount` 是否全空
+
+#### D. 执行批级闸门
+至少计算：
+
+- `StrengthScore` 缺失率
+- `ThemeBoost` 缺失率
+- `Probability` 缺失率
+- `turnover_rate` 缺失率
+- `open_times` 缺失率
+- `seal_amount` 缺失率
+- `mature_learnable_samples`
+
+#### E. 生成闸门字段
+必须写：
+
+- `learnable_flag`
+- `reject_reason`
+- `sample_quality_grade`
+- `batch_quality_score`
+- `gate_version`
+
+### 验收点
+
+1. Step7 不再只是简单落库
+2. `learnable_flag` 和 `reject_reason` 真实存在
+3. 样本成熟与训练放行分开
+4. 批级阻断能真正生效
+
+---
+
+## 3.8 `a_top10/io/writers.py`
+
+### 当前职责
+写出对外产物与学习产物。
+
+### V3 目标职责
+成为“V3 契约落库层”。
+
+### 必改内容
+
+#### A. feature_history 字段落库统一
+必须支持写入以下核心字段：
+
+- `trade_date`
+- `ts_code`
+- `name`
+- `close`
+- `turnover_rate`
+- `StrengthScore`
+- `ThemeBoost`
+- `Probability`
+- `_prob_src`
+- `RankScore`
+- `rank_final`
+- `in_topn`
+- `is_sample_mature`
+- `y_limit_hit`
+- `y_next_ret`
+- `learnable_flag`
+- `reject_reason`
+- `sample_quality_grade`
+- `batch_quality_score`
+- `created_at`
+
+#### B. 写入顺序固定化
+要求：
+
+- 列顺序稳定
+- 同字段名长期不漂移
+- 历史补跑与实时运行同口径
+
+#### C. 支持 append-only 与去重策略
+对 `feature_history.csv` 建议：
+
+- 以 `trade_date + ts_code` 为去重主键
+- 避免重复写入脏行
+
+### 验收点
+
+1. 核心 V3 字段可真实落库
+2. CSV 列结构稳定
+3. 历史补跑不产生重复脏样本
+
+---
+
+## 3.9 配置文件（如 `configs/default.yml`）
+
+### V3 目标职责
+承载可配置但必须锁口径的参数。
+
+### 必改内容
+
+建议增加：
+
+- `gate_version`
+- `label_version`
+- `rank_version`
+- `min_samples_level1`
+- `min_samples_level2`
+- `min_samples_level3`
+- `rank_weights`
+- `batch_quality_thresholds`
+
+### 验收点
+
+1. 关键阈值不再散落在代码里
+2. RankScore 权重有统一配置来源
+
+---
+
+# 4. 按阶段拆分的改造顺序
+
+---
+
+## 4.1 Phase A：先改哪些文件
+
+第一批只动：
+
+1. `step2_candidate_pool.py`
+2. `step3_strength_score.py`
+3. `main.py`
+4. 必要配置文件
+
+### 目标
+先确保关键字段能被主链真实吃到。
+
+---
+
+## 4.2 Phase B：第二批改哪些文件
+
+第二批重点改：
+
+1. `step4_theme_boost.py`
+2. `step5_ml_probability.py`
+3. `step7_self_learning.py`
+4. `io/writers.py`
+
+### 目标
+先让 feature_history 真正成为训练样本契约表。
+
+---
+
+## 4.3 Phase C：第三批改哪些文件
+
+第三批重点改：
+
+1. `step6_final_topn.py`
+2. `step5_ml_probability.py`（配合调整）
+3. `io/writers.py`
+4. `main.py`
+
+### 目标
+把系统从“概率输出”拉到“Top10 排序优化”。
+
+---
+
+# 5. 必须新增的字段总清单
+
+建议 V3 至少落库这些新增字段：
+
+- `sample_id`
+- `limit_strength_raw`
+- `strength_feature_count`
+- `strength_quality_flag`
+- `theme_feature_count`
+- `theme_quality_flag`
+- `prob_lr`
+- `prob_lgbm`
+- `prob_rule`
+- `_prob_src`
+- `RankScore`
+- `rank_final`
+- `in_topn`
+- `is_sample_mature`
+- `mature_reason`
+- `label_delay_flag`
+- `y_limit_hit`
+- `y_next_ret`
+- `learnable_flag`
+- `reject_reason`
+- `sample_quality_grade`
+- `batch_quality_score`
+- `gate_version`
+- `label_version`
+- `rank_version`
+
+---
+
+# 6. 本清单对应的第一轮实际开发顺序
+
+建议后续真正开工时，按下面顺序执行：
+
+### 第一步
+改 `step3_strength_score.py`
+
+### 第二步
+改 `step4_theme_boost.py`
+
+### 第三步
+改 `step5_ml_probability.py`
+
+### 第四步
+改 `step7_self_learning.py`
+
+### 第五步
+改 `io/writers.py`
+
+### 第六步
+改 `step6_final_topn.py`
+
+### 第七步
+最后收口 `main.py` 与配置文件
+
+---
+
+# 7. 第一轮开发后的正式验收清单
+
+第一轮改造后，必须验证：
+
+1. `feature_history.csv` 是否真实新增 V3 字段
+2. `learnable_flag` 是否真实计算
+3. `reject_reason` 是否真实写入
+4. `is_sample_mature` 是否真实写入
+5. `y_limit_hit` 是否真实写入
+6. `Probability` 和 `_prob_src` 是否真实写入
+7. `RankScore` 是否真实参与排序
+8. Top10 与全量排序是否同口径
+9. 历史补跑与实时样本是否同口径
+10. Step7 是否能真正阻断脏样本训练
+
+---
+
+# 8. V1 结论
+
+《Top10 V3 前期规划总纲——代码改造总清单 V1》的作用，是把前期五章规划，真正压到代码文件层。
+
+这意味着从这一刻开始：
+
+- 不是再讨论“该不该做”
+- 而是已经明确“先改哪个文件、改什么、怎么验收”
+
+后续开发必须按本清单推进，不得跳着改，不得一边改一边重新定义总纲口径。
+
+---
+
+**文档名称**：`《Top10 V3 前期规划总纲——代码改造总清单 V1》`  
+**版本**：V1  
+**定位**：V3 总纲的直接执行层  
+**状态**：可立即作为后续开发排期与逐文件改造依据
