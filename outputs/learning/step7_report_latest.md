@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-03-15 00:11:35
+- 生成时间：2026-03-15 01:26:49
 - Today：20260315
 - LatestSnapshot：20260313
 - LabelUpperBound：20260313
@@ -52,24 +52,5 @@
 
 ## 4) Warnings
 
-- pred_top10_history read failed: Error tokenizing data. C error: Expected 17 fields in line 312, saw 19
-
-- hit_history_fallback: pred_top10_history.csv not available; fallback to scan predict_top10_*.md
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260216/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260217/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260218/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260219/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260220/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260221/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260222/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260223/limit_list_d.csv
-- github_raw read limit_list_d failed: HTTP Error 404: Not Found
-- next_trade_date_adjusted: 20260216 -> 20260224 (warehouse)
+- label_pending: trade_date=20260313 no next snapshot
 - skip_train: quality_gate_fail
