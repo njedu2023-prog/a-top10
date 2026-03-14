@@ -1,7 +1,7 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-03-14 22:00:52
-- Today：20260314
+- 生成时间：2026-03-15 00:11:35
+- Today：20260315
 - LatestSnapshot：20260313
 - LabelUpperBound：20260313
 - TopN：10
@@ -42,15 +42,13 @@
 
 ## 3) 训练执行结果
 
-- trained：True
-- lr_saved：True
-- lgbm_saved：True
-- models_dir：models
+- trained：False
+- lr_saved：False
+- lgbm_saved：False
+- models_dir：
 - train_rows：2058
 - pos/neg：368/1690
-- reason：ok
-- lr_path：models/step5_lr.joblib
-- lgbm_path：models/step5_lgbm.joblib
+- reason：skip_train: quality_gate_fail
 
 ## 4) Warnings
 
@@ -74,3 +72,4 @@
 - github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260223/limit_list_d.csv
 - github_raw read limit_list_d failed: HTTP Error 404: Not Found
 - next_trade_date_adjusted: 20260216 -> 20260224 (warehouse)
+- skip_train: quality_gate_fail

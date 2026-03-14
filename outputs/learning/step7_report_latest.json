@@ -1,8 +1,8 @@
 {
-  "ts": "2026-03-14 22:00:52",
+  "ts": "2026-03-15 00:11:35",
   "topn": 10,
   "lookback_days": 150,
-  "today_yyyymmdd": "20260314",
+  "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
   "label_upper_bound_yyyymmdd": "20260313",
   "latest_hit": {
@@ -412,7 +412,7 @@
       52,
       59
     ],
-    "quality_gate_pass": true,
+    "quality_gate_pass": false,
     "quality_gate_details": {
       "core_cols": [
         "StrengthScore",
@@ -420,7 +420,8 @@
         "turnover_rate",
         "seal_amount",
         "open_times",
-        "Probability"
+        "prob_final",
+        "final_score"
       ],
       "meta_cols": [
         "trade_date",
@@ -459,17 +460,23 @@
           "std": 3.487521588597248,
           "unique_count": 27
         },
-        "Probability": {
-          "non_null_rate": 1.0,
-          "non_zero_rate": 1.0,
-          "std": 0.21615445929226998,
-          "unique_count": 2019
+        "prob_final": {
+          "non_null_rate": 0.028488652824722356,
+          "non_zero_rate": 0.028488652824722356,
+          "std": 0.03207290590659869,
+          "unique_count": 59
+        },
+        "final_score": {
+          "non_null_rate": 0.0,
+          "non_zero_rate": 0.0,
+          "std": 0.0,
+          "unique_count": 0
         }
       },
       "pseudo_ratio": 0.042008691453404155,
       "window_days": 30,
       "rows_in_window": 2071,
-      "pass": true
+      "pass": false
     },
     "stage_debug": {
       "prev_stage": "S1_MVP",
@@ -495,29 +502,30 @@
         53,
         52,
         59
-      ]
+      ],
+      "reason": "quality_gate_fail"
     },
     "pseudo_ratio": 0.042008691453404155,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-03-14T14:00:50Z",
-    "model_version": "2fdec68fa933aebb616eb129217b48a27f827660",
-    "today_yyyymmdd": "20260314",
+    "updated_at_utc": "2026-03-14T16:11:33Z",
+    "model_version": "92d17a767745c95ef3f0329fe22f071163c92ffe",
+    "today_yyyymmdd": "20260315",
     "latest_snapshot_yyyymmdd": "20260313",
     "label_upper_bound_yyyymmdd": "20260313"
   },
   "sampling_state_path": "outputs/learning/sampling_state.json",
   "train_result": {
-    "trained": true,
-    "lr_saved": true,
-    "lgbm_saved": true,
-    "models_dir": "models",
+    "trained": false,
+    "lr_saved": false,
+    "lgbm_saved": false,
+    "models_dir": "",
     "detail": {
       "train_rows": 2058,
       "pos": 368,
       "neg": 1690,
-      "lr_path": "models/step5_lr.joblib",
-      "lgbm_path": "models/step5_lgbm.joblib",
-      "reason": "ok"
+      "reason": "skip_train: quality_gate_fail",
+      "quality_gate_pass": false,
+      "days_covered": 31
     }
   },
   "warnings": [
@@ -539,6 +547,7 @@
     "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
     "github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260223/limit_list_d.csv",
     "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
-    "next_trade_date_adjusted: 20260216 -> 20260224 (warehouse)"
+    "next_trade_date_adjusted: 20260216 -> 20260224 (warehouse)",
+    "skip_train: quality_gate_fail"
   ]
 }

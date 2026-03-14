@@ -35,7 +35,7 @@
     52,
     59
   ],
-  "quality_gate_pass": true,
+  "quality_gate_pass": false,
   "quality_gate_details": {
     "core_cols": [
       "StrengthScore",
@@ -43,7 +43,8 @@
       "turnover_rate",
       "seal_amount",
       "open_times",
-      "Probability"
+      "prob_final",
+      "final_score"
     ],
     "meta_cols": [
       "trade_date",
@@ -82,17 +83,23 @@
         "std": 3.487521588597248,
         "unique_count": 27
       },
-      "Probability": {
-        "non_null_rate": 1.0,
-        "non_zero_rate": 1.0,
-        "std": 0.21615445929226998,
-        "unique_count": 2019
+      "prob_final": {
+        "non_null_rate": 0.028488652824722356,
+        "non_zero_rate": 0.028488652824722356,
+        "std": 0.03207290590659869,
+        "unique_count": 59
+      },
+      "final_score": {
+        "non_null_rate": 0.0,
+        "non_zero_rate": 0.0,
+        "std": 0.0,
+        "unique_count": 0
       }
     },
     "pseudo_ratio": 0.042008691453404155,
     "window_days": 30,
     "rows_in_window": 2071,
-    "pass": true
+    "pass": false
   },
   "stage_debug": {
     "prev_stage": "S1_MVP",
@@ -118,13 +125,14 @@
       53,
       52,
       59
-    ]
+    ],
+    "reason": "quality_gate_fail"
   },
   "pseudo_ratio": 0.042008691453404155,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-03-14T14:00:50Z",
-  "model_version": "2fdec68fa933aebb616eb129217b48a27f827660",
-  "today_yyyymmdd": "20260314",
+  "updated_at_utc": "2026-03-14T16:11:33Z",
+  "model_version": "92d17a767745c95ef3f0329fe22f071163c92ffe",
+  "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
   "label_upper_bound_yyyymmdd": "20260313"
 }

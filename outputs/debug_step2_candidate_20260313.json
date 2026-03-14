@@ -17,6 +17,10 @@
       "normalized_ratio": 1.0
     }
   },
+  "board_fill": {
+    "board_nonblank_ratio": 1.0,
+    "board_from_industry": true
+  },
   "filters": {
     "drop_st": 0,
     "drop_delist": 0
@@ -26,6 +30,7 @@
     "ts_code",
     "name",
     "industry",
+    "board",
     "trade_date",
     "limit_type",
     "close",
