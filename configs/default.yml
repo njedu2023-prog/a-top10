@@ -40,7 +40,7 @@ ml:
   model: "placeholder"      # placeholder | logistic | lightgbm
   features_dim: 30
 
-  # ===== V2 新增：Step5 概率语义配置 =====
+  # ===== V2：Step5 概率语义配置 =====
   enable_rule: true
   enable_ml: true
 
@@ -56,13 +56,46 @@ ml:
   rule_weight: 0.30
   ml_weight: 0.70
 
+training:
+  # ===== V2：运行模式与模型更新契约 =====
+  # replay     : 历史回放，只重建历史产物，默认不更新正式模型
+  # train      : 正式训练模式，允许按门槛训练并更新模型
+  # auto_daily : 每日自动运行，是否训练 / 是否更新模型由成熟样本门槛控制
+  run_mode: "auto_daily"
+
+  # replay 模式默认不更新模型；此处保留为显式配置锚点
+  allow_model_update_on_replay: false
+
+  # ===== V2：Level 1 / 2 / 3 样本门槛 =====
+  # Level 1:  80 <= mature_samples < 120
+  #           允许试训，但不更新正式模型
+  min_level1_samples: 80
+
+  # Level 2: 120 <= mature_samples < 150
+  #           正式训练起点，满足副门槛后允许更新正式模型
+  min_train_samples: 120
+
+  # Level 3: mature_samples >= 150
+  #           较稳训练区，继续滚动训练并允许更新正式模型
+  min_stable_samples: 150
+
+  # ===== V2：副门槛 =====
+  # 正类样本至少达到该数量，才允许正式训练/更新模型
+  min_positive_samples: 12
+
+  # 核心特征覆盖率至少达到该比例，才允许正式训练/更新模型
+  min_feature_coverage: 0.85
+
+  # Step7 训练窗口天数
+  lookback_days: 150
+
 risk:
   remove_st: true
   remove_dragon_net_sell: true
   remove_high_accel: true
   remove_next_day_nuke: true
 
-# ===== V2 新增：Step6 纯终排配置 =====
+# ===== V2：Step6 纯终排配置 =====
 step6:
   score_mode: "add"      # add | geo
 
