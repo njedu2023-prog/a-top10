@@ -85,7 +85,7 @@
       "Probability": {
         "non_null_rate": 1.0,
         "non_zero_rate": 1.0,
-        "std": 0.21643942772219824,
+        "std": 0.21615445929226998,
         "unique_count": 2019
       }
     },
@@ -122,9 +122,9 @@
   },
   "pseudo_ratio": 0.042008691453404155,
   "feature_history_file": "outputs/learning/feature_history.csv",
-  "updated_at_utc": "2026-03-13T11:57:52Z",
-  "model_version": "b8e6ef038f3c34618a33da1d4e18649189c481a9",
-  "today_yyyymmdd": "20260313",
+  "updated_at_utc": "2026-03-14T14:00:50Z",
+  "model_version": "2fdec68fa933aebb616eb129217b48a27f827660",
+  "today_yyyymmdd": "20260314",
   "latest_snapshot_yyyymmdd": "20260313",
   "label_upper_bound_yyyymmdd": "20260313"
 }

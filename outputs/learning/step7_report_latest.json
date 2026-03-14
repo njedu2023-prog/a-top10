@@ -1,8 +1,8 @@
 {
-  "ts": "2026-03-13 19:57:52",
+  "ts": "2026-03-14 22:00:52",
   "topn": 10,
   "lookback_days": 150,
-  "today_yyyymmdd": "20260313",
+  "today_yyyymmdd": "20260314",
   "latest_snapshot_yyyymmdd": "20260313",
   "label_upper_bound_yyyymmdd": "20260313",
   "latest_hit": {
@@ -16,13 +16,13 @@
   },
   "hit_rows_all": [
     {
-      "trade_date": "20260312",
-      "expected_next_trade_date": "20260313",
-      "actual_next_trade_date": "20260313",
+      "trade_date": "20260313",
+      "expected_next_trade_date": "20260316",
+      "actual_next_trade_date": "",
       "topn": "10",
-      "hit": "0",
-      "hit_rate": "0.0",
-      "note": "src=pred_top10_history"
+      "hit": "",
+      "hit_rate": "",
+      "note": "pending_label: expected_next_trade_date_not_available (upper_bound=20260313)"
     },
     {
       "trade_date": "20260122",
@@ -286,13 +286,13 @@
       "note": "src=pred_top10_history"
     },
     {
-      "trade_date": "20260313",
-      "expected_next_trade_date": "",
-      "actual_next_trade_date": "",
+      "trade_date": "20260312",
+      "expected_next_trade_date": "20260313",
+      "actual_next_trade_date": "20260313",
       "topn": "10",
-      "hit": "",
-      "hit_rate": "",
-      "note": "pending_label: no next snapshot available yet"
+      "hit": "0",
+      "hit_rate": "0.0",
+      "note": "src=pred_top10_history"
     }
   ],
   "hit_rows_done_last10": [
@@ -462,7 +462,7 @@
         "Probability": {
           "non_null_rate": 1.0,
           "non_zero_rate": 1.0,
-          "std": 0.21643942772219824,
+          "std": 0.21615445929226998,
           "unique_count": 2019
         }
       },
@@ -499,9 +499,9 @@
     },
     "pseudo_ratio": 0.042008691453404155,
     "feature_history_file": "outputs/learning/feature_history.csv",
-    "updated_at_utc": "2026-03-13T11:57:52Z",
-    "model_version": "b8e6ef038f3c34618a33da1d4e18649189c481a9",
-    "today_yyyymmdd": "20260313",
+    "updated_at_utc": "2026-03-14T14:00:50Z",
+    "model_version": "2fdec68fa933aebb616eb129217b48a27f827660",
+    "today_yyyymmdd": "20260314",
     "latest_snapshot_yyyymmdd": "20260313",
     "label_upper_bound_yyyymmdd": "20260313"
   },
@@ -520,5 +520,25 @@
       "reason": "ok"
     }
   },
-  "warnings": []
+  "warnings": [
+    "pred_top10_history read failed: Error tokenizing data. C error: Expected 17 fields in line 312, saw 19\n",
+    "hit_history_fallback: pred_top10_history.csv not available; fallback to scan predict_top10_*.md",
+    "github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260216/limit_list_d.csv",
+    "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
+    "github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260217/limit_list_d.csv",
+    "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
+    "github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260218/limit_list_d.csv",
+    "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
+    "github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260219/limit_list_d.csv",
+    "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
+    "github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260220/limit_list_d.csv",
+    "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
+    "github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260221/limit_list_d.csv",
+    "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
+    "github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260222/limit_list_d.csv",
+    "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
+    "github_raw_try: https://raw.githubusercontent.com/njedu2023-prog/a-top10/main/_warehouse/a-share-top3-data/data/raw/2026/20260223/limit_list_d.csv",
+    "github_raw read limit_list_d failed: HTTP Error 404: Not Found",
+    "next_trade_date_adjusted: 20260216 -> 20260224 (warehouse)"
+  ]
 }
