@@ -15,13 +15,18 @@ Step5 : V2 概率层重构版
    - train_step5_lr
    - train_step5_lgbm
    - train_step5_models
-4. 保持主入口兼容：
-   - run_step5(theme_df, s=None) -> DataFrame
+4. 接入运行模式契约：
+   - replay 默认不更新模型
+   - train 才能更新模型
+   - auto_daily 是否更新模型由门槛控制
+5. 接入 Level 1 / 2 / 3 样本门槛：
+   - Level 1:  80 <= mature_samples < 120   -> 试训，不更新正式模型
+   - Level 2: 120 <= mature_samples < 150   -> 正式训练起点
+   - Level 3: mature_samples >= 150         -> 较稳训练区
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass
@@ -54,6 +59,8 @@ FEATURES = [
     "open_times",
     "turnover_rate",
 ]
+
+VALID_RUN_MODES = {"replay", "train", "auto_daily"}
 
 
 # =========================================================
@@ -103,13 +110,6 @@ def _normalize_id_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _safe_float_series(df: pd.DataFrame, col: Optional[str], default: float = 0.0) -> pd.Series:
-    if col is None or col not in df.columns:
-        return pd.Series([default] * len(df), index=df.index, dtype="float64")
-    s = pd.to_numeric(df[col], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(default)
-    return s.astype("float64")
-
-
 def _ensure_features(df: pd.DataFrame) -> pd.DataFrame:
     df = _ensure_df(df)
     for c in FEATURES:
@@ -126,12 +126,6 @@ def _clip01(s: pd.Series | np.ndarray | float) -> pd.Series:
     arr = np.asarray(s, dtype=float)
     arr = np.clip(arr, 0.0, 1.0)
     return pd.Series(arr, dtype="float64")
-
-
-def _sigmoid(z: np.ndarray) -> np.ndarray:
-    z = np.asarray(z, dtype=float)
-    z = np.clip(z, -20.0, 20.0)
-    return 1.0 / (1.0 + np.exp(-z))
 
 
 def _utc_now_iso() -> str:
@@ -197,6 +191,103 @@ def _get_ml_cfg(s=None) -> Dict[str, Any]:
     cfg["rule_weight"] = float(cfg.get("rule_weight", 0.30))
     cfg["ml_weight"] = float(cfg.get("ml_weight", 0.70))
     return cfg
+
+
+# =========================================================
+# run mode / training policy
+# =========================================================
+@dataclass
+class Step5TrainingPolicy:
+    run_mode: str
+    allow_model_update_raw: str
+    allow_model_update: bool
+    min_level1_samples: int
+    min_train_samples: int
+    min_stable_samples: int
+    min_positive_samples: int
+    min_feature_coverage: float
+
+
+def _resolve_run_mode() -> str:
+    mode = os.getenv("A_TOP10_RUN_MODE", os.getenv("TOP10_RUN_MODE", "auto_daily")).strip().lower()
+    if mode not in VALID_RUN_MODES:
+        return "auto_daily"
+    return mode
+
+
+def _resolve_allow_model_update(run_mode: str) -> Tuple[str, bool]:
+    raw = os.getenv(
+        "A_TOP10_ALLOW_MODEL_UPDATE",
+        os.getenv("TOP10_ALLOW_MODEL_UPDATE", "auto"),
+    ).strip().lower()
+
+    if raw in {"1", "true", "yes", "on"}:
+        return raw, True
+    if raw in {"0", "false", "no", "off"}:
+        return raw, False
+
+    # auto 策略
+    if run_mode == "replay":
+        return "auto", False
+    if run_mode == "train":
+        return "auto", True
+    # auto_daily: 默认先允许进入“是否可正式更新”的判断链
+    return "auto", True
+
+
+def _policy_value_from_settings(s: Any, *names: str, default: Any) -> Any:
+    # 优先从 settings.training 取；再从 settings.ml 取；最后 default
+    for obj_name in ["training", "ml"]:
+        try:
+            obj = getattr(s, obj_name, None)
+            if obj is None:
+                continue
+            for n in names:
+                if hasattr(obj, n):
+                    v = getattr(obj, n)
+                    if v is not None:
+                        return v
+        except Exception:
+            pass
+    return default
+
+
+def _get_training_policy(s=None) -> Step5TrainingPolicy:
+    run_mode = _resolve_run_mode()
+    allow_raw, allow_update = _resolve_allow_model_update(run_mode)
+
+    min_level1_samples = int(_policy_value_from_settings(s, "min_level1_samples", default=80))
+    min_train_samples = int(_policy_value_from_settings(s, "min_train_samples", default=120))
+    min_stable_samples = int(_policy_value_from_settings(s, "min_stable_samples", default=150))
+    min_positive_samples = int(_policy_value_from_settings(s, "min_positive_samples", default=12))
+    min_feature_coverage = float(_policy_value_from_settings(s, "min_feature_coverage", default=0.85))
+
+    return Step5TrainingPolicy(
+        run_mode=run_mode,
+        allow_model_update_raw=allow_raw,
+        allow_model_update=allow_update,
+        min_level1_samples=min_level1_samples,
+        min_train_samples=min_train_samples,
+        min_stable_samples=min_stable_samples,
+        min_positive_samples=min_positive_samples,
+        min_feature_coverage=min_feature_coverage,
+    )
+
+
+def _classify_training_level(n_samples: int, policy: Step5TrainingPolicy) -> str:
+    if n_samples < policy.min_level1_samples:
+        return "below_level1"
+    if n_samples < policy.min_train_samples:
+        return "level1"
+    if n_samples < policy.min_stable_samples:
+        return "level2"
+    return "level3"
+
+
+def _can_formal_update(level: str, policy: Step5TrainingPolicy) -> bool:
+    if not policy.allow_model_update:
+        return False
+    return level in {"level2", "level3"}
 
 
 # =========================================================
@@ -320,7 +411,7 @@ def load_lgbm(s=None):
 
 
 # =========================================================
-# train
+# train dataset
 # =========================================================
 def _load_step4_theme_history(s, lookback: int, theme_file_name: str) -> pd.DataFrame:
     outputs_dir = _get_outputs_dir(s)
@@ -336,11 +427,39 @@ def _load_step4_theme_history(s, lookback: int, theme_file_name: str) -> pd.Data
             return pd.DataFrame()
 
 
-def _build_X_y_from_theme_history(s, lookback: int, theme_file_name: str) -> Tuple[np.ndarray, np.ndarray]:
+def _sample_feature_coverage(df: pd.DataFrame) -> float:
+    """
+    用原始列的非空覆盖率估计特征成熟度。
+    不把补零后的 _ensure_features 误当作真实完整率。
+    """
+    if df is None or df.empty:
+        return 0.0
+
+    coverages = []
+    for c in FEATURES:
+        if c not in df.columns:
+            coverages.append(0.0)
+            continue
+        s = pd.to_numeric(df[c], errors="coerce")
+        coverages.append(float(s.notna().mean()))
+    if not coverages:
+        return 0.0
+    return float(np.mean(coverages))
+
+
+def _build_X_y_from_theme_history(
+    s,
+    lookback: int,
+    theme_file_name: str,
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     hist = _load_step4_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
     hist = _normalize_id_columns(hist)
     if hist.empty or "trade_date" not in hist.columns or "ts_code" not in hist.columns:
-        return np.zeros((0, len(FEATURES))), np.zeros((0,))
+        return np.zeros((0, len(FEATURES))), np.zeros((0,)), {
+            "mature_samples": 0,
+            "positive_samples": 0,
+            "feature_coverage": 0.0,
+        }
 
     dates = sorted(hist["trade_date"].astype(str).unique())
     if lookback > 0:
@@ -348,11 +467,15 @@ def _build_X_y_from_theme_history(s, lookback: int, theme_file_name: str) -> Tup
 
     rows = []
     y = []
+    coverage_list = []
+
     for i, d in enumerate(dates[:-1]):
         next_d = dates[i + 1]
         df_day = hist[hist["trade_date"].astype(str) == str(d)].copy()
         if df_day.empty:
             continue
+
+        coverage_list.append(_sample_feature_coverage(df_day))
 
         df_limit = pd.DataFrame()
         try:
@@ -374,14 +497,94 @@ def _build_X_y_from_theme_history(s, lookback: int, theme_file_name: str) -> Tup
             y.append(1 if code in lim else 0)
 
     if not rows:
-        return np.zeros((0, len(FEATURES))), np.zeros((0,))
-    return np.asarray(rows, dtype=float), np.asarray(y, dtype=int)
+        return np.zeros((0, len(FEATURES))), np.zeros((0,)), {
+            "mature_samples": 0,
+            "positive_samples": 0,
+            "feature_coverage": 0.0,
+        }
+
+    X = np.asarray(rows, dtype=float)
+    yy = np.asarray(y, dtype=int)
+    meta = {
+        "mature_samples": int(X.shape[0]),
+        "positive_samples": int(yy.sum()),
+        "feature_coverage": float(np.mean(coverage_list)) if coverage_list else 0.0,
+    }
+    return X, yy, meta
 
 
-def train_step5_lr(s, lookback: int = 90, theme_file_name: str = "step4_theme.csv") -> Dict[str, Any]:
-    X, y = _build_X_y_from_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
-    if X.shape[0] < 50 or len(np.unique(y)) < 2:
-        return {"ok": False, "reason": "not enough samples or single class", "n": int(X.shape[0]), "pos": int(y.sum())}
+def _training_gate_summary(
+    n_samples: int,
+    pos_samples: int,
+    feature_coverage: float,
+    policy: Step5TrainingPolicy,
+) -> Dict[str, Any]:
+    level = _classify_training_level(n_samples, policy)
+    formal_update_allowed = _can_formal_update(level, policy)
+
+    summary = {
+        "run_mode": policy.run_mode,
+        "allow_model_update_raw": policy.allow_model_update_raw,
+        "allow_model_update": bool(policy.allow_model_update),
+        "level": level,
+        "mature_samples": int(n_samples),
+        "positive_samples": int(pos_samples),
+        "feature_coverage": float(feature_coverage),
+        "formal_update_allowed": bool(formal_update_allowed),
+        "trial_training_only": level == "level1",
+    }
+
+    if level == "below_level1":
+        summary["ok"] = False
+        summary["trained"] = False
+        summary["updated"] = False
+        summary["reason"] = "below_level1_min_samples"
+        return summary
+
+    if pos_samples < policy.min_positive_samples:
+        summary["ok"] = False
+        summary["trained"] = False
+        summary["updated"] = False
+        summary["reason"] = "insufficient_positive_samples"
+        return summary
+
+    if feature_coverage < policy.min_feature_coverage:
+        summary["ok"] = False
+        summary["trained"] = False
+        summary["updated"] = False
+        summary["reason"] = "insufficient_feature_coverage"
+        return summary
+
+    summary["ok"] = True
+    summary["trained"] = True
+    summary["updated"] = False
+    summary["reason"] = "ready_for_training"
+    return summary
+
+
+def train_step5_lr(s, lookback: int = 120, theme_file_name: str = "step4_theme.csv") -> Dict[str, Any]:
+    policy = _get_training_policy(s)
+    X, y, meta = _build_X_y_from_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
+    n_samples = int(meta.get("mature_samples", 0))
+    pos_samples = int(meta.get("positive_samples", 0))
+    feature_coverage = float(meta.get("feature_coverage", 0.0))
+
+    summary = _training_gate_summary(
+        n_samples=n_samples,
+        pos_samples=pos_samples,
+        feature_coverage=feature_coverage,
+        policy=policy,
+    )
+
+    if not summary.get("ok"):
+        return summary
+
+    if len(np.unique(y)) < 2:
+        summary["ok"] = False
+        summary["trained"] = False
+        summary["updated"] = False
+        summary["reason"] = "single_class_labels"
+        return summary
 
     model = Pipeline(
         steps=[
@@ -391,18 +594,60 @@ def train_step5_lr(s, lookback: int = 90, theme_file_name: str = "step4_theme.cs
     )
     model.fit(X, y)
 
+    summary["trained"] = True
+
+    level = str(summary.get("level", ""))
+    if level == "level1":
+        summary["updated"] = False
+        summary["reason"] = "level1_trial_training_no_formal_update"
+        return summary
+
+    if not summary.get("formal_update_allowed", False):
+        summary["updated"] = False
+        summary["reason"] = "model_update_not_allowed_by_run_mode"
+        return summary
+
     paths = _get_model_paths(s=s)
     _save_joblib(model, paths.lr_path)
-    return {"ok": True, "path": str(paths.lr_path), "n": int(X.shape[0]), "pos": int(y.sum())}
+    summary["updated"] = True
+    summary["path"] = str(paths.lr_path)
+    summary["reason"] = "formal_model_updated"
+    return summary
 
 
-def train_step5_lgbm(s, lookback: int = 120, theme_file_name: str = "step4_theme.csv") -> Dict[str, Any]:
+def train_step5_lgbm(s, lookback: int = 150, theme_file_name: str = "step4_theme.csv") -> Dict[str, Any]:
+    policy = _get_training_policy(s)
+
     if LGBMClassifier is None:
-        return {"ok": False, "reason": "lightgbm not installed"}
+        return {
+            "ok": False,
+            "trained": False,
+            "updated": False,
+            "run_mode": policy.run_mode,
+            "reason": "lightgbm_not_installed",
+        }
 
-    X, y = _build_X_y_from_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
-    if X.shape[0] < 80 or len(np.unique(y)) < 2:
-        return {"ok": False, "reason": "not enough samples or single class", "n": int(X.shape[0]), "pos": int(y.sum())}
+    X, y, meta = _build_X_y_from_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
+    n_samples = int(meta.get("mature_samples", 0))
+    pos_samples = int(meta.get("positive_samples", 0))
+    feature_coverage = float(meta.get("feature_coverage", 0.0))
+
+    summary = _training_gate_summary(
+        n_samples=n_samples,
+        pos_samples=pos_samples,
+        feature_coverage=feature_coverage,
+        policy=policy,
+    )
+
+    if not summary.get("ok"):
+        return summary
+
+    if len(np.unique(y)) < 2:
+        summary["ok"] = False
+        summary["trained"] = False
+        summary["updated"] = False
+        summary["reason"] = "single_class_labels"
+        return summary
 
     model = LGBMClassifier(
         n_estimators=300,
@@ -414,16 +659,34 @@ def train_step5_lgbm(s, lookback: int = 120, theme_file_name: str = "step4_theme
     )
     model.fit(X, y)
 
+    summary["trained"] = True
+
+    level = str(summary.get("level", ""))
+    if level == "level1":
+        summary["updated"] = False
+        summary["reason"] = "level1_trial_training_no_formal_update"
+        return summary
+
+    if not summary.get("formal_update_allowed", False):
+        summary["updated"] = False
+        summary["reason"] = "model_update_not_allowed_by_run_mode"
+        return summary
+
     paths = _get_model_paths(s=s)
     _save_joblib(model, paths.lgbm_path)
-    return {"ok": True, "path": str(paths.lgbm_path), "n": int(X.shape[0]), "pos": int(y.sum())}
+    summary["updated"] = True
+    summary["path"] = str(paths.lgbm_path)
+    summary["reason"] = "formal_model_updated"
+    return summary
 
 
-def train_step5_models(s, lookback: int = 120, theme_file_name: str = "step4_theme.csv") -> Dict[str, Any]:
-    res_lr = train_step5_lr(s, lookback=max(60, int(lookback * 0.75)), theme_file_name=theme_file_name)
+def train_step5_models(s, lookback: int = 150, theme_file_name: str = "step4_theme.csv") -> Dict[str, Any]:
+    res_lr = train_step5_lr(s, lookback=lookback, theme_file_name=theme_file_name)
     res_lgbm = train_step5_lgbm(s, lookback=lookback, theme_file_name=theme_file_name)
     return {
         "ok": bool(res_lr.get("ok")) or bool(res_lgbm.get("ok")),
+        "updated": bool(res_lr.get("updated")) or bool(res_lgbm.get("updated")),
+        "run_mode": _resolve_run_mode(),
         "lr": res_lr,
         "lgbm": res_lgbm,
     }
@@ -438,7 +701,10 @@ def _calc_prob_rule(df: pd.DataFrame) -> pd.Series:
     theme = _clip01(feat["ThemeBoost"] / 1.30)
 
     turnover = feat["turnover_rate"].astype(float)
-    turnover_score = pd.Series(np.where(turnover <= 0, 0.0, np.exp(-((turnover - 18.0) / 12.0) ** 2)), index=df.index)
+    turnover_score = pd.Series(
+        np.where(turnover <= 0, 0.0, np.exp(-((turnover - 18.0) / 12.0) ** 2)),
+        index=df.index,
+    )
     turnover_score = _clip01(turnover_score)
 
     seal_amount = feat["seal_amount"].astype(float)
@@ -584,6 +850,7 @@ def _write_feature_history(
                 tmp[c] = out_df[c]
 
         tmp["run_time_utc"] = _utc_now_iso()
+        tmp["run_mode"] = _resolve_run_mode()
 
         base = outputs_dir / "learning"
         _ensure_dir(base)
@@ -620,8 +887,18 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
     raw_input = _ensure_df(theme_df)
     if raw_input.empty:
         out = pd.DataFrame()
-        for c in ["prob_rule", "prob_ml", "prob_final", "Probability", "prob_src", "prob_ml_available", "prob_fusion_mode"]:
-            out[c] = pd.Series(dtype="float64" if "prob" in c.lower() and c not in ["prob_src", "prob_fusion_mode"] else "object")
+        for c in [
+            "prob_rule",
+            "prob_ml",
+            "prob_final",
+            "Probability",
+            "prob_src",
+            "prob_ml_available",
+            "prob_fusion_mode",
+        ]:
+            out[c] = pd.Series(
+                dtype="float64" if "prob" in c.lower() and c not in ["prob_src", "prob_fusion_mode"] else "object"
+            )
         return out
 
     trade_date = _guess_trade_date(raw_input)
@@ -658,6 +935,7 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
     out["Probability"] = out["prob_final"].astype("float64")
     out["prob_src"] = prob_src.astype("object")
     out["prob_fusion_mode"] = prob_fusion_mode.astype("object")
+    out["run_mode"] = _resolve_run_mode()
 
     clip_min = float(rule_cfg.get("clip_min", 0.0))
     clip_max = float(rule_cfg.get("clip_max", 1.0))
@@ -690,6 +968,7 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         "prob_src",
         "prob_ml_available",
         "prob_fusion_mode",
+        "run_mode",
         "run_time_utc",
     ]
     exist = [c for c in prefer_order if c in out.columns]
