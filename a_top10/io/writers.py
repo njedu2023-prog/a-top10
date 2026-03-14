@@ -19,7 +19,8 @@ CODE_COL_CANDIDATES = [
     "股票代码",
 ]
 NAME_COL_CANDIDATES = ["name", "stock_name", "名称", "股票", "证券名称", "股票简称"]
-PROB_COL_CANDIDATES = ["prob", "Probability", "概率", "涨停概率"]
+PROB_COL_CANDIDATES = ["prob_final", "prob", "Probability", "probability", "概率", "涨停概率"]
+FINAL_SCORE_COL_CANDIDATES = ["final_score", "score", "Score", "最终得分"]
 BOARD_COL_CANDIDATES = ["board", "板块", "industry", "行业", "所属行业", "concept", "题材"]
 
 
@@ -179,6 +180,10 @@ def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> s
         "Score": "Score",
         "prob": "Probability",
         "Probability": "Probability",
+        "prob_rule": "prob_rule",
+        "prob_ml": "prob_ml",
+        "prob_final": "prob_final",
+        "final_score": "final_score",
         "StrengthScore": "强度得分",
         "强度得分": "强度得分",
         "ThemeBoost": "题材加成",
@@ -570,8 +575,12 @@ def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
         n = _first_existing_col(d, ["name", "stock_name", "名称", "证券名称", "股票简称"])
         d["股票"] = d[n] if n else ""
 
+    if "prob_final" not in d.columns:
+        p0 = _first_existing_col(d, ["prob_final", "Probability", "prob", "概率", "涨停概率"])
+        d["prob_final"] = d[p0] if p0 else ""
+
     if "Probability" not in d.columns:
-        p = _first_existing_col(d, ["prob", "Probability", "概率", "涨停概率"])
+        p = _first_existing_col(d, ["Probability", "prob_final", "prob", "概率", "涨停概率"])
         d["Probability"] = d[p] if p else ""
 
     if "强度得分" not in d.columns:
@@ -586,7 +595,7 @@ def _standardize_strength_table(df: pd.DataFrame) -> pd.DataFrame:
         b = _first_existing_col(d, ["board", "板块", "industry", "行业", "所属行业", "concept", "题材"])
         d["板块"] = d[b] if b else ""
 
-    out_cols = ["排名", "代码", "股票", "Probability", "强度得分", "题材加成", "板块"]
+    out_cols = ["排名", "代码", "股票", "prob_final", "Probability", "强度得分", "题材加成", "板块"]
     d = d[[c for c in out_cols if c in d.columns]].copy()
 
     if "强度得分" in d.columns:
@@ -640,8 +649,12 @@ def _join_limit_strength(limit_df: pd.DataFrame, full_df: Optional[pd.DataFrame]
     sort_cols = []
     if "StrengthScore" in m.columns:
         sort_cols = ["StrengthScore"]
+    elif "final_score" in m.columns:
+        sort_cols = ["final_score"]
     elif "score" in m.columns:
         sort_cols = ["score"]
+    elif "prob_final" in m.columns:
+        sort_cols = ["prob_final"]
     elif "prob" in m.columns:
         sort_cols = ["prob"]
 
@@ -696,11 +709,22 @@ def _recent_hit_history(outdir: Path, settings, ctx, max_days: int = 10) -> pd.D
 
 def _standardize_topN_for_csv(topN_df: Optional[pd.DataFrame]) -> pd.DataFrame:
     """
-    统一 topN 的字段，便于写 CSV / history：
-    rank, ts_code, name, prob, StrengthScore, ThemeBoost, board
+    统一 topN / full ranking 字段，兼容 V1/V2：
+    rank, ts_code, name, prob_rule, prob_ml, prob_final, prob, Probability,
+    final_score, score, StrengthScore, ThemeBoost, board
+    其中：
+    - prob_final 是 V2 主概率口径
+    - Probability / prob 是兼容别名
+    - final_score 是 V2 主终排口径
     """
+    base_cols = [
+        "rank", "ts_code", "name",
+        "prob_rule", "prob_ml", "prob_final", "prob", "Probability",
+        "final_score", "score",
+        "StrengthScore", "ThemeBoost", "board",
+    ]
     if topN_df is None or topN_df.empty:
-        return pd.DataFrame(columns=["rank", "ts_code", "name", "prob", "StrengthScore", "ThemeBoost", "board"])
+        return pd.DataFrame(columns=base_cols)
 
     df = topN_df.copy()
 
@@ -725,12 +749,32 @@ def _standardize_topN_for_csv(topN_df: Optional[pd.DataFrame]) -> pd.DataFrame:
     elif "name" not in df.columns:
         df["name"] = ""
 
-    # prob
-    p = _first_existing_col(df, PROB_COL_CANDIDATES)
-    if p and p != "prob":
-        df["prob"] = df[p]
-    elif "prob" not in df.columns:
-        df["prob"] = ""
+    # V2 probability fields
+    p_final = _first_existing_col(df, ["prob_final", "Probability", "prob", "probability", "概率", "涨停概率"])
+    if p_final and p_final != "prob_final":
+        df["prob_final"] = df[p_final]
+    elif "prob_final" not in df.columns:
+        df["prob_final"] = ""
+
+    if "Probability" not in df.columns:
+        df["Probability"] = df["prob_final"]
+    if "prob" not in df.columns:
+        df["prob"] = df["prob_final"]
+
+    if "prob_rule" not in df.columns:
+        df["prob_rule"] = ""
+    if "prob_ml" not in df.columns:
+        df["prob_ml"] = ""
+
+    # V2 final score fields
+    s_final = _first_existing_col(df, ["final_score", "score", "Score", "最终得分"])
+    if s_final and s_final != "final_score":
+        df["final_score"] = df[s_final]
+    elif "final_score" not in df.columns:
+        df["final_score"] = ""
+
+    if "score" not in df.columns:
+        df["score"] = df["final_score"]
 
     # board
     b = _first_existing_col(df, BOARD_COL_CANDIDATES)
@@ -751,8 +795,13 @@ def _standardize_topN_for_csv(topN_df: Optional[pd.DataFrame]) -> pd.DataFrame:
         else:
             df["ThemeBoost"] = ""
 
-    use_cols = ["rank", "ts_code", "name", "prob", "StrengthScore", "ThemeBoost", "board"]
-    df = df[[c for c in use_cols if c in df.columns]].copy()
+    # normalize numeric-ish fields, but keep empty string if full column missing
+    for col in ["prob_rule", "prob_ml", "prob_final", "prob", "Probability", "final_score", "score", "StrengthScore", "ThemeBoost"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    use_cols = [c for c in base_cols if c in df.columns]
+    df = df[use_cols].copy()
     return df
 
 
@@ -924,7 +973,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     else:
         lines.append(_df_to_md_table(
             topN_df,
-            cols=["rank", "ts_code", "name", "prob", "StrengthScore", "ThemeBoost", "board"],
+            cols=["rank", "ts_code", "name", "prob_final", "final_score", "StrengthScore", "ThemeBoost", "board"],
         ))
         lines.append("\n")
 
@@ -957,7 +1006,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     if prev_topN_df is None or prev_topN_df.empty:
         lines.append("（未找到上一交易日预测文件或上一交易日 Top10 为空）\n\n")
     else:
-        lines.append(_df_to_md_table(prev_hit_df, cols=["ts_code", "name", "prob", "命中", "板块"]))
+        lines.append(_df_to_md_table(prev_hit_df, cols=["ts_code", "name", "prob_final", "命中", "板块"]))
         lines.append("\n")
 
     # 第4块：近10日命中率（predict_date -> next_trade_date 验证日）
