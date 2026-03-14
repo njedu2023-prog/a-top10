@@ -279,6 +279,11 @@ def _ensure_step5_v2_fields(prob_df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["Probability"] = pd.to_numeric(df["Probability"], errors="coerce").fillna(df["prob_final"])
 
+    if "prob" not in df.columns:
+        df["prob"] = df["prob_final"]
+    else:
+        df["prob"] = pd.to_numeric(df["prob"], errors="coerce").fillna(df["prob_final"])
+
     if "prob_rule" not in df.columns:
         df["prob_rule"] = 0.0
     else:
@@ -296,10 +301,39 @@ def _ensure_step5_v2_fields(prob_df: pd.DataFrame) -> pd.DataFrame:
     if "prob_fusion_mode" not in df.columns:
         df["prob_fusion_mode"] = df["prob_ml_available"].map(lambda x: "ml_first" if bool(x) else "fallback_rule")
 
-    for c in ["prob_rule", "prob_final", "Probability"]:
+    for c in ["prob_rule", "prob_final", "prob", "Probability"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").clip(0.0, 1.0).fillna(0.0)
 
     return df
+
+
+def _normalize_topn_result(topn_result: Any) -> Dict[str, Optional[pd.DataFrame]]:
+    """
+    writers 的输入契约再收紧一层：
+    - 始终返回 dict
+    - 始终包含 topN / topn / full / limit_up_table
+    - 非 DataFrame 内容一律转为空
+    """
+    base: Dict[str, Optional[pd.DataFrame]] = {
+        "topN": None,
+        "topn": None,
+        "full": None,
+        "limit_up_table": None,
+    }
+
+    if not isinstance(topn_result, dict):
+        return base
+
+    for k in ["topN", "topn", "full", "limit_up_table"]:
+        v = topn_result.get(k)
+        base[k] = v if isinstance(v, pd.DataFrame) else None
+
+    if base["topN"] is None and base["topn"] is not None:
+        base["topN"] = base["topn"]
+    if base["topn"] is None and base["topN"] is not None:
+        base["topn"] = base["topN"]
+
+    return base
 
 
 def run_pipeline(
@@ -329,6 +363,9 @@ def run_pipeline(
 
     # ---- Step0 ----
     ctx = step0_build_universe(s, td)
+    if not isinstance(ctx, dict):
+        ctx = {}
+    ctx["trade_date"] = td
 
     # ---- Step1 ----
     gate = step1_emotion_gate(s, ctx) or {}
@@ -341,11 +378,13 @@ def run_pipeline(
         "topN": None,
         "topn": None,
         "full": None,
+        "limit_up_table": None,
     }
 
     if gate_pass:
         # Step2
         candidates = step2_build_candidates(s, ctx)
+        ctx["candidates"] = candidates
 
         # Step3
         strength_df = run_step3(candidates)
@@ -355,6 +394,11 @@ def run_pipeline(
 
         # Step4 按主线接口运行，返回更新后的 ctx
         ctx = run_step4(s, ctx)
+        if not isinstance(ctx, dict):
+            ctx = {}
+
+        # 强制补回 trade_date，防止中途被覆盖掉
+        ctx["trade_date"] = td
 
         # 兼容：把 step4_theme 映射到 step4（避免 DEBUG.step4=None）
         _ensure_step4_debug_compat(ctx)
@@ -373,31 +417,35 @@ def run_pipeline(
         ctx["step5_df"] = prob_df
 
         # Step6: 纯终排器，只认 prob_final 为主口径
-        topn_result = run_step6_final_topn(prob_df, s=s)
+        raw_topn_result = run_step6_final_topn(prob_df, s=s)
+        topn_result = _normalize_topn_result(raw_topn_result)
 
         # 兼容桥接：把 full/topN 再挂回 ctx，避免旧 writer 或旧调试逻辑拿不到
-        if isinstance(topn_result, dict):
-            if isinstance(topn_result.get("full"), pd.DataFrame):
-                ctx["final_full_df"] = topn_result["full"]
-            if isinstance(topn_result.get("topN"), pd.DataFrame):
-                ctx["topn_df"] = topn_result["topN"]
-                ctx["topN_df"] = topn_result["topN"]
+        if isinstance(topn_result.get("full"), pd.DataFrame):
+            ctx["final_full_df"] = topn_result["full"]
 
-            # 附带 step6 元信息，方便后续排查
-            ctx.setdefault("debug", {})
-            if isinstance(ctx["debug"], dict):
-                ctx["debug"]["step5_v2"] = {
-                    "columns": list(prob_df.columns),
-                    "rows": int(len(prob_df)),
-                    "has_prob_rule": "prob_rule" in prob_df.columns,
-                    "has_prob_ml": "prob_ml" in prob_df.columns,
-                    "has_prob_final": "prob_final" in prob_df.columns,
-                    "has_Probability": "Probability" in prob_df.columns,
-                }
-                ctx["debug"]["step6_v2"] = {
-                    "meta": topn_result.get("meta", {}),
-                    "warnings": topn_result.get("warnings", []),
-                }
+        if isinstance(topn_result.get("topN"), pd.DataFrame):
+            ctx["topn_df"] = topn_result["topN"]
+            ctx["topN_df"] = topn_result["topN"]
+
+        # 附带 step6 元信息，方便后续排查
+        ctx.setdefault("debug", {})
+        if isinstance(ctx["debug"], dict):
+            ctx["debug"]["step5_v2"] = {
+                "columns": list(prob_df.columns),
+                "rows": int(len(prob_df)),
+                "has_prob_rule": "prob_rule" in prob_df.columns,
+                "has_prob_ml": "prob_ml" in prob_df.columns,
+                "has_prob_final": "prob_final" in prob_df.columns,
+                "has_prob": "prob" in prob_df.columns,
+                "has_Probability": "Probability" in prob_df.columns,
+            }
+            ctx["debug"]["step6_v2"] = {
+                "meta": raw_topn_result.get("meta", {}) if isinstance(raw_topn_result, dict) else {},
+                "warnings": raw_topn_result.get("warnings", []) if isinstance(raw_topn_result, dict) else [],
+                "topN_rows": int(len(topn_result["topN"])) if isinstance(topn_result.get("topN"), pd.DataFrame) else 0,
+                "full_rows": int(len(topn_result["full"])) if isinstance(topn_result.get("full"), pd.DataFrame) else 0,
+            }
 
     else:
         gate["reason"] = (gate.get("reason", "") + " | pipeline_skipped(step2-6)").strip()
