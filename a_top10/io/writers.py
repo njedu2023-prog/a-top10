@@ -347,9 +347,21 @@ def _resolve_snapshot_dir(settings, ctx, trade_date: str) -> Optional[Path]:
             if cand.exists():
                 return cand
 
-    for guess in (Path("data_repo/snapshots"), Path("data_repo"), Path("snapshots"), Path("_warehouse")):
-        if (guess / trade_date).exists():
-            return guess / trade_date
+    for guess in (
+        Path("data_repo/snapshots"),
+        Path("data_repo"),
+        Path("snapshots"),
+        Path("_warehouse"),
+        Path("_warehouse/a-share-top3-data/data/raw") / trade_date[:4] / trade_date,
+        Path("outputs/_warehouse/a-share-top3-data/data/raw") / trade_date[:4] / trade_date,
+        Path("data/raw") / trade_date[:4] / trade_date,
+    ):
+        gp = Path(guess)
+        if gp.exists() and gp.is_dir():
+            if gp.name == trade_date:
+                return gp
+            if (gp / trade_date).exists():
+                return gp / trade_date
     return None
 
 
@@ -814,14 +826,14 @@ def _load_step7_hit_history(learning_dir: Path, max_days: int = 10) -> pd.DataFr
     for c in ["trade_date", "verify_date", "topn", "hit", "hit_rate", "note"]:
         if c not in df.columns:
             df[c] = ""
-    df = df[df["hit_rate"].astype(str).str.strip() != ""].copy()
-    if df.empty:
-        return pd.DataFrame()
     df["trade_date"] = df["trade_date"].astype(str)
     df["verify_date"] = df["verify_date"].astype(str)
     df["topn"] = pd.to_numeric(df["topn"], errors="coerce")
     df["hit"] = pd.to_numeric(df["hit"], errors="coerce")
     df["hit_rate"] = pd.to_numeric(df["hit_rate"], errors="coerce")
+    df = df[df["hit_rate"].notna()].copy()
+    if df.empty:
+        return pd.DataFrame()
     return df.sort_values("trade_date").tail(max_days).reset_index(drop=True)
 
 
@@ -832,14 +844,9 @@ def _build_recent_perf_df(hit_hist: pd.DataFrame, settings, ctx) -> pd.DataFrame
     for _, row in hit_hist.iterrows():
         vd = _safe_str(row.get("verify_date"))
         limit_df = _load_limit_df(settings, ctx, vd) if vd else pd.DataFrame()
-        hit_val = pd.to_numeric(row.get("hit"), errors="coerce")
-        if pd.isna(hit_val):
-            hit_int = 0
-        else:
-            hit_int = int(hit_val)
         rows.append({
             "trade_date": _safe_str(row.get("trade_date")),
-            "hit": hit_int,
+            "hit": int(pd.to_numeric(row.get("hit"), errors="coerce") or 0),
             "hit_rate": _format_pct(pd.to_numeric(row.get("hit_rate"), errors="coerce")),
             "limit_count": _count_limitups(limit_df),
         })
@@ -992,7 +999,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
     if not perf_df.empty:
         md_lines.append("## 近10日 Top10 绩效\n")
-        md_lines.append(_df_to_md_table(perf_df, cols=["trade_date", "hit", "hit_rate", "limit_count"]))
+        md_lines.append(_df_to_md_table(perf_df, cols=["trade_date", "verify_date", "hit", "hit_rate", "limit_count"]))
         md_lines.append("")
         if not perf_summary_df.empty:
             md_lines.append("### 近10日整体统计\n")
