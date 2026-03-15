@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 17:14:06",
+  "ts": "2026-03-15 17:30:30",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
@@ -97,7 +97,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 75,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260123": {
@@ -108,7 +108,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 104,
-        "batch_quality_score": 93.3333,
+        "batch_quality_score": 99.9359,
         "pass": true
       },
       "20260126": {
@@ -119,7 +119,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 71,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260127": {
@@ -130,7 +130,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 53,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260128": {
@@ -141,7 +141,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 80,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260129": {
@@ -152,7 +152,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 84,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260130": {
@@ -163,7 +163,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 48,
-        "batch_quality_score": 87.3333,
+        "batch_quality_score": 94.0,
         "pass": true
       },
       "20260202": {
@@ -174,7 +174,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 36,
-        "batch_quality_score": 87.3333,
+        "batch_quality_score": 94.0,
         "pass": true
       },
       "20260203": {
@@ -185,7 +185,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 69,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260204": {
@@ -196,7 +196,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 68,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260205": {
@@ -207,7 +207,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 44,
-        "batch_quality_score": 87.3333,
+        "batch_quality_score": 94.0,
         "pass": true
       },
       "20260206": {
@@ -218,7 +218,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 86,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 96.9225,
         "pass": true
       },
       "20260209": {
@@ -229,7 +229,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 112,
-        "batch_quality_score": 93.3333,
+        "batch_quality_score": 100.0,
         "pass": true
       },
       "20260210": {
@@ -240,7 +240,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 70,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260211": {
@@ -251,7 +251,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 73,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260212": {
@@ -262,7 +262,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 92,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260213": {
@@ -273,7 +273,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 55,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260224": {
@@ -284,7 +284,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 93,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260225": {
@@ -295,7 +295,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 75,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260226": {
@@ -306,7 +306,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 63,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260227": {
@@ -317,7 +317,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 75,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260302": {
@@ -328,7 +328,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 88,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260303": {
@@ -339,7 +339,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 83,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260304": {
@@ -350,7 +350,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 44,
-        "batch_quality_score": 87.3333,
+        "batch_quality_score": 94.0,
         "pass": true
       },
       "20260305": {
@@ -361,7 +361,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 69,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260306": {
@@ -372,7 +372,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 74,
-        "batch_quality_score": 90.3333,
+        "batch_quality_score": 97.0,
         "pass": true
       },
       "20260309": {
@@ -383,7 +383,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 42,
-        "batch_quality_score": 87.3333,
+        "batch_quality_score": 94.0,
         "pass": true
       },
       "20260310": {
@@ -394,7 +394,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 0,
-        "batch_quality_score": 83.3333,
+        "batch_quality_score": 90.0,
         "pass": false
       },
       "20260311": {
@@ -405,7 +405,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 0,
-        "batch_quality_score": 83.3333,
+        "batch_quality_score": 90.0,
         "pass": false
       },
       "20260312": {
@@ -416,7 +416,7 @@
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 0,
-        "batch_quality_score": 83.3333,
+        "batch_quality_score": 90.0,
         "pass": false
       },
       "20260313": {
