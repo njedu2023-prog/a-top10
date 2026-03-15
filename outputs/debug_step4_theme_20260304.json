@@ -1,71 +1,4 @@
 {
-  "trade_date": "20260304",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260304",
-  "snapshot_files": {},
-  "params": {
-    "rank_decay_k": 0.18,
-    "topk_industry": 40,
-    "dragon_bonus": 0.08,
-    "fuzzy_max_rows": 300
-  },
-  "hot_boards_rows": 10,
-  "hot_boards_cols": [
-    "trade_date",
-    "industry",
-    "limit_up_count",
-    "rank"
-  ],
-  "industry_score_map": {
-    "ok": true,
-    "reason": "",
-    "industry_col": "industry",
-    "rank_col": "rank",
-    "size": 10,
-    "score_min": 0.0,
-    "score_max": 1.0,
-    "top5": [
-      [
-        "电气设备",
-        1.0
-      ],
-      [
-        "建筑工程",
-        0.7946272018253463
-      ],
-      [
-        "石油开采",
-        0.6230854212758787
-      ],
-      [
-        "元器件",
-        0.479801681970459
-      ],
-      [
-        "半导体",
-        0.36012104274902346
-      ]
-    ]
-  },
-  "candidate": {
-    "rows": 44,
-    "code_col": "ts_code",
-    "industry_col_before": "industry",
-    "industry_col_final": "industry",
-    "industry_nonblank_ratio_before": 1.0,
-    "industry_nonblank_ratio_final": 1.0,
-    "stock_basic_rows": 5486,
-    "top_list_rows": 70
-  },
-  "matched_industry_count": 30,
-  "dragon_hits": 21,
-  "theme_boost_nonzero": 34,
-  "apply_reason": "",
-  "matched_industry_detail": {
-    "exact": 28,
-    "normalized": 0,
-    "fuzzy_contains": 2
-  },
-  "diagnosis": "industry heat applied (ok)",
   "step5_feature_passthrough": {
     "mapped": {},
     "missing": [
@@ -73,10 +6,80 @@
       "turnover_rate"
     ]
   },
-  "theme_df_feature_nonzero_rate": {
-    "StrengthScore": 0.0,
-    "turnover_rate": 0.0,
-    "seal_amount": 1.0,
-    "open_times": 0.5909090909090909
+  "trade_date": "20260304",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260304",
+  "params": {
+    "rank_decay_k": 0.18,
+    "topk_industry": 40,
+    "dragon_bonus": 0.08,
+    "north_bonus": 0.05,
+    "fuzzy_max_rows": 300
+  },
+  "source_rows": {
+    "candidate": 44,
+    "hot_boards": 10,
+    "stock_basic": 5486,
+    "top_list": 70,
+    "moneyflow_hsgt": 1
+  },
+  "industry_score_map": {
+    "ok": true,
+    "reason": "",
+    "industry_col": "industry",
+    "rank_col": "rank",
+    "heat_col": "",
+    "size": 10,
+    "top5": [
+      {
+        "industry": "电气设备",
+        "theme_heat": 1.0,
+        "board_rank": 1
+      },
+      {
+        "industry": "建筑工程",
+        "theme_heat": 0.7946272018253463,
+        "board_rank": 2
+      },
+      {
+        "industry": "石油开采",
+        "theme_heat": 0.6230854212758787,
+        "board_rank": 3
+      },
+      {
+        "industry": "元器件",
+        "theme_heat": 0.479801681970459,
+        "board_rank": 4
+      },
+      {
+        "industry": "半导体",
+        "theme_heat": 0.36012104274902346,
+        "board_rank": 5
+      }
+    ]
+  },
+  "apply": {
+    "candidate_rows": 44,
+    "candidate_code_col": "ts_code",
+    "theme_main_before_ratio": 1.0,
+    "theme_main_after_ratio": 1.0,
+    "matched_industry_count": 28,
+    "matched_industry_exact": 0,
+    "matched_industry_norm": 28,
+    "matched_industry_fuzzy": 0,
+    "lhb_hits": 21,
+    "north_hits": 0,
+    "reason": "theme boost applied"
+  },
+  "diagnosis": "theme boost applied",
+  "quality_distribution": {
+    "A": 28,
+    "C": 16
+  },
+  "missing_rate": {
+    "theme_main": 0.0,
+    "theme_heat": 0.36363636363636365,
+    "board_rank": 0.36363636363636365,
+    "lhb_net_buy": 0.5227272727272727,
+    "ThemeBoost": 0.0
   }
 }

@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 18:20:33",
+  "ts": "2026-03-15 18:23:54",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
@@ -39,8 +39,8 @@
       "trade_date": "20260304",
       "verify_date": "20260305",
       "topn": 10,
-      "hit": 3,
-      "hit_rate": "0.3"
+      "hit": 2,
+      "hit_rate": "0.2"
     },
     {
       "trade_date": "20260305",
@@ -564,8 +564,8 @@
           "allow_model_update_raw": "auto",
           "allow_model_update": true,
           "level": "level3",
-          "mature_samples": 2087,
-          "positive_samples": 370,
+          "mature_samples": 1982,
+          "positive_samples": 354,
           "feature_coverage": 1.0,
           "formal_update_allowed": true,
           "trial_training_only": false,
@@ -574,6 +574,7 @@
           "updated": true,
           "reason": "formal_model_updated",
           "data_reason": "ok",
+          "eligible_trade_dates_count": 0,
           "path": "models/step5_lr.joblib"
         },
         "lgbm": {
@@ -581,8 +582,8 @@
           "allow_model_update_raw": "auto",
           "allow_model_update": true,
           "level": "level3",
-          "mature_samples": 2087,
-          "positive_samples": 370,
+          "mature_samples": 1982,
+          "positive_samples": 354,
           "feature_coverage": 1.0,
           "formal_update_allowed": true,
           "trial_training_only": false,
@@ -591,6 +592,7 @@
           "updated": true,
           "reason": "formal_model_updated",
           "data_reason": "ok",
+          "eligible_trade_dates_count": 0,
           "path": "models/step5_lgbm.joblib"
         }
       },

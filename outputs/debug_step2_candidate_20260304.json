@@ -1,31 +1,24 @@
 {
   "trade_date": "20260304",
-  "base_source": "limit_list_d/stk_limit",
+  "base_source": "limit_list_d",
   "base_rows": 44,
-  "code_norm": {
-    "found_code_col": "ts_code",
-    "normalized_ratio": 1.0
-  },
-  "stock_basic_rows": 5486,
-  "industry_merge": {
-    "ok": true,
-    "reason": "",
-    "industry_nonblank_ratio_before": 0.0,
-    "industry_nonblank_ratio_after": 1.0,
-    "stock_basic_code_norm": {
-      "found_code_col": "ts_code",
-      "normalized_ratio": 1.0
-    }
-  },
+  "stock_basic_used": true,
   "filters": {
     "drop_st": 0,
     "drop_delist": 0
+  },
+  "industry_merge": {
+    "ok": true,
+    "reason": "",
+    "stock_basic_rows": 5486,
+    "industry_nonblank_ratio_after": 1.0
   },
   "final_rows": 44,
   "final_cols": [
     "ts_code",
     "name",
     "industry",
+    "board",
     "trade_date",
     "limit_type",
     "close",
@@ -37,6 +30,6 @@
     "last_time",
     "seal_amount"
   ],
-  "debug_file": "outputs/debug_step2_candidate_20260304.json",
-  "out_csv": "outputs/step2_candidates_20260304.csv"
+  "debug_file": "/home/runner/work/a-top10/a-top10/outputs/debug_step2_candidate_20260304.json",
+  "out_csv": "/home/runner/work/a-top10/a-top10/outputs/step2_candidates_20260304.csv"
 }
