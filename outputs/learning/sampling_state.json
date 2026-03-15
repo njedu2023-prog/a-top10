@@ -58,8 +58,8 @@
       "StrengthScore": {
         "non_null_rate": 1.0,
         "non_zero_rate": 0.9579913085465959,
-        "std": 17.38408867525756,
-        "unique_count": 1917
+        "std": 17.385964675265264,
+        "unique_count": 1914
       },
       "ThemeBoost": {
         "non_null_rate": 1.0,
@@ -70,8 +70,8 @@
       "turnover_rate": {
         "non_null_rate": 1.0,
         "non_zero_rate": 0.9579913085465959,
-        "std": 12.126121420255046,
-        "unique_count": 1979
+        "std": 12.0951364676582,
+        "unique_count": 1978
       },
       "seal_amount": {
         "non_null_rate": 1.0,
@@ -88,7 +88,7 @@
       "prob_final": {
         "non_null_rate": 0.10622887493964268,
         "non_zero_rate": 0.10622887493964268,
-        "std": 0.08938429429290035,
+        "std": 0.09062653192673019,
         "unique_count": 220
       },
       "final_score": {
@@ -139,8 +139,8 @@
     "min_positive_samples": 12,
     "min_feature_coverage": 0.85
   },
-  "updated_at_utc": "2026-03-15T08:11:02Z",
-  "model_version": "a099810b8082b27a1c027dff82efc5ca43f807ed",
+  "updated_at_utc": "2026-03-15T08:19:22Z",
+  "model_version": "c63d801617593afe317728d7e93a5735808850dc",
   "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
   "label_upper_bound_yyyymmdd": "20260313"
