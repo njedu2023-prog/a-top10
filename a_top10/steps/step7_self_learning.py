@@ -157,6 +157,20 @@ def _safe_str(x: Any) -> str:
     return s
 
 
+def _normalize_yyyymmdd_value(x: Any) -> str:
+    s = _safe_str(x)
+    if not s:
+        return ""
+    if re.match(r"^\d{8}$", s):
+        return s
+    if re.match(r"^\d{8}\.0+$", s):
+        return s.split(".")[0]
+    digits = re.sub(r"\D", "", s)
+    if len(digits) >= 8:
+        return digits[:8]
+    return s
+
+
 def _to_numeric_nullable(sr: pd.Series) -> pd.Series:
     return pd.to_numeric(sr, errors="coerce").replace([np.inf, -np.inf], np.nan).astype("float64")
 
@@ -185,7 +199,9 @@ def _normalize_id_columns(df: pd.DataFrame) -> pd.DataFrame:
         d["ts_code"] = d["ts_code"].astype(str).str.strip()
 
     if "trade_date" in d.columns:
-        d["trade_date"] = d["trade_date"].astype(str).str.strip()
+        d["trade_date"] = d["trade_date"].map(_normalize_yyyymmdd_value)
+    if "verify_date" in d.columns:
+        d["verify_date"] = d["verify_date"].map(_normalize_yyyymmdd_value)
 
     return d
 
@@ -236,8 +252,20 @@ def _resolve_run_mode() -> str:
 # Warehouse snapshots
 # ============================================================
 
+def _warehouse_raw_root_candidates() -> List[Path]:
+    return [
+        Path("_warehouse/a-share-top3-data/data/raw"),
+        Path("outputs/_warehouse/a-share-top3-data/data/raw"),
+        Path("data/raw"),
+        Path("_warehouse/data/raw"),
+    ]
+
+
 def _warehouse_raw_root() -> Path:
-    return Path("_warehouse/a-share-top3-data/data/raw")
+    for cand in _warehouse_raw_root_candidates():
+        if cand.exists():
+            return cand
+    return _warehouse_raw_root_candidates()[0]
 
 
 def _list_snapshot_dates() -> List[str]:
@@ -357,7 +385,7 @@ def _ensure_v3_feature_history_columns(df: pd.DataFrame) -> pd.DataFrame:
         if c not in d.columns:
             d[c] = default
 
-    d["trade_date"] = d["trade_date"].astype(str).str.strip()
+    d["trade_date"] = d["trade_date"].map(_normalize_yyyymmdd_value)
     d["ts_code"] = d["ts_code"].astype(str).str.strip()
     d["name"] = d["name"].astype(str)
 
@@ -383,7 +411,83 @@ def _ensure_v3_feature_history_columns(df: pd.DataFrame) -> pd.DataFrame:
     d["gate_version"] = d["gate_version"].astype(str)
     d["label_version"] = d["label_version"].astype(str)
     d["_prob_src"] = d["_prob_src"].astype(str)
-    d["verify_date"] = d["verify_date"].astype(str)
+    d["verify_date"] = d["verify_date"].map(_normalize_yyyymmdd_value)
+
+    return d
+
+
+# ============================================================
+# Historical close backfill
+# ============================================================
+
+
+def _build_trade_date_close_map(trade_date: str) -> Dict[str, float]:
+    daily_df = _read_daily_snapshot(trade_date)
+    if daily_df is not None and not daily_df.empty:
+        close_map = _build_close_map(daily_df)
+        if close_map:
+            return close_map
+
+    limit_df = _read_limit_list_snapshot(trade_date)
+    if limit_df is None or limit_df.empty:
+        return {}
+
+    code_col = None
+    for c in ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"]:
+        if c in limit_df.columns:
+            code_col = c
+            break
+    close_col = None
+    for c in ["close", "收盘价"]:
+        if c in limit_df.columns:
+            close_col = c
+            break
+    if code_col is None or close_col is None:
+        return {}
+
+    out: Dict[str, float] = {}
+    for _, row in limit_df.iterrows():
+        code = _safe_str(row.get(code_col))
+        if not code:
+            continue
+        close_v = pd.to_numeric(row.get(close_col), errors="coerce")
+        if pd.isna(close_v):
+            continue
+        close_f = float(close_v)
+        out[code] = close_f
+        out[_to_nosuffix(code)] = close_f
+    return out
+
+
+def _backfill_trade_date_close(df: pd.DataFrame, warnings: List[str]) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    d = df.copy()
+    if "close" not in d.columns:
+        d["close"] = np.nan
+    d["close"] = _to_numeric_nullable(d["close"])
+
+    missing_mask = d["close"].isna()
+    if not missing_mask.any():
+        return d
+
+    for trade_date in sorted(d.loc[missing_mask, "trade_date"].dropna().astype(str).unique().tolist()):
+        td = _normalize_yyyymmdd_value(trade_date)
+        if not re.match(r"^\d{8}$", td):
+            continue
+        close_map = _build_trade_date_close_map(td)
+        if not close_map:
+            warnings.append(f"close_backfill_source_missing: trade_date={td}")
+            continue
+
+        mask_td = (d["trade_date"].astype(str) == td) & d["close"].isna()
+        if not mask_td.any():
+            continue
+
+        codes = d.loc[mask_td, "ts_code"].astype(str)
+        filled = codes.map(lambda x: close_map.get(x, close_map.get(_to_nosuffix(x), np.nan)))
+        d.loc[mask_td, "close"] = pd.to_numeric(filled, errors="coerce")
 
     return d
 
@@ -1071,9 +1175,8 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             }
         }
 
-    # 2) 补 close，便于算 y_next_ret
-    if "close" not in fh_df.columns:
-        fh_df["close"] = np.nan
+    # 2) 历史回填 trade_date 当天 close，便于稳定计算 y_next_ret
+    fh_df = _backfill_trade_date_close(fh_df, warnings)
     fh_df["close"] = _to_numeric_nullable(fh_df["close"])
 
     # 3) 成熟度 + 标签
