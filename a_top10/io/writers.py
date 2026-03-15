@@ -832,9 +832,14 @@ def _build_recent_perf_df(hit_hist: pd.DataFrame, settings, ctx) -> pd.DataFrame
     for _, row in hit_hist.iterrows():
         vd = _safe_str(row.get("verify_date"))
         limit_df = _load_limit_df(settings, ctx, vd) if vd else pd.DataFrame()
+        hit_val = pd.to_numeric(row.get("hit"), errors="coerce")
+        if pd.isna(hit_val):
+            hit_int = 0
+        else:
+            hit_int = int(hit_val)
         rows.append({
             "trade_date": _safe_str(row.get("trade_date")),
-            "hit": int(pd.to_numeric(row.get("hit"), errors="coerce") or 0),
+            "hit": hit_int,
             "hit_rate": _format_pct(pd.to_numeric(row.get("hit_rate"), errors="coerce")),
             "limit_count": _count_limitups(limit_df),
         })
