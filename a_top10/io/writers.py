@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -39,6 +38,21 @@ V3_PRED_BASE_COLS = [
 ]
 V3_PRED_META_COLS = ["trade_date", "verify_date", "run_id", "run_attempt", "commit_sha", "generated_at_utc"]
 V3_PRED_COLS = V3_PRED_META_COLS[:2] + V3_PRED_BASE_COLS + V3_PRED_META_COLS[2:]
+
+# decision 专用上游源表契约：
+# 只服务 top10-decision/data/pred/pred_source_latest.csv
+# 注意：这里只收敛字段，不改变原有价值排序与 rank 顺序。
+DECISION_SOURCE_BASE_COLS = [
+    "rank",
+    "ts_code",
+    "name",
+    "prob",
+    "StrengthScore",
+    "ThemeBoost",
+    "board",
+]
+DECISION_SOURCE_META_COLS = ["trade_date", "verify_date", "run_id", "run_attempt", "commit_sha", "generated_at_utc"]
+DECISION_SOURCE_COLS = DECISION_SOURCE_META_COLS[:2] + DECISION_SOURCE_BASE_COLS + DECISION_SOURCE_META_COLS[2:]
 
 FEATURE_HISTORY_COLS = [
     "run_time_utc",
@@ -293,7 +307,6 @@ def _count_limitups(limit_df: Optional[pd.DataFrame]) -> int:
     return int(len(uniq)) if uniq else int(len(limit_df))
 
 
-
 def _warehouse_snapshot_dir_candidates(trade_date: str) -> List[Path]:
     y = str(trade_date)[:4]
     return [
@@ -302,6 +315,7 @@ def _warehouse_snapshot_dir_candidates(trade_date: str) -> List[Path]:
         Path("data/raw") / y / str(trade_date),
         Path("_warehouse/data/raw") / y / str(trade_date),
     ]
+
 
 def _resolve_snapshot_dir(settings, ctx, trade_date: str) -> Optional[Path]:
     cands: List[Path] = []
@@ -531,6 +545,44 @@ def _canonicalize_prediction_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     return out.reindex(columns=V3_PRED_BASE_COLS, fill_value="")
 
 
+def _canonicalize_decision_source_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """
+    决策源表标准化：
+    - 仅服务 top10-decision/data/pred/pred_source_latest.csv
+    - 只收敛字段，不做任何重排序
+    - rank / 行顺序 / 原价值排序保持不变
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=DECISION_SOURCE_BASE_COLS)
+
+    src = df.copy()
+    out = pd.DataFrame(index=src.index)
+    code_col = _first_existing_col(src, CODE_COL_CANDIDATES)
+    name_col = _first_existing_col(src, NAME_COL_CANDIDATES)
+    board_col = _first_existing_col(src, BOARD_COL_CANDIDATES)
+
+    out["rank"] = _normalize_rank(src)
+    out["ts_code"] = src[code_col] if code_col else ""
+    out["name"] = src[name_col] if name_col else ""
+    out["board"] = src[board_col] if board_col else ""
+
+    prob_series = src["Probability"] if "Probability" in src.columns else (
+        src["prob_final"] if "prob_final" in src.columns else (src["prob_ml"] if "prob_ml" in src.columns else "")
+    )
+    out["prob"] = pd.to_numeric(prob_series, errors="coerce")
+    out["StrengthScore"] = pd.to_numeric(
+        src["StrengthScore"] if "StrengthScore" in src.columns else (src["强度得分"] if "强度得分" in src.columns else ""),
+        errors="coerce",
+    )
+    out["ThemeBoost"] = pd.to_numeric(
+        src["ThemeBoost"] if "ThemeBoost" in src.columns else (src["题材加成"] if "题材加成" in src.columns else ""),
+        errors="coerce",
+    )
+    out["rank"] = pd.to_numeric(out["rank"], errors="coerce")
+
+    return out.reindex(columns=DECISION_SOURCE_BASE_COLS, fill_value="")
+
+
 def _enrich_prediction_with_meta(df: Optional[pd.DataFrame], trade_date: str, verify_date: str, run_meta: Dict[str, str]) -> pd.DataFrame:
     base = _canonicalize_prediction_frame(df)
     out = base.copy()
@@ -541,6 +593,18 @@ def _enrich_prediction_with_meta(df: Optional[pd.DataFrame], trade_date: str, ve
     out["commit_sha"] = run_meta["commit_sha"]
     out["generated_at_utc"] = run_meta["generated_at_utc"]
     return out.reindex(columns=V3_PRED_COLS, fill_value="")
+
+
+def _enrich_decision_source_with_meta(df: Optional[pd.DataFrame], trade_date: str, verify_date: str, run_meta: Dict[str, str]) -> pd.DataFrame:
+    base = _canonicalize_decision_source_frame(df)
+    out = base.copy()
+    out.insert(0, "trade_date", trade_date)
+    out.insert(1, "verify_date", verify_date)
+    out["run_id"] = run_meta["run_id"]
+    out["run_attempt"] = run_meta["run_attempt"]
+    out["commit_sha"] = run_meta["commit_sha"]
+    out["generated_at_utc"] = run_meta["generated_at_utc"]
+    return out.reindex(columns=DECISION_SOURCE_COLS, fill_value="")
 
 
 def _build_close_map_from_ctx(ctx: Any) -> Dict[str, Any]:
@@ -1053,7 +1117,11 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     _write_text_overwrite(outdir / "latest.md", md_text, encoding="utf-8")
 
     topn_out = _enrich_prediction_with_meta(topn_df, trade_date, next_td, run_meta)
-    full_out = _enrich_prediction_with_meta(full_df, trade_date, next_td, run_meta)
+
+    # 关键改造点：
+    # pred_decisio_latest.csv 现在直接收敛为 decision 标准源表，
+    # 仅改字段契约，不改原排序，不改 rank，不改 full_df 行顺序。
+    full_out = _enrich_decision_source_with_meta(full_df, trade_date, next_td, run_meta)
 
     _write_csv_overwrite(topn_out, learning_dir / f"pred_top10_{trade_date}.csv")
     _write_csv_overwrite(topn_out, learning_dir / "pred_top10_latest.csv")
