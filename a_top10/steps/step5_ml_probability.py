@@ -2,27 +2,33 @@
 # -*- coding: utf-8 -*-
 
 """
-Step5 : V2 概率层重构版
----------------------------------
-目标：
-1. 拆分旧 Probability 语义：
-   - prob_rule
-   - prob_ml
-   - prob_final
-2. 保留兼容字段：
-   - Probability = prob_final
-3. 保持训练接口兼容：
-   - train_step5_lr
-   - train_step5_lgbm
-   - train_step5_models
-4. 接入运行模式契约：
-   - replay 默认不更新模型
-   - train 才能更新模型
-   - auto_daily 是否更新模型由门槛控制
-5. 接入 Level 1 / 2 / 3 样本门槛：
-   - Level 1:  80 <= mature_samples < 120   -> 试训，不更新正式模型
-   - Level 2: 120 <= mature_samples < 150   -> 正式训练起点
-   - Level 3: mature_samples >= 150         -> 较稳训练区
+Step5 : ML Probability — Top10 V3
+
+定位：
+- Step5 不再是 V2 的“prob_ml / prob_final 兼容层”，而是 V3 的主概率引擎。
+- 明确输出：
+    - prob_lr
+    - prob_lgbm
+    - prob_rule
+    - Probability
+    - _prob_src
+- 其中：
+    - Probability = 最终主排序概率轴
+    - _prob_src = 最终概率来源，必须可追踪
+
+兼容目标：
+- 保留训练接口：
+    - train_step5_lr
+    - train_step5_lgbm
+    - train_step5_models
+- 保留推理入口：
+    - run_step5(theme_df, s=None)
+    - run(theme_df, s=None)
+
+V3 原则：
+- Step5 内部计算允许对缺失特征做数值兜底，但不得污染上游契约字段
+- 若 ML 模型不可用，则必须显式回退到 prob_rule，并写明 _prob_src
+- 若 Probability 无法得到，则样本不应被当作正常概率样本消费
 """
 
 from __future__ import annotations
@@ -32,7 +38,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -52,6 +58,10 @@ except Exception:
     LGBMClassifier = None
 
 
+# =========================================================
+# Config
+# =========================================================
+
 FEATURES = [
     "StrengthScore",
     "ThemeBoost",
@@ -64,8 +74,9 @@ VALID_RUN_MODES = {"replay", "train", "auto_daily"}
 
 
 # =========================================================
-# basic utils
+# Basic utils
 # =========================================================
+
 def _ensure_df(x: Any) -> pd.DataFrame:
     if x is None:
         return pd.DataFrame()
@@ -110,19 +121,13 @@ def _normalize_id_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _ensure_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = _ensure_df(df)
-    for c in FEATURES:
-        if c not in df.columns:
-            df[c] = 0.0
-    for c in FEATURES:
-        df[c] = pd.to_numeric(df[c], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    return df
+def _to_numeric_nullable(sr: pd.Series) -> pd.Series:
+    return pd.to_numeric(sr, errors="coerce").replace([np.inf, -np.inf], np.nan).astype("float64")
 
 
 def _clip01(s: pd.Series | np.ndarray | float) -> pd.Series:
     if isinstance(s, pd.Series):
-        return s.clip(0.0, 1.0).astype("float64")
+        return s.astype("float64").clip(0.0, 1.0)
     arr = np.asarray(s, dtype=float)
     arr = np.clip(arr, 0.0, 1.0)
     return pd.Series(arr, dtype="float64")
@@ -161,10 +166,10 @@ def _get_outputs_dir(s=None) -> Path:
 
 def _get_ml_cfg(s=None) -> Dict[str, Any]:
     cfg = {
-        "model": "placeholder",
+        "model": "auto",                  # auto | logistic | lightgbm
         "enable_rule": True,
         "enable_ml": True,
-        "fusion_mode": "ml_first",     # ml_first | weighted
+        "fusion_mode": "ml_first",       # ml_first | weighted
         "fallback_to_rule": True,
         "clip_min": 0.0,
         "clip_max": 1.0,
@@ -181,7 +186,7 @@ def _get_ml_cfg(s=None) -> Dict[str, Any]:
     except Exception:
         pass
 
-    cfg["model"] = str(cfg.get("model", "placeholder")).lower()
+    cfg["model"] = str(cfg.get("model", "auto")).lower()
     cfg["fusion_mode"] = str(cfg.get("fusion_mode", "ml_first")).lower()
     cfg["enable_rule"] = bool(cfg.get("enable_rule", True))
     cfg["enable_ml"] = bool(cfg.get("enable_ml", True))
@@ -194,8 +199,9 @@ def _get_ml_cfg(s=None) -> Dict[str, Any]:
 
 
 # =========================================================
-# run mode / training policy
+# Run mode / training policy
 # =========================================================
+
 @dataclass
 class Step5TrainingPolicy:
     run_mode: str
@@ -226,17 +232,14 @@ def _resolve_allow_model_update(run_mode: str) -> Tuple[str, bool]:
     if raw in {"0", "false", "no", "off"}:
         return raw, False
 
-    # auto 策略
     if run_mode == "replay":
         return "auto", False
     if run_mode == "train":
         return "auto", True
-    # auto_daily: 默认先允许进入“是否可正式更新”的判断链
     return "auto", True
 
 
 def _policy_value_from_settings(s: Any, *names: str, default: Any) -> Any:
-    # 优先从 settings.training 取；再从 settings.ml 取；最后 default
     for obj_name in ["training", "ml"]:
         try:
             obj = getattr(s, obj_name, None)
@@ -291,22 +294,31 @@ def _can_formal_update(level: str, policy: Step5TrainingPolicy) -> bool:
 
 
 # =========================================================
-# step3 backfill for missing features
+# Step3 feature backfill
 # =========================================================
+
 def _backfill_features_from_step3(raw_df: pd.DataFrame, trade_date: str, outputs_dir: Path) -> pd.DataFrame:
+    """
+    允许从 Step3 产物回填核心特征，但只在当前 df 缺列或几乎全空/全零时回填。
+    """
     raw_df = _normalize_id_columns(raw_df)
     if raw_df.empty or "ts_code" not in raw_df.columns:
         return raw_df
 
     need_cols = ["StrengthScore", "seal_amount", "open_times", "turnover_rate"]
     missing = []
+
     for c in need_cols:
         if c not in raw_df.columns:
             missing.append(c)
-        else:
-            vals = pd.to_numeric(raw_df[c], errors="coerce").fillna(0.0)
-            if float((vals != 0).mean()) < 0.01:
-                missing.append(c)
+            continue
+
+        vals = _to_numeric_nullable(raw_df[c])
+        nonnull_ratio = float(vals.notna().mean()) if len(vals) else 0.0
+        nonzero_ratio = float((vals.fillna(0.0) != 0.0).mean()) if len(vals) else 0.0
+
+        if nonnull_ratio < 0.01 or nonzero_ratio < 0.01:
+            missing.append(c)
 
     if not missing:
         return raw_df
@@ -339,22 +351,48 @@ def _backfill_features_from_step3(raw_df: pd.DataFrame, trade_date: str, outputs
         return raw_df
 
     merged = raw_df.merge(step3_df[use_cols], on="ts_code", how="left", suffixes=("", "_s3"))
+
     for c in need_cols:
-        if c in merged.columns and f"{c}_s3" in merged.columns:
-            cur = pd.to_numeric(merged[c], errors="coerce").fillna(0.0)
-            ext = pd.to_numeric(merged[f"{c}_s3"], errors="coerce").fillna(0.0)
-            merged[c] = np.where(cur == 0, ext, cur)
-            merged.drop(columns=[f"{c}_s3"], inplace=True, errors="ignore")
-        elif c not in merged.columns and f"{c}_s3" in merged.columns:
-            merged[c] = pd.to_numeric(merged[f"{c}_s3"], errors="coerce").fillna(0.0)
-            merged.drop(columns=[f"{c}_s3"], inplace=True, errors="ignore")
+        s3 = f"{c}_s3"
+        if c in merged.columns and s3 in merged.columns:
+            cur = _to_numeric_nullable(merged[c])
+            ext = _to_numeric_nullable(merged[s3])
+
+            cur_bad = cur.isna() | (cur.fillna(0.0) == 0.0)
+            merged[c] = cur.where(~cur_bad, ext)
+            merged.drop(columns=[s3], inplace=True, errors="ignore")
+        elif c not in merged.columns and s3 in merged.columns:
+            merged[c] = _to_numeric_nullable(merged[s3])
+            merged.drop(columns=[s3], inplace=True, errors="ignore")
 
     return merged
 
 
 # =========================================================
-# model io
+# Inference feature prep
 # =========================================================
+
+def _ensure_inference_input(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    仅为 Step5 内部推理准备数值特征。
+    不对外伪造契约字段。
+    """
+    df = _ensure_df(df)
+    for c in FEATURES:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    feat = df.copy()
+    for c in FEATURES:
+        feat[c] = _to_numeric_nullable(feat[c]).fillna(0.0)
+
+    return feat
+
+
+# =========================================================
+# Model IO
+# =========================================================
+
 @dataclass
 class Step5ModelPaths:
     base: Path
@@ -411,11 +449,12 @@ def load_lgbm(s=None):
 
 
 # =========================================================
-# train dataset
+# Training dataset
 # =========================================================
-def _load_step4_theme_history(s, lookback: int, theme_file_name: str) -> pd.DataFrame:
+
+def _load_feature_history(s) -> pd.DataFrame:
     outputs_dir = _get_outputs_dir(s)
-    fp = outputs_dir / "learning" / theme_file_name
+    fp = outputs_dir / "learning" / "feature_history.csv"
     if not fp.exists():
         return pd.DataFrame()
     try:
@@ -428,10 +467,6 @@ def _load_step4_theme_history(s, lookback: int, theme_file_name: str) -> pd.Data
 
 
 def _sample_feature_coverage(df: pd.DataFrame) -> float:
-    """
-    用原始列的非空覆盖率估计特征成熟度。
-    不把补零后的 _ensure_features 误当作真实完整率。
-    """
     if df is None or df.empty:
         return 0.0
 
@@ -442,26 +477,27 @@ def _sample_feature_coverage(df: pd.DataFrame) -> float:
             continue
         s = pd.to_numeric(df[c], errors="coerce")
         coverages.append(float(s.notna().mean()))
-    if not coverages:
-        return 0.0
-    return float(np.mean(coverages))
+    return float(np.mean(coverages)) if coverages else 0.0
 
 
-def _build_X_y_from_theme_history(
+def _build_X_y_from_feature_history(
     s,
     lookback: int,
-    theme_file_name: str,
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
-    hist = _load_step4_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
+    hist = _load_feature_history(s)
     hist = _normalize_id_columns(hist)
-    if hist.empty or "trade_date" not in hist.columns or "ts_code" not in hist.columns:
+
+    required = {"trade_date", "ts_code", "y_limit_hit", "is_sample_mature"}
+    if hist.empty or not required.issubset(set(hist.columns)):
         return np.zeros((0, len(FEATURES))), np.zeros((0,)), {
             "mature_samples": 0,
             "positive_samples": 0,
             "feature_coverage": 0.0,
+            "reason": "feature_history_missing_or_unlabeled",
         }
 
-    dates = sorted(hist["trade_date"].astype(str).unique())
+    hist["trade_date"] = hist["trade_date"].astype(str).str.strip()
+    dates = sorted(hist["trade_date"].unique())
     if lookback > 0:
         dates = dates[-lookback:]
 
@@ -469,38 +505,33 @@ def _build_X_y_from_theme_history(
     y = []
     coverage_list = []
 
-    for i, d in enumerate(dates[:-1]):
-        next_d = dates[i + 1]
-        df_day = hist[hist["trade_date"].astype(str) == str(d)].copy()
+    for d in dates:
+        df_day = hist[hist["trade_date"] == str(d)].copy()
+        if df_day.empty:
+            continue
+
+        mature = pd.to_numeric(df_day.get("is_sample_mature"), errors="coerce").fillna(0.0)
+        label = pd.to_numeric(df_day.get("y_limit_hit"), errors="coerce")
+
+        df_day = df_day[(mature > 0.5) & label.notna()].copy()
         if df_day.empty:
             continue
 
         coverage_list.append(_sample_feature_coverage(df_day))
 
-        df_limit = pd.DataFrame()
-        try:
-            if hasattr(s, "data_repo") and hasattr(s.data_repo, "read_limit_list"):
-                df_limit = s.data_repo.read_limit_list(next_d)
-        except Exception:
-            df_limit = pd.DataFrame()
+        feat = _ensure_inference_input(df_day)
+        yy = pd.to_numeric(df_day["y_limit_hit"], errors="coerce").fillna(0.0).astype(int)
 
-        lim = set()
-        if isinstance(df_limit, pd.DataFrame) and not df_limit.empty:
-            df_limit = _normalize_id_columns(df_limit)
-            if "ts_code" in df_limit.columns:
-                lim = set(df_limit["ts_code"].astype(str))
-
-        feat = _ensure_features(df_day)
-        for j in range(len(df_day)):
-            rows.append(feat[FEATURES].iloc[j].astype(float).values)
-            code = str(df_day["ts_code"].iloc[j]).strip()
-            y.append(1 if code in lim else 0)
+        for i in range(len(df_day)):
+            rows.append(feat[FEATURES].iloc[i].astype(float).values)
+            y.append(int(yy.iloc[i]))
 
     if not rows:
         return np.zeros((0, len(FEATURES))), np.zeros((0,)), {
             "mature_samples": 0,
             "positive_samples": 0,
             "feature_coverage": 0.0,
+            "reason": "no_mature_labeled_rows",
         }
 
     X = np.asarray(rows, dtype=float)
@@ -509,6 +540,7 @@ def _build_X_y_from_theme_history(
         "mature_samples": int(X.shape[0]),
         "positive_samples": int(yy.sum()),
         "feature_coverage": float(np.mean(coverage_list)) if coverage_list else 0.0,
+        "reason": "ok",
     }
     return X, yy, meta
 
@@ -535,36 +567,29 @@ def _training_gate_summary(
     }
 
     if level == "below_level1":
-        summary["ok"] = False
-        summary["trained"] = False
-        summary["updated"] = False
-        summary["reason"] = "below_level1_min_samples"
+        summary.update({"ok": False, "trained": False, "updated": False, "reason": "below_level1_min_samples"})
         return summary
 
     if pos_samples < policy.min_positive_samples:
-        summary["ok"] = False
-        summary["trained"] = False
-        summary["updated"] = False
-        summary["reason"] = "insufficient_positive_samples"
+        summary.update({"ok": False, "trained": False, "updated": False, "reason": "insufficient_positive_samples"})
         return summary
 
     if feature_coverage < policy.min_feature_coverage:
-        summary["ok"] = False
-        summary["trained"] = False
-        summary["updated"] = False
-        summary["reason"] = "insufficient_feature_coverage"
+        summary.update({"ok": False, "trained": False, "updated": False, "reason": "insufficient_feature_coverage"})
         return summary
 
-    summary["ok"] = True
-    summary["trained"] = True
-    summary["updated"] = False
-    summary["reason"] = "ready_for_training"
+    summary.update({"ok": True, "trained": True, "updated": False, "reason": "ready_for_training"})
     return summary
 
 
 def train_step5_lr(s, lookback: int = 120, theme_file_name: str = "step4_theme.csv") -> Dict[str, Any]:
+    """
+    保留旧签名兼容，但 V3 正式训练不再依赖 step4_theme.csv，
+    而是依赖已成熟、已打标签的 feature_history.csv。
+    """
     policy = _get_training_policy(s)
-    X, y, meta = _build_X_y_from_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
+    X, y, meta = _build_X_y_from_feature_history(s, lookback=lookback)
+
     n_samples = int(meta.get("mature_samples", 0))
     pos_samples = int(meta.get("positive_samples", 0))
     feature_coverage = float(meta.get("feature_coverage", 0.0))
@@ -575,25 +600,22 @@ def train_step5_lr(s, lookback: int = 120, theme_file_name: str = "step4_theme.c
         feature_coverage=feature_coverage,
         policy=policy,
     )
+    summary["data_reason"] = meta.get("reason", "")
 
     if not summary.get("ok"):
         return summary
 
     if len(np.unique(y)) < 2:
-        summary["ok"] = False
-        summary["trained"] = False
-        summary["updated"] = False
-        summary["reason"] = "single_class_labels"
+        summary.update({"ok": False, "trained": False, "updated": False, "reason": "single_class_labels"})
         return summary
 
     model = Pipeline(
         steps=[
             ("scaler", StandardScaler(with_mean=True, with_std=True)),
-            ("lr", LogisticRegression(max_iter=200, class_weight="balanced")),
+            ("lr", LogisticRegression(max_iter=300, class_weight="balanced")),
         ]
     )
     model.fit(X, y)
-
     summary["trained"] = True
 
     level = str(summary.get("level", ""))
@@ -627,7 +649,7 @@ def train_step5_lgbm(s, lookback: int = 150, theme_file_name: str = "step4_theme
             "reason": "lightgbm_not_installed",
         }
 
-    X, y, meta = _build_X_y_from_theme_history(s, lookback=lookback, theme_file_name=theme_file_name)
+    X, y, meta = _build_X_y_from_feature_history(s, lookback=lookback)
     n_samples = int(meta.get("mature_samples", 0))
     pos_samples = int(meta.get("positive_samples", 0))
     feature_coverage = float(meta.get("feature_coverage", 0.0))
@@ -638,15 +660,13 @@ def train_step5_lgbm(s, lookback: int = 150, theme_file_name: str = "step4_theme
         feature_coverage=feature_coverage,
         policy=policy,
     )
+    summary["data_reason"] = meta.get("reason", "")
 
     if not summary.get("ok"):
         return summary
 
     if len(np.unique(y)) < 2:
-        summary["ok"] = False
-        summary["trained"] = False
-        summary["updated"] = False
-        summary["reason"] = "single_class_labels"
+        summary.update({"ok": False, "trained": False, "updated": False, "reason": "single_class_labels"})
         return summary
 
     model = LGBMClassifier(
@@ -658,7 +678,6 @@ def train_step5_lgbm(s, lookback: int = 150, theme_file_name: str = "step4_theme
         random_state=42,
     )
     model.fit(X, y)
-
     summary["trained"] = True
 
     level = str(summary.get("level", ""))
@@ -693,17 +712,25 @@ def train_step5_models(s, lookback: int = 150, theme_file_name: str = "step4_the
 
 
 # =========================================================
-# probability layers
+# Probability layers
 # =========================================================
+
 def _calc_prob_rule(df: pd.DataFrame) -> pd.Series:
-    feat = _ensure_features(df)
+    """
+    规则概率：
+    - 只用于主模型缺失 / 融合补充
+    - 内部用数值兜底，不反写上游契约字段
+    """
+    feat = _ensure_inference_input(df)
+
     strength = _clip01(feat["StrengthScore"] / 100.0)
-    theme = _clip01(feat["ThemeBoost"] / 1.30)
+    theme = _clip01(feat["ThemeBoost"])  # ThemeBoost 本身就是 0~1
 
     turnover = feat["turnover_rate"].astype(float)
     turnover_score = pd.Series(
         np.where(turnover <= 0, 0.0, np.exp(-((turnover - 18.0) / 12.0) ** 2)),
         index=df.index,
+        dtype="float64",
     )
     turnover_score = _clip01(turnover_score)
 
@@ -723,98 +750,129 @@ def _calc_prob_rule(df: pd.DataFrame) -> pd.Series:
     return _clip01(rule)
 
 
-def _calc_prob_ml(df: pd.DataFrame, s=None) -> Tuple[pd.Series, pd.Series, pd.Series]:
-    feat = _ensure_features(df)
+def _predict_with_model(model: Any, X: np.ndarray, index: pd.Index) -> pd.Series:
+    if model is None:
+        return pd.Series([np.nan] * len(index), index=index, dtype="float64")
+    try:
+        if hasattr(model, "predict_proba"):
+            proba = model.predict_proba(X)[:, 1]
+        else:
+            proba = model.predict(X)
+        return _clip01(pd.Series(proba, index=index, dtype="float64"))
+    except Exception:
+        return pd.Series([np.nan] * len(index), index=index, dtype="float64")
+
+
+def _calc_prob_ml(df: pd.DataFrame, s=None) -> Tuple[pd.Series, pd.Series]:
+    feat = _ensure_inference_input(df)
     X = feat[FEATURES].astype(float).values
 
-    model_cfg = _get_ml_cfg(s)
-    model_pref = str(model_cfg.get("model", "placeholder")).lower()
+    lr_model = load_lr(s)
+    lgbm_model = load_lgbm(s)
 
-    prob_ml = pd.Series([np.nan] * len(df), index=df.index, dtype="float64")
-    prob_src = pd.Series(["rule_only"] * len(df), index=df.index, dtype="object")
-    ml_avail = pd.Series([False] * len(df), index=df.index, dtype="bool")
-
-    candidates = []
-    if model_pref == "lightgbm":
-        candidates = [("lgbm", load_lgbm(s)), ("lr", load_lr(s))]
-    elif model_pref == "logistic":
-        candidates = [("lr", load_lr(s)), ("lgbm", load_lgbm(s))]
-    else:
-        candidates = [("lgbm", load_lgbm(s)), ("lr", load_lr(s))]
-
-    used_name = None
-    used_model = None
-    for name, mdl in candidates:
-        if mdl is not None:
-            used_name = name
-            used_model = mdl
-            break
-
-    if used_model is None:
-        return prob_ml, prob_src, ml_avail
-
-    try:
-        if hasattr(used_model, "predict_proba"):
-            proba = used_model.predict_proba(X)[:, 1]
-        else:
-            proba = used_model.predict(X)
-        prob_ml = _clip01(pd.Series(proba, index=df.index, dtype="float64"))
-        prob_src[:] = f"ml:{used_name}"
-        ml_avail[:] = True
-        return prob_ml, prob_src, ml_avail
-    except Exception:
-        return pd.Series([np.nan] * len(df), index=df.index, dtype="float64"), prob_src, ml_avail
+    prob_lr = _predict_with_model(lr_model, X, df.index)
+    prob_lgbm = _predict_with_model(lgbm_model, X, df.index)
+    return prob_lr, prob_lgbm
 
 
 def _fuse_probabilities(
     prob_rule: pd.Series,
-    prob_ml: pd.Series,
+    prob_lr: pd.Series,
+    prob_lgbm: pd.Series,
     s=None,
-) -> Tuple[pd.Series, pd.Series, pd.Series]:
+) -> Tuple[pd.Series, pd.Series]:
     cfg = _get_ml_cfg(s)
+    model_pref = str(cfg.get("model", "auto")).lower()
     fusion_mode = str(cfg.get("fusion_mode", "ml_first")).lower()
     fallback_to_rule = bool(cfg.get("fallback_to_rule", True))
     w_rule = float(cfg.get("rule_weight", 0.30))
     w_ml = float(cfg.get("ml_weight", 0.70))
+
     w_sum = max(1e-12, w_rule + w_ml)
     w_rule /= w_sum
     w_ml /= w_sum
 
-    prob_final = pd.Series(index=prob_rule.index, dtype="float64")
-    prob_src = pd.Series(index=prob_rule.index, dtype="object")
-    prob_fusion_mode = pd.Series(index=prob_rule.index, dtype="object")
-
-    ml_ok = prob_ml.notna()
-
-    if fusion_mode == "weighted":
-        fused = w_rule * prob_rule.fillna(0.0) + w_ml * prob_ml.fillna(prob_rule.fillna(0.0))
-        prob_final[:] = fused
-        prob_final = _clip01(prob_final)
-        prob_src[:] = np.where(ml_ok, "rule+ml", "rule_only")
-        prob_fusion_mode[:] = np.where(ml_ok, "weighted", "fallback_rule")
+    # 选择主 ML 源
+    if model_pref == "logistic":
+        ml_main = prob_lr
+        ml_name = "lr"
+    elif model_pref == "lightgbm":
+        ml_main = prob_lgbm
+        ml_name = "lgbm"
     else:
-        if fallback_to_rule:
-            prob_final[:] = np.where(ml_ok, prob_ml, prob_rule)
-            prob_src[:] = np.where(ml_ok, "ml", "rule_only")
-            prob_fusion_mode[:] = np.where(ml_ok, "ml_first", "fallback_rule")
+        # auto: 优先 lgbm，再 lr
+        lgbm_ok = prob_lgbm.notna()
+        lr_ok = prob_lr.notna()
+        ml_main = prob_lgbm.where(lgbm_ok, prob_lr)
+        # 每行动态来源
+        ml_name = None
+
+    Probability = pd.Series([np.nan] * len(prob_rule), index=prob_rule.index, dtype="float64")
+    src = pd.Series(["unresolved"] * len(prob_rule), index=prob_rule.index, dtype="object")
+
+    if model_pref in {"logistic", "lightgbm"}:
+        ml_ok = ml_main.notna()
+
+        if fusion_mode == "weighted":
+            fused = w_rule * prob_rule.fillna(0.0) + w_ml * ml_main.fillna(prob_rule.fillna(0.0))
+            Probability[:] = fused
+            src[:] = np.where(ml_ok, f"blend:{ml_name}+rule", "fallback_rule")
         else:
-            prob_final[:] = prob_ml
-            prob_src[:] = np.where(ml_ok, "ml", "ml_missing")
-            prob_fusion_mode[:] = "ml_only"
+            if fallback_to_rule:
+                Probability[:] = np.where(ml_ok, ml_main, prob_rule)
+                src[:] = np.where(ml_ok, ml_name, "fallback_rule")
+            else:
+                Probability[:] = ml_main
+                src[:] = np.where(ml_ok, ml_name, "ml_missing")
 
-    prob_final = _clip01(prob_final.fillna(prob_rule.fillna(0.0)))
-    return prob_final, prob_src.astype("object"), prob_fusion_mode.astype("object")
+    else:
+        # auto 模式：优先 lgbm，次选 lr，最后 rule
+        lgbm_ok = prob_lgbm.notna()
+        lr_ok = prob_lr.notna()
+
+        if fusion_mode == "weighted":
+            # auto-weighted：优先选可用主 ML，再和 rule 融合
+            ml_any = prob_lgbm.where(lgbm_ok, prob_lr)
+            Probability[:] = w_rule * prob_rule.fillna(0.0) + w_ml * ml_any.fillna(prob_rule.fillna(0.0))
+            src[:] = np.where(
+                lgbm_ok,
+                "blend:lgbm+rule",
+                np.where(lr_ok, "blend:lr+rule", "fallback_rule"),
+            )
+        else:
+            if fallback_to_rule:
+                Probability[:] = np.where(
+                    lgbm_ok,
+                    prob_lgbm,
+                    np.where(lr_ok, prob_lr, prob_rule),
+                )
+                src[:] = np.where(
+                    lgbm_ok,
+                    "lgbm",
+                    np.where(lr_ok, "lr", "fallback_rule"),
+                )
+            else:
+                Probability[:] = np.where(lgbm_ok, prob_lgbm, prob_lr)
+                src[:] = np.where(lgbm_ok, "lgbm", np.where(lr_ok, "lr", "ml_missing"))
+
+    Probability = _clip01(Probability.fillna(prob_rule.fillna(0.0)))
+    return Probability.astype("float64"), src.astype("object")
 
 
 # =========================================================
-# feature_history
+# feature_history append (compat)
 # =========================================================
+
 def _write_feature_history(
     raw_input_df: pd.DataFrame,
     out_df: pd.DataFrame,
     trade_date: str,
     s=None,
 ) -> Dict[str, Any]:
+    """
+    当前仍保留 Step5 对 feature_history 的兼容写入。
+    后续 writers.py 收口后，这里仍可继续保留，但不应与 writers 冲突。
+    """
     try:
         outputs_dir = _get_outputs_dir(s)
         raw_input_df = _normalize_id_columns(_ensure_df(raw_input_df))
@@ -824,7 +882,6 @@ def _write_feature_history(
             return {"ok": False, "reason": "raw_input invalid"}
 
         raw_input_df = _backfill_features_from_step3(raw_input_df, trade_date=trade_date, outputs_dir=outputs_dir)
-        feat = _ensure_features(raw_input_df)
 
         tmp = pd.DataFrame(index=raw_input_df.index)
         tmp["trade_date"] = str(trade_date).strip()
@@ -834,18 +891,12 @@ def _write_feature_history(
         tmp["name"] = raw_input_df[name_col].astype(str) if name_col else ""
 
         for c in FEATURES:
-            tmp[c] = pd.to_numeric(feat[c], errors="coerce").fillna(0.0)
+            if c in raw_input_df.columns:
+                tmp[c] = _to_numeric_nullable(raw_input_df[c])
+            else:
+                tmp[c] = np.nan
 
-        keep_cols = [
-            "prob_rule",
-            "prob_ml",
-            "prob_final",
-            "Probability",
-            "prob_src",
-            "prob_ml_available",
-            "prob_fusion_mode",
-        ]
-        for c in keep_cols:
+        for c in ["prob_lr", "prob_lgbm", "prob_rule", "Probability", "_prob_src"]:
             if c in out_df.columns:
                 tmp[c] = out_df[c]
 
@@ -858,19 +909,19 @@ def _write_feature_history(
 
         if fp.exists():
             try:
-                old = pd.read_csv(fp, dtype=str, encoding="utf-8")
+                old = pd.read_csv(fp)
             except Exception:
                 old = pd.DataFrame()
-            merged = pd.concat([old, tmp.astype(str)], ignore_index=True, sort=False)
+            merged = pd.concat([old, tmp], ignore_index=True, sort=False)
         else:
-            merged = tmp.astype(str)
+            merged = tmp
 
         merged["trade_date"] = merged.get("trade_date", "").astype(str).str.strip()
         merged["ts_code"] = merged.get("ts_code", "").astype(str).str.strip()
         merged = merged.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
 
-        if "prob_final" in merged.columns:
-            merged["_sort_prob"] = pd.to_numeric(merged["prob_final"], errors="coerce").fillna(0.0)
+        if "Probability" in merged.columns:
+            merged["_sort_prob"] = pd.to_numeric(merged["Probability"], errors="coerce").fillna(0.0)
             merged = merged.sort_values(["trade_date", "_sort_prob"], ascending=[True, False])
             merged = merged.drop(columns=["_sort_prob"], errors="ignore")
 
@@ -881,24 +932,15 @@ def _write_feature_history(
 
 
 # =========================================================
-# main inference
+# Main inference
 # =========================================================
+
 def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
     raw_input = _ensure_df(theme_df)
     if raw_input.empty:
         out = pd.DataFrame()
-        for c in [
-            "prob_rule",
-            "prob_ml",
-            "prob_final",
-            "Probability",
-            "prob_src",
-            "prob_ml_available",
-            "prob_fusion_mode",
-        ]:
-            out[c] = pd.Series(
-                dtype="float64" if "prob" in c.lower() and c not in ["prob_src", "prob_fusion_mode"] else "object"
-            )
+        for c in ["prob_lr", "prob_lgbm", "prob_rule", "Probability", "_prob_src"]:
+            out[c] = pd.Series(dtype="float64" if c != "_prob_src" else "object")
         return out
 
     trade_date = _guess_trade_date(raw_input)
@@ -906,47 +948,44 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
 
     out = _normalize_id_columns(raw_input)
     out = _backfill_features_from_step3(out, trade_date=trade_date, outputs_dir=outputs_dir)
-    out = _ensure_features(out)
 
-    rule_cfg = _get_ml_cfg(s)
-    enable_rule = bool(rule_cfg.get("enable_rule", True))
-    enable_ml = bool(rule_cfg.get("enable_ml", True))
+    cfg = _get_ml_cfg(s)
+    enable_rule = bool(cfg.get("enable_rule", True))
+    enable_ml = bool(cfg.get("enable_ml", True))
 
     if enable_rule:
         out["prob_rule"] = _calc_prob_rule(out)
     else:
-        out["prob_rule"] = pd.Series([0.0] * len(out), index=out.index, dtype="float64")
+        out["prob_rule"] = pd.Series([np.nan] * len(out), index=out.index, dtype="float64")
 
     if enable_ml:
-        prob_ml, _raw_ml_src, prob_ml_available = _calc_prob_ml(out, s=s)
-        out["prob_ml"] = prob_ml
-        out["prob_ml_available"] = prob_ml_available.astype(bool)
+        prob_lr, prob_lgbm = _calc_prob_ml(out, s=s)
+        out["prob_lr"] = prob_lr
+        out["prob_lgbm"] = prob_lgbm
     else:
-        out["prob_ml"] = pd.Series([np.nan] * len(out), index=out.index, dtype="float64")
-        out["prob_ml_available"] = pd.Series([False] * len(out), index=out.index, dtype="bool")
+        out["prob_lr"] = pd.Series([np.nan] * len(out), index=out.index, dtype="float64")
+        out["prob_lgbm"] = pd.Series([np.nan] * len(out), index=out.index, dtype="float64")
 
-    prob_final, prob_src, prob_fusion_mode = _fuse_probabilities(
-        prob_rule=out["prob_rule"].astype("float64"),
-        prob_ml=pd.to_numeric(out["prob_ml"], errors="coerce"),
+    Probability, _prob_src = _fuse_probabilities(
+        prob_rule=pd.to_numeric(out["prob_rule"], errors="coerce"),
+        prob_lr=pd.to_numeric(out["prob_lr"], errors="coerce"),
+        prob_lgbm=pd.to_numeric(out["prob_lgbm"], errors="coerce"),
         s=s,
     )
 
-    out["prob_final"] = prob_final.astype("float64")
-    out["Probability"] = out["prob_final"].astype("float64")
-    out["prob_src"] = prob_src.astype("object")
-    out["prob_fusion_mode"] = prob_fusion_mode.astype("object")
+    out["Probability"] = Probability.astype("float64")
+    out["_prob_src"] = _prob_src.astype("object")
     out["run_mode"] = _resolve_run_mode()
-
-    clip_min = float(rule_cfg.get("clip_min", 0.0))
-    clip_max = float(rule_cfg.get("clip_max", 1.0))
-    for c in ["prob_rule", "prob_ml", "prob_final", "Probability"]:
-        out[c] = pd.to_numeric(out[c], errors="coerce").clip(clip_min, clip_max)
-
     out["run_time_utc"] = _utc_now_iso()
+
+    clip_min = float(cfg.get("clip_min", 0.0))
+    clip_max = float(cfg.get("clip_max", 1.0))
+    for c in ["prob_lr", "prob_lgbm", "prob_rule", "Probability"]:
+        out[c] = pd.to_numeric(out[c], errors="coerce").clip(clip_min, clip_max)
 
     _write_feature_history(raw_input_df=raw_input, out_df=out, trade_date=trade_date, s=s)
 
-    sort_cols = ["prob_final"]
+    sort_cols = ["Probability"]
     if "StrengthScore" in out.columns:
         sort_cols.append("StrengthScore")
     ascending = [False] * len(sort_cols)
@@ -961,13 +1000,11 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         "seal_amount",
         "open_times",
         "turnover_rate",
+        "prob_lr",
+        "prob_lgbm",
         "prob_rule",
-        "prob_ml",
-        "prob_final",
         "Probability",
-        "prob_src",
-        "prob_ml_available",
-        "prob_fusion_mode",
+        "_prob_src",
         "run_mode",
         "run_time_utc",
     ]
