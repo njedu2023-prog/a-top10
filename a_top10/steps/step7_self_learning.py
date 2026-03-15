@@ -628,27 +628,44 @@ def _apply_maturity_and_labels(df: pd.DataFrame, snapshot_dates: List[str], uppe
 # ============================================================
 
 def _sample_reject_reason(row: pd.Series) -> str:
-    for c in ["trade_date", "ts_code", "StrengthScore", "ThemeBoost", "Probability", "_prob_src"]:
-        v = row.get(c, np.nan)
-        if c in {"trade_date", "ts_code", "_prob_src"}:
-            if _safe_str(v) == "":
-                return f"missing_{c.lower()}"
-        else:
-            if pd.isna(pd.to_numeric(v, errors="coerce")):
-                return f"missing_{c.lower()}"
+    trade_date = _safe_str(row.get("trade_date"))
+    ts_code = _safe_str(row.get("ts_code"))
 
-    if int(pd.to_numeric(row.get("is_sample_mature"), errors="coerce") or 0) != 1:
+    if trade_date == "":
+        return "missing_trade_date"
+    if ts_code == "":
+        return "missing_ts_code"
+
+    mature_reason = _safe_str(row.get("mature_reason"))
+    is_mature = int(pd.to_numeric(row.get("is_sample_mature"), errors="coerce") or 0)
+    if is_mature != 1:
+        if mature_reason == "next_snapshot_not_ready":
+            return "pending_next_snapshot"
+        if mature_reason == "truth_source_missing":
+            return "pending_truth_source"
+        if mature_reason == "missing_ts_code":
+            return "invalid_missing_ts_code"
         return "sample_not_mature"
+
+    if pd.isna(pd.to_numeric(row.get("StrengthScore"), errors="coerce")):
+        return "missing_strengthscore"
+    if pd.isna(pd.to_numeric(row.get("ThemeBoost"), errors="coerce")):
+        return "missing_themeboost"
+    if pd.isna(pd.to_numeric(row.get("Probability"), errors="coerce")):
+        return "missing_probability"
+
+    prob_src = _safe_str(row.get("_prob_src"))
+    if prob_src == "":
+        return "missing_prob_src"
 
     if pd.isna(pd.to_numeric(row.get("y_limit_hit"), errors="coerce")):
         return "missing_label"
 
-    micro_missing = 0
-    for c in MICROSTRUCTURE_FIELDS:
-        if pd.isna(pd.to_numeric(row.get(c), errors="coerce")):
-            micro_missing += 1
-    if micro_missing == 3:
+    micro_missing_cols = [c for c in MICROSTRUCTURE_FIELDS if pd.isna(pd.to_numeric(row.get(c), errors="coerce"))]
+    if len(micro_missing_cols) == len(MICROSTRUCTURE_FIELDS):
         return "missing_microstructure_cluster"
+    if len(micro_missing_cols) >= 2:
+        return "weak_microstructure_coverage"
 
     return ""
 
@@ -703,6 +720,38 @@ def _apply_sample_gate(df: pd.DataFrame) -> pd.DataFrame:
     d["sample_quality_grade"] = quality_grade
     d["gate_version"] = GATE_VERSION
     return d
+
+
+def _reject_reason_summary(df: pd.DataFrame) -> Dict[str, Any]:
+    if df is None or df.empty:
+        return {"total_rows": 0, "learnable_rows": 0, "rejected_rows": 0, "top_reasons": [], "reasons": {}, "trade_dates": {}}
+
+    d = df.copy()
+    d["trade_date"] = d["trade_date"].astype(str).map(_normalize_yyyymmdd_value)
+    d["reject_reason"] = d.get("reject_reason", "").astype(str).str.strip()
+    d["learnable_flag"] = pd.to_numeric(d.get("learnable_flag"), errors="coerce").fillna(0).astype(int)
+
+    rejected = d[d["reject_reason"] != ""].copy()
+    reason_counts = rejected["reject_reason"].value_counts(dropna=False).to_dict()
+    top_reasons = [{"reason": str(k), "count": int(v)} for k, v in list(reason_counts.items())[:12]]
+
+    trade_date_summary: Dict[str, Any] = {}
+    if not rejected.empty:
+        for td, part in rejected.groupby("trade_date", sort=True):
+            counts = part["reject_reason"].value_counts(dropna=False).to_dict()
+            trade_date_summary[str(td)] = {
+                "rejected_rows": int(len(part)),
+                "top_reasons": [{"reason": str(k), "count": int(v)} for k, v in list(counts.items())[:5]],
+            }
+
+    return {
+        "total_rows": int(len(d)),
+        "learnable_rows": int((d["learnable_flag"] > 0).sum()),
+        "rejected_rows": int(len(rejected)),
+        "top_reasons": top_reasons,
+        "reasons": {str(k): int(v) for k, v in reason_counts.items()},
+        "trade_dates": trade_date_summary,
+    }
 
 
 # ============================================================
@@ -1031,7 +1080,7 @@ def _train_models_pipeline(s: Settings, df: pd.DataFrame, batch_gate: Dict[str, 
         return out
 
     try:
-        train_res = train_step5_models(s=s, lookback=150)
+        train_res = train_step5_models(s=s, lookback=150, eligible_trade_dates=pass_dates)
         out["trained"] = bool(train_res.get("ok"))
         out["updated"] = bool(train_res.get("updated"))
         out["detail"]["step5_train_result"] = train_res
@@ -1065,6 +1114,7 @@ def render_report_md(report: Dict[str, Any]) -> str:
     latest_hit = report.get("latest_hit")
     train_result = report.get("train_result", {}) or {}
     batch_gate = report.get("batch_gate", {}) or {}
+    reject_summary = report.get("reject_reason_summary", {}) or {}
     warnings = report.get("warnings", []) or []
     hit_rows_done_last10 = report.get("hit_rows_done_last10", []) or []
 
@@ -1107,6 +1157,16 @@ def render_report_md(report: Dict[str, Any]) -> str:
     md_lines.append(f"- pass_dates：{len(batch_gate.get('pass_dates', []) or [])}")
     md_lines.append(f"- fail_dates：{len(batch_gate.get('fail_dates', []) or [])}")
     md_lines.append(f"- eligible_train_rows：{batch_gate.get('eligible_train_rows', 0)}")
+
+    md_lines.append("")
+    md_lines.append("## 2.1) 样本拒绝分布")
+    md_lines.append("")
+    md_lines.append(f"- total_rows：{reject_summary.get('total_rows', 0)}")
+    md_lines.append(f"- learnable_rows：{reject_summary.get('learnable_rows', 0)}")
+    md_lines.append(f"- rejected_rows：{reject_summary.get('rejected_rows', 0)}")
+    if reject_summary.get("top_reasons"):
+        md_lines.append("")
+        md_lines.append(_md_table(reject_summary.get("top_reasons", []), cols=["reason", "count"]))
 
     md_lines.append("")
     md_lines.append("## 3) 训练执行结果")
@@ -1164,6 +1224,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             "label_upper_bound_yyyymmdd": upper_bound,
             "feature_history_file": str(fh_path),
             "batch_gate": {"pass": False, "reason": "feature_history empty", "days": {}, "pass_dates": [], "fail_dates": [], "eligible_train_rows": 0, "eligible_positive_rows": 0},
+            "reject_reason_summary": {"total_rows": 0, "learnable_rows": 0, "rejected_rows": 0, "top_reasons": [], "reasons": {}, "trade_dates": {}},
             "train_result": {"trained": False, "updated": False, "detail": {"reason": "feature_history empty"}},
             "latest_hit": None,
             "hit_rows_done_last10": [],
@@ -1190,6 +1251,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
 
     fh_df = _apply_maturity_and_labels(fh_df, snapshot_dates=snapshot_dates, upper_bound=upper_bound, warnings=warnings)
     fh_df = _apply_sample_gate(fh_df)
+    reject_reason_summary = _reject_reason_summary(fh_df)
 
     batch_gate = _batch_gate_report(fh_df)
     fh_df = _write_batch_quality_score(fh_df, batch_gate)
@@ -1220,6 +1282,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
         "latest_hit": latest_hit,
         "hit_rows_done_last10": hit_rows_done_last10,
         "batch_gate": batch_gate,
+        "reject_reason_summary": reject_reason_summary,
         "train_result": train_result,
         "warnings": warnings,
     }
