@@ -293,6 +293,16 @@ def _count_limitups(limit_df: Optional[pd.DataFrame]) -> int:
     return int(len(uniq)) if uniq else int(len(limit_df))
 
 
+
+def _warehouse_snapshot_dir_candidates(trade_date: str) -> List[Path]:
+    y = str(trade_date)[:4]
+    return [
+        Path("_warehouse/a-share-top3-data/data/raw") / y / str(trade_date),
+        Path("outputs/_warehouse/a-share-top3-data/data/raw") / y / str(trade_date),
+        Path("data/raw") / y / str(trade_date),
+        Path("_warehouse/data/raw") / y / str(trade_date),
+    ]
+
 def _resolve_snapshot_dir(settings, ctx, trade_date: str) -> Optional[Path]:
     cands: List[Path] = []
     p = _ctx_path(ctx, ["snapshot_dir", "snap_dir", "snapshot_path"])
