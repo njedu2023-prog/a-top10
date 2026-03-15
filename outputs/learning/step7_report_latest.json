@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 17:30:30",
+  "ts": "2026-03-15 18:01:58",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
@@ -67,8 +67,8 @@
       "trade_date": "20260310",
       "verify_date": "20260311",
       "topn": 10,
-      "hit": 10,
-      "hit_rate": "1.0"
+      "hit": 5,
+      "hit_rate": "0.5"
     },
     {
       "trade_date": "20260311",
@@ -393,9 +393,9 @@
         "turnover_rate_missing_rate": 0.0,
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
-        "mature_learnable_samples": 0,
-        "batch_quality_score": 90.0,
-        "pass": false
+        "mature_learnable_samples": 56,
+        "batch_quality_score": 97.0,
+        "pass": true
       },
       "20260311": {
         "StrengthScore_missing_rate": 0.0,
@@ -438,9 +438,9 @@
     "trained": false,
     "updated": false,
     "detail": {
-      "train_rows": 1926,
-      "pos": 344,
-      "neg": 1582,
+      "train_rows": 1982,
+      "pos": 354,
+      "neg": 1628,
       "feature_coverage": 1.0,
       "level": "level3",
       "batch_gate_pass": false,
