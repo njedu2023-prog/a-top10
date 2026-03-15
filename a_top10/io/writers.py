@@ -376,11 +376,25 @@ def _resolve_snapshot_dir(settings, ctx, trade_date: str) -> Optional[Path]:
 
 
 def _load_limit_df(settings, ctx, trade_date: str) -> pd.DataFrame:
+    trade_date = _clean_date_value(trade_date)
+    if not trade_date:
+        return pd.DataFrame()
+
     ctx_td = _ctx_trade_date(ctx)
     if ctx_td and ctx_td == trade_date:
         df = _ctx_df(ctx, ["limit_df", "limit_list", "limit", "limit_list_d", "limit_up", "limitup"])
         if df is not None and not df.empty:
             return df
+
+    # 优先直接命中历史快照目录，避免仅依赖当前 ctx/snapshot_dir 导致历史验证日全空。
+    for snap in _warehouse_snapshot_dir_candidates(trade_date):
+        if not snap.exists():
+            continue
+        for fn in ("limit_list_d.csv", "limit_list.csv", "limit_listd.csv", "limit_list_d"):
+            p = snap / fn
+            if p.exists():
+                return _read_csv_guess(p)
+
     snap = _resolve_snapshot_dir(settings, ctx, trade_date)
     if snap is None:
         return pd.DataFrame()
@@ -392,11 +406,23 @@ def _load_limit_df(settings, ctx, trade_date: str) -> pd.DataFrame:
 
 
 def _load_daily_df(settings, ctx, trade_date: str) -> pd.DataFrame:
+    trade_date = _clean_date_value(trade_date)
+    if not trade_date:
+        return pd.DataFrame()
+
     ctx_td = _ctx_trade_date(ctx)
     if ctx_td and ctx_td == trade_date:
         df = _ctx_df(ctx, ["daily_df", "daily", "quote_df", "quotes"])
         if df is not None and not df.empty:
             return df
+
+    for snap in _warehouse_snapshot_dir_candidates(trade_date):
+        if not snap.exists():
+            continue
+        p = snap / "daily.csv"
+        if p.exists():
+            return _read_csv_guess(p)
+
     snap = _resolve_snapshot_dir(settings, ctx, trade_date)
     if snap is None:
         return pd.DataFrame()
@@ -852,13 +878,18 @@ def _build_recent_perf_df(hit_hist: pd.DataFrame, settings, ctx) -> pd.DataFrame
         return pd.DataFrame()
     rows: List[Dict[str, Any]] = []
     for _, row in hit_hist.iterrows():
-        vd = _safe_str(row.get("verify_date"))
-        limit_df = _load_limit_df(settings, ctx, vd) if vd else pd.DataFrame()
+        td = _clean_date_value(row.get("trade_date"))
+        vd = _clean_date_value(row.get("verify_date"))
+        limit_df = _load_limit_df(settings, {}, vd) if vd else pd.DataFrame()
+
+        hit_v = pd.to_numeric(row.get("hit"), errors="coerce")
+        limit_count = _count_limitups(limit_df)
         rows.append({
-            "trade_date": _safe_str(row.get("trade_date")),
-            "hit": int(pd.to_numeric(row.get("hit"), errors="coerce") or 0),
+            "trade_date": td,
+            "verify_date": vd,
+            "hit": "" if pd.isna(hit_v) else int(hit_v),
             "hit_rate": _format_pct(pd.to_numeric(row.get("hit_rate"), errors="coerce")),
-            "limit_count": _count_limitups(limit_df),
+            "limit_count": "" if limit_count <= 0 else int(limit_count),
         })
     return pd.DataFrame(rows)
 
