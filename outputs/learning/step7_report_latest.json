@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 20:32:19",
+  "ts": "2026-03-15 20:35:57",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
@@ -9,8 +9,8 @@
     "trade_date": "20260312",
     "verify_date": "20260313",
     "topn": 10,
-    "hit": 3,
-    "hit_rate": 0.3,
+    "hit": 8,
+    "hit_rate": 0.8,
     "note": "src=feature_history_v3"
   },
   "hit_rows_done_last10": [
@@ -81,8 +81,8 @@
       "trade_date": "20260312",
       "verify_date": "20260313",
       "topn": 10,
-      "hit": 3,
-      "hit_rate": "0.3"
+      "hit": 8,
+      "hit_rate": "0.8"
     }
   ],
   "batch_gate": {
