@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-03-15 18:35:20
+- 生成时间：2026-03-15 18:44:14
 - RunMode：auto_daily
 - Today：20260315
 - LatestSnapshot：20260313
@@ -37,6 +37,17 @@
 - pass_dates：28
 - fail_dates：3
 - eligible_train_rows：1982
+
+## 2.1) 样本拒绝分布
+
+- total_rows：2146
+- learnable_rows：1982
+- rejected_rows：164
+
+| reason | count |
+| --- | --- |
+| missing_prob_src | 105 |
+| pending_next_snapshot | 59 |
 
 ## 3) 训练执行结果
 

@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 18:35:20",
+  "ts": "2026-03-15 18:44:14",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
@@ -506,6 +506,54 @@
     "eligible_train_rows": 1982,
     "eligible_positive_rows": 354
   },
+  "reject_reason_summary": {
+    "total_rows": 2146,
+    "learnable_rows": 1982,
+    "rejected_rows": 164,
+    "top_reasons": [
+      {
+        "reason": "missing_prob_src",
+        "count": 105
+      },
+      {
+        "reason": "pending_next_snapshot",
+        "count": 59
+      }
+    ],
+    "reasons": {
+      "missing_prob_src": 105,
+      "pending_next_snapshot": 59
+    },
+    "trade_dates": {
+      "20260311": {
+        "rejected_rows": 53,
+        "top_reasons": [
+          {
+            "reason": "missing_prob_src",
+            "count": 53
+          }
+        ]
+      },
+      "20260312": {
+        "rejected_rows": 52,
+        "top_reasons": [
+          {
+            "reason": "missing_prob_src",
+            "count": 52
+          }
+        ]
+      },
+      "20260313": {
+        "rejected_rows": 59,
+        "top_reasons": [
+          {
+            "reason": "pending_next_snapshot",
+            "count": 59
+          }
+        ]
+      }
+    }
+  },
   "train_result": {
     "run_mode": "auto_daily",
     "allow_model_update": true,
@@ -574,7 +622,7 @@
           "updated": true,
           "reason": "formal_model_updated",
           "data_reason": "ok",
-          "eligible_trade_dates_count": 0,
+          "eligible_trade_dates_count": 28,
           "path": "models/step5_lr.joblib"
         },
         "lgbm": {
@@ -592,7 +640,7 @@
           "updated": true,
           "reason": "formal_model_updated",
           "data_reason": "ok",
-          "eligible_trade_dates_count": 0,
+          "eligible_trade_dates_count": 28,
           "path": "models/step5_lgbm.joblib"
         }
       },
