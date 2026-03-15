@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 20:35:57",
+  "ts": "2026-03-15 20:37:14",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
@@ -74,8 +74,8 @@
       "trade_date": "20260311",
       "verify_date": "20260312",
       "topn": 10,
-      "hit": 5,
-      "hit_rate": "0.5"
+      "hit": 8,
+      "hit_rate": "0.8"
     },
     {
       "trade_date": "20260312",
