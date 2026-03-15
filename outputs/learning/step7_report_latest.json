@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 16:30:44",
+  "ts": "2026-03-15 16:39:48",
   "run_mode": "auto_daily",
   "allow_model_update": true,
   "topn": 10,
@@ -376,7 +376,7 @@
     "rows_dropped_allzero": 29,
     "dates_total": 31,
     "dates_used": 31,
-    "feature_coverage": 0.7289309013446944
+    "feature_coverage": 0.7250033284516043
   },
   "sampling_state": {
     "run_mode": "auto_daily",
@@ -466,10 +466,10 @@
           "unique_count": 27
         },
         "prob_final": {
-          "non_null_rate": 0.10622887493964268,
-          "non_zero_rate": 0.10622887493964268,
-          "std": 0.09316642356363622,
-          "unique_count": 220
+          "non_null_rate": 0.07774022211492033,
+          "non_zero_rate": 0.07774022211492033,
+          "std": 0.0850700937823088,
+          "unique_count": 161
         },
         "final_score": {
           "non_null_rate": 1.0,
@@ -519,8 +519,8 @@
       "min_positive_samples": 12,
       "min_feature_coverage": 0.85
     },
-    "updated_at_utc": "2026-03-15T08:30:43Z",
-    "model_version": "b1580c6df910efaa621983edf49e8acdbe41b878",
+    "updated_at_utc": "2026-03-15T08:39:48Z",
+    "model_version": "e9cd7624467efd58111d96bea1dd0f71ef5bc4f4",
     "today_yyyymmdd": "20260315",
     "latest_snapshot_yyyymmdd": "20260313",
     "label_upper_bound_yyyymmdd": "20260313"
@@ -538,7 +538,7 @@
       "pos": 368,
       "neg": 1690,
       "level": "level3",
-      "feature_coverage": 0.7289309013446944,
+      "feature_coverage": 0.7250033284516043,
       "reason": "skip_train: quality_gate_fail",
       "quality_gate_pass": false,
       "days_covered": 31
