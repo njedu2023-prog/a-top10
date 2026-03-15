@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 18:01:58",
+  "ts": "2026-03-15 18:04:19",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260315",
   "latest_snapshot_yyyymmdd": "20260313",
@@ -60,8 +60,8 @@
       "trade_date": "20260309",
       "verify_date": "20260310",
       "topn": 10,
-      "hit": 0,
-      "hit_rate": "0.0"
+      "hit": 5,
+      "hit_rate": "0.5"
     },
     {
       "trade_date": "20260310",
@@ -86,8 +86,8 @@
     }
   ],
   "batch_gate": {
-    "pass": false,
-    "reason": "one_or_more_trade_dates_failed_batch_gate",
+    "pass": true,
+    "reason": "partial_pass_bad_trade_dates_excluded",
     "days": {
       "20260122": {
         "StrengthScore_missing_rate": 0.0,
@@ -98,7 +98,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 75,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260123": {
         "StrengthScore_missing_rate": 0.0,
@@ -109,7 +110,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 104,
         "batch_quality_score": 99.9359,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260126": {
         "StrengthScore_missing_rate": 0.0,
@@ -120,7 +122,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 71,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260127": {
         "StrengthScore_missing_rate": 0.0,
@@ -131,7 +134,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 53,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260128": {
         "StrengthScore_missing_rate": 0.0,
@@ -142,7 +146,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 80,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260129": {
         "StrengthScore_missing_rate": 0.0,
@@ -153,7 +158,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 84,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260130": {
         "StrengthScore_missing_rate": 0.0,
@@ -164,7 +170,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 48,
         "batch_quality_score": 94.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260202": {
         "StrengthScore_missing_rate": 0.0,
@@ -175,7 +182,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 36,
         "batch_quality_score": 94.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260203": {
         "StrengthScore_missing_rate": 0.0,
@@ -186,7 +194,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 69,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260204": {
         "StrengthScore_missing_rate": 0.0,
@@ -197,7 +206,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 68,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260205": {
         "StrengthScore_missing_rate": 0.0,
@@ -208,7 +218,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 44,
         "batch_quality_score": 94.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260206": {
         "StrengthScore_missing_rate": 0.0,
@@ -219,7 +230,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 86,
         "batch_quality_score": 96.9225,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260209": {
         "StrengthScore_missing_rate": 0.0,
@@ -230,7 +242,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 112,
         "batch_quality_score": 100.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260210": {
         "StrengthScore_missing_rate": 0.0,
@@ -241,7 +254,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 70,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260211": {
         "StrengthScore_missing_rate": 0.0,
@@ -252,7 +266,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 73,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260212": {
         "StrengthScore_missing_rate": 0.0,
@@ -263,7 +278,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 92,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260213": {
         "StrengthScore_missing_rate": 0.0,
@@ -274,7 +290,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 55,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260224": {
         "StrengthScore_missing_rate": 0.0,
@@ -285,7 +302,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 93,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260225": {
         "StrengthScore_missing_rate": 0.0,
@@ -296,7 +314,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 75,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260226": {
         "StrengthScore_missing_rate": 0.0,
@@ -307,7 +326,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 63,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260227": {
         "StrengthScore_missing_rate": 0.0,
@@ -318,7 +338,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 75,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260302": {
         "StrengthScore_missing_rate": 0.0,
@@ -329,7 +350,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 88,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260303": {
         "StrengthScore_missing_rate": 0.0,
@@ -340,7 +362,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 83,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260304": {
         "StrengthScore_missing_rate": 0.0,
@@ -351,7 +374,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 44,
         "batch_quality_score": 94.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260305": {
         "StrengthScore_missing_rate": 0.0,
@@ -362,7 +386,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 69,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260306": {
         "StrengthScore_missing_rate": 0.0,
@@ -373,7 +398,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 74,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260309": {
         "StrengthScore_missing_rate": 0.0,
@@ -384,7 +410,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 42,
         "batch_quality_score": 94.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260310": {
         "StrengthScore_missing_rate": 0.0,
@@ -395,7 +422,8 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 56,
         "batch_quality_score": 97.0,
-        "pass": true
+        "pass": true,
+        "fail_reasons": []
       },
       "20260311": {
         "StrengthScore_missing_rate": 0.0,
@@ -406,7 +434,10 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 0,
         "batch_quality_score": 90.0,
-        "pass": false
+        "pass": false,
+        "fail_reasons": [
+          "mature_learnable_samples<20"
+        ]
       },
       "20260312": {
         "StrengthScore_missing_rate": 0.0,
@@ -417,7 +448,10 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 0,
         "batch_quality_score": 90.0,
-        "pass": false
+        "pass": false,
+        "fail_reasons": [
+          "mature_learnable_samples<20"
+        ]
       },
       "20260313": {
         "StrengthScore_missing_rate": 0.0,
@@ -428,26 +462,140 @@
         "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 0,
         "batch_quality_score": 72.9167,
-        "pass": false
+        "pass": false,
+        "fail_reasons": [
+          "mature_learnable_samples<20"
+        ]
       }
-    }
+    },
+    "pass_dates": [
+      "20260122",
+      "20260123",
+      "20260126",
+      "20260127",
+      "20260128",
+      "20260129",
+      "20260130",
+      "20260202",
+      "20260203",
+      "20260204",
+      "20260205",
+      "20260206",
+      "20260209",
+      "20260210",
+      "20260211",
+      "20260212",
+      "20260213",
+      "20260224",
+      "20260225",
+      "20260226",
+      "20260227",
+      "20260302",
+      "20260303",
+      "20260304",
+      "20260305",
+      "20260306",
+      "20260309",
+      "20260310"
+    ],
+    "fail_dates": [
+      "20260311",
+      "20260312",
+      "20260313"
+    ],
+    "eligible_train_rows": 1982,
+    "eligible_positive_rows": 354
   },
   "train_result": {
     "run_mode": "auto_daily",
     "allow_model_update": true,
-    "trained": false,
-    "updated": false,
+    "trained": true,
+    "updated": true,
     "detail": {
       "train_rows": 1982,
       "pos": 354,
       "neg": 1628,
       "feature_coverage": 1.0,
       "level": "level3",
-      "batch_gate_pass": false,
-      "reason": "skip_train: batch_gate_fail"
+      "batch_gate_pass": true,
+      "pass_trade_dates": [
+        "20260122",
+        "20260123",
+        "20260126",
+        "20260127",
+        "20260128",
+        "20260129",
+        "20260130",
+        "20260202",
+        "20260203",
+        "20260204",
+        "20260205",
+        "20260206",
+        "20260209",
+        "20260210",
+        "20260211",
+        "20260212",
+        "20260213",
+        "20260224",
+        "20260225",
+        "20260226",
+        "20260227",
+        "20260302",
+        "20260303",
+        "20260304",
+        "20260305",
+        "20260306",
+        "20260309",
+        "20260310"
+      ],
+      "fail_trade_dates": [
+        "20260311",
+        "20260312",
+        "20260313"
+      ],
+      "eligible_train_rows": 1982,
+      "eligible_positive_rows": 354,
+      "step5_train_result": {
+        "ok": true,
+        "updated": true,
+        "run_mode": "auto_daily",
+        "lr": {
+          "run_mode": "auto_daily",
+          "allow_model_update_raw": "auto",
+          "allow_model_update": true,
+          "level": "level3",
+          "mature_samples": 2087,
+          "positive_samples": 370,
+          "feature_coverage": 1.0,
+          "formal_update_allowed": true,
+          "trial_training_only": false,
+          "ok": true,
+          "trained": true,
+          "updated": true,
+          "reason": "formal_model_updated",
+          "data_reason": "ok",
+          "path": "models/step5_lr.joblib"
+        },
+        "lgbm": {
+          "run_mode": "auto_daily",
+          "allow_model_update_raw": "auto",
+          "allow_model_update": true,
+          "level": "level3",
+          "mature_samples": 2087,
+          "positive_samples": 370,
+          "feature_coverage": 1.0,
+          "formal_update_allowed": true,
+          "trial_training_only": false,
+          "ok": true,
+          "trained": true,
+          "updated": true,
+          "reason": "formal_model_updated",
+          "data_reason": "ok",
+          "path": "models/step5_lgbm.joblib"
+        }
+      },
+      "reason": "ok_partial_pass_dates_trained"
     }
   },
-  "warnings": [
-    "skip_train: batch_gate_fail"
-  ]
+  "warnings": []
 }
