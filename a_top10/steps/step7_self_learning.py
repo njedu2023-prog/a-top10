@@ -36,7 +36,6 @@ V3 核心输出字段（写回 feature_history.csv）：
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 from datetime import datetime
@@ -54,7 +53,6 @@ from a_top10.config import Settings
 # ============================================================
 
 VALID_RUN_MODES = {"replay", "train", "auto_daily"}
-
 DEFAULT_TZ = os.getenv("A_TOP10_TZ", "Asia/Shanghai")
 
 GATE_VERSION = "V3_GATE_V1"
@@ -215,19 +213,6 @@ def _dedup_keep_last_by_keys(df: pd.DataFrame, keys: List[str]) -> pd.DataFrame:
     return df.drop_duplicates(subset=keep_keys, keep="last").copy()
 
 
-def _nonnull_rate(sr: pd.Series) -> float:
-    if sr is None or len(sr) == 0:
-        return 0.0
-    return float(sr.notna().mean())
-
-
-def _nonzero_rate(sr: pd.Series) -> float:
-    if sr is None or len(sr) == 0:
-        return 0.0
-    x = pd.to_numeric(sr, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    return float((x != 0.0).mean())
-
-
 def _get_outputs_dir(s: Settings) -> Path:
     try:
         return Path(getattr(s.io, "outputs_dir", "outputs"))
@@ -361,6 +346,7 @@ def _ensure_v3_feature_history_columns(df: pd.DataFrame) -> pd.DataFrame:
         "turnover_rate": np.nan,
         "open_times": np.nan,
         "seal_amount": np.nan,
+        "close": np.nan,
         "is_sample_mature": 0,
         "mature_reason": "",
         "label_delay_flag": 0,
@@ -375,7 +361,6 @@ def _ensure_v3_feature_history_columns(df: pd.DataFrame) -> pd.DataFrame:
         "verify_date": "",
     }
 
-    # 兼容旧字段名
     if "probability" in d.columns and "Probability" not in d.columns:
         d["Probability"] = d["probability"]
     if "prob_src" in d.columns and "_prob_src" not in d.columns:
@@ -396,6 +381,7 @@ def _ensure_v3_feature_history_columns(df: pd.DataFrame) -> pd.DataFrame:
         "turnover_rate",
         "open_times",
         "seal_amount",
+        "close",
         "y_limit_hit",
         "y_next_ret",
         "batch_quality_score",
@@ -405,12 +391,8 @@ def _ensure_v3_feature_history_columns(df: pd.DataFrame) -> pd.DataFrame:
     for c in ["is_sample_mature", "label_delay_flag", "learnable_flag"]:
         d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0).astype(int)
 
-    d["mature_reason"] = d["mature_reason"].astype(str)
-    d["reject_reason"] = d["reject_reason"].astype(str)
-    d["sample_quality_grade"] = d["sample_quality_grade"].astype(str)
-    d["gate_version"] = d["gate_version"].astype(str)
-    d["label_version"] = d["label_version"].astype(str)
-    d["_prob_src"] = d["_prob_src"].astype(str)
+    for c in ["mature_reason", "reject_reason", "sample_quality_grade", "gate_version", "label_version", "_prob_src", "verify_date"]:
+        d[c] = d[c].astype(str)
     d["verify_date"] = d["verify_date"].map(_normalize_yyyymmdd_value)
 
     return d
@@ -419,6 +401,35 @@ def _ensure_v3_feature_history_columns(df: pd.DataFrame) -> pd.DataFrame:
 # ============================================================
 # Historical close backfill
 # ============================================================
+
+def _build_close_map(daily_df: pd.DataFrame) -> Dict[str, float]:
+    if daily_df is None or daily_df.empty:
+        return {}
+    code_col = None
+    for c in ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"]:
+        if c in daily_df.columns:
+            code_col = c
+            break
+    close_col = None
+    for c in ["close", "收盘价"]:
+        if c in daily_df.columns:
+            close_col = c
+            break
+    if code_col is None or close_col is None:
+        return {}
+
+    out: Dict[str, float] = {}
+    for _, row in daily_df.iterrows():
+        code = _safe_str(row.get(code_col))
+        if not code:
+            continue
+        close_v = pd.to_numeric(row.get(close_col), errors="coerce")
+        if pd.isna(close_v):
+            continue
+        close_f = float(close_v)
+        out[code] = close_f
+        out[_to_nosuffix(code)] = close_f
+    return out
 
 
 def _build_trade_date_close_map(trade_date: str) -> Dict[str, float]:
@@ -516,44 +527,7 @@ def _extract_limit_codes(limit_df: pd.DataFrame) -> set:
     return vals
 
 
-def _build_close_map(daily_df: pd.DataFrame) -> Dict[str, float]:
-    if daily_df is None or daily_df.empty:
-        return {}
-    code_col = None
-    for c in ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"]:
-        if c in daily_df.columns:
-            code_col = c
-            break
-    close_col = None
-    for c in ["close", "收盘价"]:
-        if c in daily_df.columns:
-            close_col = c
-            break
-    if code_col is None or close_col is None:
-        return {}
-
-    out: Dict[str, float] = {}
-    for _, row in daily_df.iterrows():
-        code = _safe_str(row.get(code_col))
-        if not code:
-            continue
-        try:
-            close_v = float(pd.to_numeric(row.get(close_col), errors="coerce"))
-        except Exception:
-            close_v = np.nan
-        if np.isnan(close_v):
-            continue
-        out[code] = close_v
-        out[_to_nosuffix(code)] = close_v
-    return out
-
-
-def _label_one_day(
-    df_day: pd.DataFrame,
-    verify_date: str,
-    limit_df: pd.DataFrame,
-    daily_df: pd.DataFrame,
-) -> pd.DataFrame:
+def _label_one_day(df_day: pd.DataFrame, verify_date: str, limit_df: pd.DataFrame, daily_df: pd.DataFrame) -> pd.DataFrame:
     d = df_day.copy()
     limit_codes = _extract_limit_codes(limit_df)
     close_map = _build_close_map(daily_df)
@@ -615,7 +589,6 @@ def _apply_maturity_and_labels(df: pd.DataFrame, snapshot_dates: List[str], uppe
         return df
 
     out_parts: List[pd.DataFrame] = []
-
     for trade_date, df_day in df.groupby("trade_date", sort=True):
         verify_date = _next_snapshot_after(str(trade_date), snapshot_dates, upper_bound)
         if not verify_date:
@@ -632,7 +605,6 @@ def _apply_maturity_and_labels(df: pd.DataFrame, snapshot_dates: List[str], uppe
 
         limit_df = _read_limit_list_snapshot(verify_date)
         daily_df = _read_daily_snapshot(verify_date)
-
         if limit_df.empty or daily_df.empty:
             warnings.append(f"truth_source_not_ready: trade_date={trade_date}, verify_date={verify_date}")
             tmp = df_day.copy()
@@ -715,7 +687,6 @@ def _sample_quality_grade(row: pd.Series) -> str:
 
 def _apply_sample_gate(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
-
     learnable_flag = []
     reject_reason = []
     quality_grade = []
@@ -743,8 +714,6 @@ def _batch_quality_score_for_day(df_day: pd.DataFrame) -> float:
         return 0.0
 
     score = 0.0
-
-    # 一级硬字段完整度 30
     hard_nonnull = []
     for c in ["trade_date", "ts_code", "StrengthScore", "ThemeBoost", "Probability", "_prob_src", "is_sample_mature", "y_limit_hit"]:
         if c not in df_day.columns:
@@ -757,7 +726,6 @@ def _batch_quality_score_for_day(df_day: pd.DataFrame) -> float:
         hard_nonnull.append(rate)
     score += 30.0 * float(np.mean(hard_nonnull)) if hard_nonnull else 0.0
 
-    # 微观盘口簇 25
     micro_rates = []
     for c in MICROSTRUCTURE_FIELDS:
         if c not in df_day.columns:
@@ -766,7 +734,6 @@ def _batch_quality_score_for_day(df_day: pd.DataFrame) -> float:
             micro_rates.append(float(pd.to_numeric(df_day[c], errors="coerce").notna().mean()))
     score += 25.0 * float(np.mean(micro_rates)) if micro_rates else 0.0
 
-    # 题材层完整度 15
     theme_rates = []
     for c in ["ThemeBoost"]:
         if c not in df_day.columns:
@@ -775,7 +742,6 @@ def _batch_quality_score_for_day(df_day: pd.DataFrame) -> float:
             theme_rates.append(float(pd.to_numeric(df_day[c], errors="coerce").notna().mean()))
     score += 15.0 * float(np.mean(theme_rates)) if theme_rates else 0.0
 
-    # 标签完整度 20
     label_rates = []
     for c in ["is_sample_mature", "y_limit_hit", "y_next_ret"]:
         if c not in df_day.columns:
@@ -784,7 +750,6 @@ def _batch_quality_score_for_day(df_day: pd.DataFrame) -> float:
             label_rates.append(float(pd.to_numeric(df_day[c], errors="coerce").notna().mean()))
     score += 20.0 * float(np.mean(label_rates)) if label_rates else 0.0
 
-    # 样本量等级 10
     mature_learnable_samples = int(((pd.to_numeric(df_day["is_sample_mature"], errors="coerce").fillna(0) > 0.5) &
                                     (pd.to_numeric(df_day["learnable_flag"], errors="coerce").fillna(0) > 0.5)).sum())
     if mature_learnable_samples >= MIN_LEVEL3_SAMPLES:
@@ -793,21 +758,40 @@ def _batch_quality_score_for_day(df_day: pd.DataFrame) -> float:
         score += 7.0
     elif mature_learnable_samples >= MIN_LEVEL1_SAMPLES:
         score += 4.0
-    else:
-        score += 0.0
 
     return round(float(score), 4)
 
 
 def _batch_gate_report(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    V3 收口：
+    - 不再采用“任一 trade_date 失败 => 整批拒训”
+    - 改为“坏日期剔除、好日期保留”
+    - 只要剩余 pass_dates 上仍有足够成熟可学样本，Step7 就可继续训练
+    """
     if df.empty:
         return {
             "pass": False,
             "reason": "feature_history empty",
             "days": {},
+            "pass_dates": [],
+            "fail_dates": [],
+            "eligible_train_rows": 0,
+            "eligible_positive_rows": 0,
         }
 
-    report: Dict[str, Any] = {"pass": True, "reason": "ok", "days": {}}
+    report: Dict[str, Any] = {
+        "pass": False,
+        "reason": "no_pass_trade_dates",
+        "days": {},
+        "pass_dates": [],
+        "fail_dates": [],
+        "eligible_train_rows": 0,
+        "eligible_positive_rows": 0,
+    }
+
+    pass_dates: List[str] = []
+    fail_dates: List[str] = []
 
     for trade_date, df_day in df.groupby("trade_date", sort=True):
         day_rep: Dict[str, Any] = {}
@@ -824,40 +808,63 @@ def _batch_gate_report(df: pd.DataFrame) -> Dict[str, Any]:
         day_rep["mature_learnable_samples"] = mature_learnable_samples
         day_rep["batch_quality_score"] = _batch_quality_score_for_day(df_day)
 
-        day_pass = True
+        fail_reasons: List[str] = []
         if day_rep["StrengthScore_missing_rate"] > 0.30:
-            day_pass = False
+            fail_reasons.append("StrengthScore_missing_rate>0.30")
         if day_rep["ThemeBoost_missing_rate"] > 0.30:
-            day_pass = False
+            fail_reasons.append("ThemeBoost_missing_rate>0.30")
         if day_rep["Probability_missing_rate"] > 0.20:
-            day_pass = False
+            fail_reasons.append("Probability_missing_rate>0.20")
         if day_rep["turnover_rate_missing_rate"] > 0.40:
-            day_pass = False
+            fail_reasons.append("turnover_rate_missing_rate>0.40")
         if day_rep["open_times_missing_rate"] > 0.70:
-            day_pass = False
+            fail_reasons.append("open_times_missing_rate>0.70")
         if day_rep["seal_amount_missing_rate"] > 0.70:
-            day_pass = False
+            fail_reasons.append("seal_amount_missing_rate>0.70")
         if mature_learnable_samples < MIN_LEVEL1_SAMPLES:
-            day_pass = False
+            fail_reasons.append(f"mature_learnable_samples<{MIN_LEVEL1_SAMPLES}")
         if float(day_rep["batch_quality_score"]) < 60.0:
-            day_pass = False
+            fail_reasons.append("batch_quality_score<60")
 
+        day_pass = len(fail_reasons) == 0
         day_rep["pass"] = bool(day_pass)
+        day_rep["fail_reasons"] = fail_reasons
         report["days"][str(trade_date)] = day_rep
 
-    if any(not v.get("pass", False) for v in report["days"].values()):
+        if day_pass:
+            pass_dates.append(str(trade_date))
+        else:
+            fail_dates.append(str(trade_date))
+
+    report["pass_dates"] = pass_dates
+    report["fail_dates"] = fail_dates
+
+    eligible_df = df[df["trade_date"].astype(str).isin(pass_dates)].copy() if pass_dates else pd.DataFrame()
+    if not eligible_df.empty:
+        eligible_train = eligible_df[
+            (pd.to_numeric(eligible_df["is_sample_mature"], errors="coerce").fillna(0) > 0.5) &
+            (pd.to_numeric(eligible_df["learnable_flag"], errors="coerce").fillna(0) > 0.5) &
+            (pd.to_numeric(eligible_df["y_limit_hit"], errors="coerce").notna())
+        ].copy()
+        report["eligible_train_rows"] = int(len(eligible_train))
+        report["eligible_positive_rows"] = int(pd.to_numeric(eligible_train.get("y_limit_hit"), errors="coerce").fillna(0).sum())
+
+    if pass_dates:
+        report["pass"] = True
+        if fail_dates:
+            report["reason"] = "partial_pass_bad_trade_dates_excluded"
+        else:
+            report["reason"] = "all_trade_dates_passed_batch_gate"
+    else:
         report["pass"] = False
-        report["reason"] = "one_or_more_trade_dates_failed_batch_gate"
+        report["reason"] = "no_trade_dates_passed_batch_gate"
 
     return report
 
 
 def _write_batch_quality_score(df: pd.DataFrame, batch_gate: Dict[str, Any]) -> pd.DataFrame:
     d = df.copy()
-    score_map = {
-        str(td): float(rep.get("batch_quality_score", 0.0))
-        for td, rep in (batch_gate.get("days", {}) or {}).items()
-    }
+    score_map = {str(td): float(rep.get("batch_quality_score", 0.0)) for td, rep in (batch_gate.get("days", {}) or {}).items()}
     d["batch_quality_score"] = d["trade_date"].astype(str).map(score_map).fillna(0.0)
     return d
 
@@ -887,52 +894,44 @@ def _build_hit_history(df: pd.DataFrame, learning_dir: Path, warnings: List[str]
         return empty, hit_csv, None
 
     rows: List[Dict[str, Any]] = []
-
     for trade_date, df_day in df.groupby("trade_date", sort=True):
         mature_day = df_day[pd.to_numeric(df_day["is_sample_mature"], errors="coerce").fillna(0) > 0.5].copy()
         pred_day = mature_day.sort_values(["Probability"], ascending=[False]).head(10)
 
         if pred_day.empty:
-            rows.append(
-                {
-                    "trade_date": trade_date,
-                    "verify_date": "",
-                    "topn": 0,
-                    "hit": "",
-                    "hit_rate": "",
-                    "note": "pending_or_no_mature_rows",
-                }
-            )
+            rows.append({
+                "trade_date": trade_date,
+                "verify_date": "",
+                "topn": 0,
+                "hit": "",
+                "hit_rate": "",
+                "note": "pending_or_no_mature_rows",
+            })
             continue
 
         verify_date = _safe_str(pred_day["verify_date"].iloc[0])
         y = pd.to_numeric(pred_day["y_limit_hit"], errors="coerce")
         if y.notna().sum() == 0:
-            rows.append(
-                {
-                    "trade_date": trade_date,
-                    "verify_date": verify_date,
-                    "topn": len(pred_day),
-                    "hit": "",
-                    "hit_rate": "",
-                    "note": "pending_label",
-                }
-            )
+            rows.append({
+                "trade_date": trade_date,
+                "verify_date": verify_date,
+                "topn": len(pred_day),
+                "hit": "",
+                "hit_rate": "",
+                "note": "pending_label",
+            })
             continue
 
         hit = int(y.fillna(0).sum())
         hit_rate = round(float(hit / max(1, len(pred_day))), 4)
-
-        rows.append(
-            {
-                "trade_date": trade_date,
-                "verify_date": verify_date,
-                "topn": int(len(pred_day)),
-                "hit": int(hit),
-                "hit_rate": hit_rate,
-                "note": "src=feature_history_v3",
-            }
-        )
+        rows.append({
+            "trade_date": trade_date,
+            "verify_date": verify_date,
+            "topn": int(len(pred_day)),
+            "hit": int(hit),
+            "hit_rate": hit_rate,
+            "note": "src=feature_history_v3",
+        })
 
     hit_df = pd.DataFrame(rows, columns=HIT_HISTORY_COLS)
     hit_df.to_csv(hit_csv, index=False, encoding="utf-8-sig")
@@ -949,12 +948,7 @@ def _build_hit_history(df: pd.DataFrame, learning_dir: Path, warnings: List[str]
 # Model training
 # ============================================================
 
-def _train_models_pipeline(
-    s: Settings,
-    df: pd.DataFrame,
-    batch_gate: Dict[str, Any],
-    warnings: List[str],
-) -> Dict[str, Any]:
+def _train_models_pipeline(s: Settings, df: pd.DataFrame, batch_gate: Dict[str, Any], warnings: List[str]) -> Dict[str, Any]:
     run_mode = _resolve_run_mode()
     allow_model_update = False if run_mode == "replay" else True
 
@@ -966,10 +960,16 @@ def _train_models_pipeline(
         "detail": {},
     }
 
-    mature_train = df[
-        (pd.to_numeric(df["is_sample_mature"], errors="coerce").fillna(0) > 0.5) &
-        (pd.to_numeric(df["learnable_flag"], errors="coerce").fillna(0) > 0.5) &
-        (pd.to_numeric(df["y_limit_hit"], errors="coerce").notna())
+    pass_dates = [str(x) for x in (batch_gate.get("pass_dates") or [])]
+    if pass_dates:
+        train_base = df[df["trade_date"].astype(str).isin(pass_dates)].copy()
+    else:
+        train_base = pd.DataFrame(columns=df.columns)
+
+    mature_train = train_base[
+        (pd.to_numeric(train_base.get("is_sample_mature"), errors="coerce").fillna(0) > 0.5) &
+        (pd.to_numeric(train_base.get("learnable_flag"), errors="coerce").fillna(0) > 0.5) &
+        (pd.to_numeric(train_base.get("y_limit_hit"), errors="coerce").notna())
     ].copy()
 
     n = int(len(mature_train))
@@ -997,29 +997,32 @@ def _train_models_pipeline(
         "feature_coverage": feature_coverage,
         "level": level,
         "batch_gate_pass": bool(batch_gate.get("pass")),
+        "pass_trade_dates": pass_dates,
+        "fail_trade_dates": [str(x) for x in (batch_gate.get("fail_dates") or [])],
+        "eligible_train_rows": int(batch_gate.get("eligible_train_rows", 0) or 0),
+        "eligible_positive_rows": int(batch_gate.get("eligible_positive_rows", 0) or 0),
     }
 
-    if not batch_gate.get("pass", False):
-        out["detail"]["reason"] = "skip_train: batch_gate_fail"
-        warnings.append("skip_train: batch_gate_fail")
+    if not pass_dates:
+        out["detail"]["reason"] = "skip_train: no_pass_trade_dates"
+        warnings.append("skip_train: no_pass_trade_dates")
         return out
 
     if n < MIN_LEVEL1_SAMPLES:
-        out["detail"]["reason"] = "below_level1_min_samples"
-        warnings.append("below_level1_min_samples")
+        out["detail"]["reason"] = "below_level1_min_samples_after_pass_date_filter"
+        warnings.append("below_level1_min_samples_after_pass_date_filter")
         return out
 
     if pos < 12:
-        out["detail"]["reason"] = "insufficient_positive_samples"
-        warnings.append("insufficient_positive_samples")
+        out["detail"]["reason"] = "insufficient_positive_samples_after_pass_date_filter"
+        warnings.append("insufficient_positive_samples_after_pass_date_filter")
         return out
 
     if feature_coverage < 0.85:
-        out["detail"]["reason"] = "insufficient_feature_coverage"
-        warnings.append("insufficient_feature_coverage")
+        out["detail"]["reason"] = "insufficient_feature_coverage_after_pass_date_filter"
+        warnings.append("insufficient_feature_coverage_after_pass_date_filter")
         return out
 
-    # 直接复用 Step5 训练接口；当前 Step7 已经把标签落回 feature_history
     try:
         from a_top10.steps.step5_ml_probability import train_step5_models
     except Exception as e:
@@ -1032,7 +1035,10 @@ def _train_models_pipeline(
         out["trained"] = bool(train_res.get("ok"))
         out["updated"] = bool(train_res.get("updated"))
         out["detail"]["step5_train_result"] = train_res
-        out["detail"]["reason"] = "ok"
+        if batch_gate.get("fail_dates"):
+            out["detail"]["reason"] = "ok_partial_pass_dates_trained"
+        else:
+            out["detail"]["reason"] = "ok_all_pass_dates_trained"
         return out
     except Exception as e:
         out["detail"]["reason"] = f"step5_train_failed:{type(e).__name__}"
@@ -1098,6 +1104,9 @@ def render_report_md(report: Dict[str, Any]) -> str:
     md_lines.append(f"- pass：{batch_gate.get('pass')}")
     md_lines.append(f"- reason：{batch_gate.get('reason','')}")
     md_lines.append(f"- trade_dates：{len(batch_gate.get('days', {}) or {})}")
+    md_lines.append(f"- pass_dates：{len(batch_gate.get('pass_dates', []) or [])}")
+    md_lines.append(f"- fail_dates：{len(batch_gate.get('fail_dates', []) or [])}")
+    md_lines.append(f"- eligible_train_rows：{batch_gate.get('eligible_train_rows', 0)}")
 
     md_lines.append("")
     md_lines.append("## 3) 训练执行结果")
@@ -1110,6 +1119,8 @@ def render_report_md(report: Dict[str, Any]) -> str:
         md_lines.append(f"- train_rows：{d.get('train_rows','')}")
         md_lines.append(f"- pos/neg：{d.get('pos','')}/{d.get('neg','')}")
         md_lines.append(f"- feature_coverage：{d.get('feature_coverage','')}")
+        md_lines.append(f"- pass_trade_dates：{len(d.get('pass_trade_dates', []) or [])}")
+        md_lines.append(f"- fail_trade_dates：{len(d.get('fail_trade_dates', []) or [])}")
         if d.get("reason"):
             md_lines.append(f"- reason：{d.get('reason')}")
 
@@ -1139,7 +1150,6 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
     upper_bound = _upper_bound_yyyymmdd()
     snapshot_dates = _list_snapshot_dates()
 
-    # 1) 读 feature_history，并升级到 V3 契约列
     fh_raw, fh_path = _read_feature_history(outputs_dir)
     fh_df = _ensure_v3_feature_history_columns(_normalize_id_columns(fh_raw)) if not fh_raw.empty else pd.DataFrame()
     fh_df = _dedup_keep_last_by_keys(fh_df, ["trade_date", "ts_code"])
@@ -1153,7 +1163,7 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             "latest_snapshot_yyyymmdd": latest_snapshot,
             "label_upper_bound_yyyymmdd": upper_bound,
             "feature_history_file": str(fh_path),
-            "batch_gate": {"pass": False, "reason": "feature_history empty", "days": {}},
+            "batch_gate": {"pass": False, "reason": "feature_history empty", "days": {}, "pass_dates": [], "fail_dates": [], "eligible_train_rows": 0, "eligible_positive_rows": 0},
             "train_result": {"trained": False, "updated": False, "detail": {"reason": "feature_history empty"}},
             "latest_hit": None,
             "hit_rows_done_last10": [],
@@ -1175,25 +1185,18 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             }
         }
 
-    # 2) 历史回填 trade_date 当天 close，便于稳定计算 y_next_ret
     fh_df = _backfill_trade_date_close(fh_df, warnings)
     fh_df["close"] = _to_numeric_nullable(fh_df["close"])
 
-    # 3) 成熟度 + 标签
     fh_df = _apply_maturity_and_labels(fh_df, snapshot_dates=snapshot_dates, upper_bound=upper_bound, warnings=warnings)
-
-    # 4) 样本级闸门
     fh_df = _apply_sample_gate(fh_df)
 
-    # 5) 批级闸门 + batch_quality_score
     batch_gate = _batch_gate_report(fh_df)
     fh_df = _write_batch_quality_score(fh_df, batch_gate)
 
-    # 6) 回写 feature_history.csv
     fh_df = _dedup_keep_last_by_keys(fh_df, ["trade_date", "ts_code"])
     fh_df.to_csv(fh_path, index=False, encoding="utf-8")
 
-    # 7) 命中率历史
     hit_df, hit_csv, latest_hit = _build_hit_history(fh_df, learning_dir, warnings)
 
     hit_rows_done_last10: List[Dict[str, Any]] = []
@@ -1205,10 +1208,8 @@ def run_step7(s: Settings, ctx: Dict[str, Any]) -> Dict[str, Any]:
             d = d.sort_values("trade_date").tail(10)
             hit_rows_done_last10 = d[["trade_date", "verify_date", "topn", "hit", "hit_rate"]].to_dict(orient="records")
 
-    # 8) 训练
     train_result = _train_models_pipeline(s=s, df=fh_df, batch_gate=batch_gate, warnings=warnings)
 
-    # 9) 报告
     report = {
         "ts": _now_str(),
         "run_mode": run_mode,
