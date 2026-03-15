@@ -1,5 +1,5 @@
 {
-  "ts": "2026-03-15 16:19:22",
+  "ts": "2026-03-15 16:30:44",
   "run_mode": "auto_daily",
   "allow_model_update": true,
   "topn": 10,
@@ -443,9 +443,9 @@
         },
         "ThemeBoost": {
           "non_null_rate": 1.0,
-          "non_zero_rate": 0.7436021245774987,
-          "std": 0.38230283903143336,
-          "unique_count": 19
+          "non_zero_rate": 0.7513278609367455,
+          "std": 0.3812161832333494,
+          "unique_count": 37
         },
         "turnover_rate": {
           "non_null_rate": 1.0,
@@ -468,7 +468,7 @@
         "prob_final": {
           "non_null_rate": 0.10622887493964268,
           "non_zero_rate": 0.10622887493964268,
-          "std": 0.09062653192673019,
+          "std": 0.09316642356363622,
           "unique_count": 220
         },
         "final_score": {
@@ -519,8 +519,8 @@
       "min_positive_samples": 12,
       "min_feature_coverage": 0.85
     },
-    "updated_at_utc": "2026-03-15T08:19:22Z",
-    "model_version": "c63d801617593afe317728d7e93a5735808850dc",
+    "updated_at_utc": "2026-03-15T08:30:43Z",
+    "model_version": "b1580c6df910efaa621983edf49e8acdbe41b878",
     "today_yyyymmdd": "20260315",
     "latest_snapshot_yyyymmdd": "20260313",
     "label_upper_bound_yyyymmdd": "20260313"
