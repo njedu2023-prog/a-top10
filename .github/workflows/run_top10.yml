@@ -96,17 +96,7 @@ jobs:
 
           if [ -n "$MANUAL" ]; then
             echo "Use manual trade_date=$MANUAL"
-            if ! python - "$MANUAL" <<'PY'
-import sys
-from a_top10.config import is_a_share_trading_day
-
-td = str(sys.argv[1]).strip()
-if not (len(td) == 8 and td.isdigit()):
-    raise SystemExit(f"invalid trade_date format: {td}")
-if not is_a_share_trading_day(td):
-    raise SystemExit(f"manual trade_date is not an A-share trading day: {td}")
-PY
-            then
+            if ! python -c "import sys; from a_top10.config import is_a_share_trading_day; td=str(sys.argv[1]).strip(); assert len(td)==8 and td.isdigit(), f'invalid trade_date format: {td}'; assert is_a_share_trading_day(td), f'manual trade_date is not an A-share trading day: {td}'" "$MANUAL"; then
               echo "ERROR: manual trade_date invalid or not A-share trading day: $MANUAL"
               exit 3
             fi
@@ -117,15 +107,7 @@ PY
           today="$(date +%Y%m%d)"
 
           if [ "$EVENT_NAME" = "schedule" ]; then
-            if ! python - "$today" <<'PY'
-import sys
-from a_top10.config import is_a_share_trading_day
-
-today = str(sys.argv[1]).strip()
-if not is_a_share_trading_day(today):
-    raise SystemExit(1)
-PY
-            then
+            if ! python -c "import sys; from a_top10.config import is_a_share_trading_day; sys.exit(0 if is_a_share_trading_day(str(sys.argv[1]).strip()) else 1)" "$today"; then
               echo "Today=$today is not an A-share trading day. Skip scheduled run."
               echo "skip_run=true" >> "$GITHUB_OUTPUT"
               echo "trade_date=" >> "$GITHUB_OUTPUT"
@@ -181,13 +163,13 @@ PY
           echo "trade_date=$found" >> "$GITHUB_OUTPUT"
 
       - name: Skip scheduled non-trading day
-        if: steps.resolve_date.outputs.skip_run == 'true'
+        if: ${{ steps.resolve_date.outputs.skip_run == 'true' }}
         run: |
           echo "A-share non-trading day: scheduled workflow skipped cleanly."
 
       # Sync ONLY the resolved trade_date directory into _warehouse (system contract)
       - name: Sync TOP3 snapshot to _warehouse (ONLY trade_date dir)
-        if: steps.resolve_date.outputs.skip_run != 'true'
+        if: ${{ steps.resolve_date.outputs.skip_run != 'true' }}
         id: sync_top3
         run: |
           set -euo pipefail
@@ -223,7 +205,7 @@ PY
 
       # Debug: print header/columns for limit_list_d.csv (proof of sync)
       - name: Debug synced limit_list_d (header + columns)
-        if: steps.resolve_date.outputs.skip_run != 'true'
+        if: ${{ steps.resolve_date.outputs.skip_run != 'true' }}
         run: |
           set -euo pipefail
           td="${{ steps.resolve_date.outputs.trade_date }}"
@@ -235,7 +217,7 @@ PY
 
       # Quality gate (required files + key columns)
       - name: Quality gate (required files + key columns)
-        if: steps.resolve_date.outputs.skip_run != 'true'
+        if: ${{ steps.resolve_date.outputs.skip_run != 'true' }}
         run: |
           set -euo pipefail
 
@@ -260,7 +242,7 @@ PY
 
       # Upload snapshot dir as artifact (optional but recommended as audit proof)
       - name: Upload synced snapshot dir (artifact)
-        if: always() && steps.resolve_date.outputs.skip_run != 'true'
+        if: ${{ always() && steps.resolve_date.outputs.skip_run != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: top3_snapshot_${{ steps.resolve_date.outputs.trade_date }}_${{ github.run_id }}
@@ -269,7 +251,7 @@ PY
           retention-days: 30
 
       - name: Run Top10 Engine + Step7
-        if: steps.resolve_date.outputs.skip_run != 'true'
+        if: ${{ steps.resolve_date.outputs.skip_run != 'true' }}
         env:
           TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
         run: |
@@ -283,7 +265,7 @@ PY
 
       # ✅ Stamp (single file overwrite)
       - name: Stamp last run (always)
-        if: always() && steps.resolve_date.outputs.skip_run != 'true'
+        if: ${{ always() && steps.resolve_date.outputs.skip_run != 'true' }}
         run: |
           set -euo pipefail
           td="${{ steps.resolve_date.outputs.trade_date }}"
@@ -294,7 +276,7 @@ PY
 
       # ✅ Commit & push: outputs + models + _warehouse(today)
       - name: Commit & push outputs + models + _warehouse(today) (always)
-        if: always() && steps.resolve_date.outputs.skip_run != 'true'
+        if: ${{ always() && steps.resolve_date.outputs.skip_run != 'true' }}
         run: |
           set -euo pipefail
 
