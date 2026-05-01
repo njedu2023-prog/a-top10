@@ -3,12 +3,103 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Tuple, Optional
+from typing import Any, Dict, Optional, Tuple
 
-import yaml
 import pandas as pd
+import yaml
+
+
+# =========================================================
+# A 股交易日历兜底
+# =========================================================
+# 说明：
+# 1. 专业交易日历的第一优先级仍应来自数据仓库/外部 trade_cal。
+# 2. 这里提供硬兜底，避免节假日前后错误回退到“自然工作日”。
+# 3. 2026 年休市安排按上交所公告口径写入，用于修复 20260430 -> 20260506。
+A_SHARE_HOLIDAY_RANGES: Tuple[Tuple[str, str], ...] = (
+    # 2024
+    ("20240101", "20240101"),
+    ("20240209", "20240218"),
+    ("20240404", "20240406"),
+    ("20240501", "20240505"),
+    ("20240608", "20240610"),
+    ("20240915", "20240917"),
+    ("20241001", "20241007"),
+    # 2025
+    ("20250101", "20250101"),
+    ("20250128", "20250204"),
+    ("20250404", "20250406"),
+    ("20250501", "20250505"),
+    ("20250531", "20250602"),
+    ("20251001", "20251008"),
+    # 2026
+    ("20260101", "20260103"),
+    ("20260215", "20260223"),
+    ("20260404", "20260406"),
+    ("20260501", "20260505"),
+    ("20260619", "20260621"),
+    ("20260925", "20260927"),
+    ("20261001", "20261007"),
+)
+
+
+def _parse_yyyymmdd(s: str) -> date:
+    return datetime.strptime(str(s), "%Y%m%d").date()
+
+
+def _fmt_yyyymmdd(d: date) -> str:
+    return d.strftime("%Y%m%d")
+
+
+def _date_range(start: str, end: str) -> set[str]:
+    s = _parse_yyyymmdd(start)
+    e = _parse_yyyymmdd(end)
+    out: set[str] = set()
+    cur = s
+    while cur <= e:
+        out.add(_fmt_yyyymmdd(cur))
+        cur += timedelta(days=1)
+    return out
+
+
+A_SHARE_HOLIDAYS: set[str] = set()
+for _s, _e in A_SHARE_HOLIDAY_RANGES:
+    A_SHARE_HOLIDAYS.update(_date_range(_s, _e))
+
+
+def is_a_share_trading_day(trade_date: str) -> bool:
+    """A 股交易日判断：周末 + 法定休市日过滤。"""
+    try:
+        d = _parse_yyyymmdd(trade_date)
+    except Exception:
+        return False
+    if d.weekday() >= 5:
+        return False
+    return _fmt_yyyymmdd(d) not in A_SHARE_HOLIDAYS
+
+
+def next_a_share_trading_day(trade_date: str, max_scan_days: int = 30) -> str:
+    """返回给定日期之后的下一个 A 股交易日。"""
+    d = _parse_yyyymmdd(trade_date)
+    for _ in range(max_scan_days):
+        d += timedelta(days=1)
+        s = _fmt_yyyymmdd(d)
+        if is_a_share_trading_day(s):
+            return s
+    raise RuntimeError(f"Cannot resolve next A-share trading day after {trade_date}")
+
+
+def prev_a_share_trading_day(trade_date: str, max_scan_days: int = 30) -> str:
+    """返回给定日期之前的上一个 A 股交易日。"""
+    d = _parse_yyyymmdd(trade_date)
+    for _ in range(max_scan_days):
+        d -= timedelta(days=1)
+        s = _fmt_yyyymmdd(d)
+        if is_a_share_trading_day(s):
+            return s
+    raise RuntimeError(f"Cannot resolve previous A-share trading day before {trade_date}")
 
 
 # =========================================================
@@ -18,7 +109,7 @@ class DataRepo:
     """
     统一访问你们本地数据仓库结构。
 
-    仓库结构（你给的真实路径）：
+    仓库结构：
     _warehouse/
         a-share-top3-data/
             data/raw/
@@ -37,22 +128,16 @@ class DataRepo:
         self.raw_dir = raw_dir
 
     def snapshot_dir(self, trade_date: str) -> Path:
-        """返回某个交易日快照目录 Path"""
-        year = trade_date[:4]
-        return (
-            self.warehouse_root
-            / self.repo_name
-            / self.raw_dir
-            / year
-            / trade_date
-        )
+        """返回某个交易日快照目录 Path。"""
+        year = str(trade_date)[:4]
+        return self.warehouse_root / self.repo_name / self.raw_dir / year / str(trade_date)
 
     # ---------- 通用 CSV 读取 ----------
     @staticmethod
     def read_csv_if_exists(p: Path) -> pd.DataFrame:
         if not p.exists():
             return pd.DataFrame()
-        for enc in ("utf-8", "gbk"):
+        for enc in ("utf-8", "utf-8-sig", "gbk"):
             try:
                 return pd.read_csv(p, dtype=str, encoding=enc)
             except Exception:
@@ -78,13 +163,14 @@ class DataRepo:
     # ---------- Step5 训练闭环需要：列出全部 snapshot 日期 ----------
     def list_snapshot_dates(self) -> list[str]:
         """
-        返回所有 YYYYMMDD 目录，供 Step5 训练使用。
+        返回所有已有 YYYYMMDD 快照目录，供 Step5 训练使用。
+        注意：这是“已有数据日期”，不是完整交易日历。
         """
         root = self.warehouse_root / self.repo_name / self.raw_dir
         if not root.exists():
             return []
 
-        dates = []
+        dates: list[str] = []
         for year_dir in root.iterdir():
             if not year_dir.is_dir():
                 continue
@@ -92,7 +178,40 @@ class DataRepo:
                 if d.is_dir() and len(d.name) == 8 and d.name.isdigit():
                     dates.append(d.name)
 
-        return sorted(dates)
+        return sorted(set(dates))
+
+    # ---------- A 股交易日历能力 ----------
+    def list_trade_dates(self, start: str = "20240101", end: str = "20261231") -> list[str]:
+        """
+        返回完整 A 股交易日历兜底表。
+        不再把已有快照目录误当成完整交易日历。
+        """
+        s = _parse_yyyymmdd(start)
+        e = _parse_yyyymmdd(end)
+        out: list[str] = []
+        cur = s
+        while cur <= e:
+            ds = _fmt_yyyymmdd(cur)
+            if is_a_share_trading_day(ds):
+                out.append(ds)
+            cur += timedelta(days=1)
+        return out
+
+    def is_trade_date(self, trade_date: str) -> bool:
+        return is_a_share_trading_day(str(trade_date))
+
+    def prev_next_trade_date(self, trade_date: str) -> tuple[str, str]:
+        """
+        统一返回上一交易日 / 下一交易日。
+        用于 writers、Step7、后续任何需要 verify_date 的模块。
+        """
+        return prev_a_share_trading_day(str(trade_date)), next_a_share_trading_day(str(trade_date))
+
+    def next_trade_date(self, trade_date: str) -> str:
+        return next_a_share_trading_day(str(trade_date))
+
+    def prev_trade_date(self, trade_date: str) -> str:
+        return prev_a_share_trading_day(str(trade_date))
 
 
 # =========================================================
@@ -132,12 +251,10 @@ class Settings:
     version: str = "0.1"
     timezone: str = "Asia/Shanghai"
 
-    # 关键：必须 factory，否则 Settings() 时自动创建独立对象
     data_repo: DataRepoCfg = field(default_factory=DataRepoCfg)
     io: IOCfg = field(default_factory=IOCfg)
     emotion_gate: EmotionGateCfg = field(default_factory=EmotionGateCfg)
 
-    # 🟢 最关键修复：给所有 step 提供 DataRepo 实例
     def __post_init__(self):
         self.data_repo = DataRepo(
             warehouse_root=self.data_repo.warehouse_root,
@@ -149,7 +266,10 @@ class Settings:
         td = os.getenv("TRADE_DATE", "").strip()
         if td:
             return td
-        return datetime.now().strftime("%Y%m%d")
+        today = datetime.now().strftime("%Y%m%d")
+        if is_a_share_trading_day(today):
+            return today
+        return prev_a_share_trading_day(today)
 
 
 # =========================================================
@@ -169,17 +289,17 @@ def load_settings(config_path: str) -> Settings:
 
     # -------- data_repo --------
     dr = raw.get("data_repo", {}) or {}
-    s.data_repo = DataRepoCfg(
-        warehouse_root=str(dr.get("warehouse_root", s.data_repo.warehouse_root)),
-        repo_name=str(dr.get("repo_name", s.data_repo.repo_name)),
-        raw_dir=str(dr.get("raw_dir", s.data_repo.raw_dir)),
+    data_repo_cfg = DataRepoCfg(
+        warehouse_root=str(dr.get("warehouse_root", DataRepoCfg.warehouse_root)),
+        repo_name=str(dr.get("repo_name", DataRepoCfg.repo_name)),
+        raw_dir=str(dr.get("raw_dir", DataRepoCfg.raw_dir)),
     )
 
     # 重要：重新生成 DataRepo 实例
     s.data_repo = DataRepo(
-        warehouse_root=s.data_repo.warehouse_root,
-        repo_name=s.data_repo.repo_name,
-        raw_dir=s.data_repo.raw_dir,
+        warehouse_root=data_repo_cfg.warehouse_root,
+        repo_name=data_repo_cfg.repo_name,
+        raw_dir=data_repo_cfg.raw_dir,
     )
 
     # -------- io --------
@@ -187,6 +307,8 @@ def load_settings(config_path: str) -> Settings:
     hint = io_raw.get("candidate_size_hint", list(s.io.candidate_size_hint))
     if isinstance(hint, (list, tuple)) and len(hint) == 2:
         hint = (int(hint[0]), int(hint[1]))
+    else:
+        hint = s.io.candidate_size_hint
 
     s.io = IOCfg(
         outputs_dir=str(io_raw.get("outputs_dir", s.io.outputs_dir)),
