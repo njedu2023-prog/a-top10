@@ -5,7 +5,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -39,9 +39,7 @@ V3_PRED_BASE_COLS = [
 V3_PRED_META_COLS = ["trade_date", "verify_date", "run_id", "run_attempt", "commit_sha", "generated_at_utc"]
 V3_PRED_COLS = V3_PRED_META_COLS[:2] + V3_PRED_BASE_COLS + V3_PRED_META_COLS[2:]
 
-# decision 专用上游源表契约：
-# 只服务 top10-decision/data/pred/pred_source_latest.csv
-# 注意：这里只收敛字段，不改变原有价值排序与 rank 顺序。
+# decision 专用上游源表契约：只服务 top10-decision/data/pred/pred_source_latest.csv
 DECISION_SOURCE_BASE_COLS = [
     "rank",
     "ts_code",
@@ -107,6 +105,35 @@ FEATURE_HISTORY_PRESERVE_IF_NEW_EMPTY = {
     "close",
 }
 
+# A 股非交易日补充表：用于 snapshot calendar 不完整时的硬兜底。
+# 重要：这里不是用“自然工作日”猜交易日，而是先排除交易所已公布的休市日。
+# 可通过环境变量 A_TOP10_EXTRA_CLOSED_DATES 追加，格式：YYYYMMDD,YYYYMMDD...
+A_SHARE_CLOSED_DATES = {
+    # 2024
+    "20240101",
+    "20240209", "20240212", "20240213", "20240214", "20240215", "20240216",
+    "20240404", "20240405",
+    "20240501", "20240502", "20240503",
+    "20240610",
+    "20240916", "20240917",
+    "20241001", "20241002", "20241003", "20241004", "20241007",
+    # 2025
+    "20250101",
+    "20250128", "20250129", "20250130", "20250131", "20250203", "20250204",
+    "20250404",
+    "20250501", "20250502", "20250505",
+    "20250602",
+    "20251001", "20251002", "20251003", "20251006", "20251007", "20251008",
+    # 2026（上海证券交易所 2026 年度休市安排）
+    "20260101", "20260102",
+    "20260216", "20260217", "20260218", "20260219", "20260220", "20260223",
+    "20260406",
+    "20260501", "20260504", "20260505",
+    "20260619",
+    "20260925",
+    "20261001", "20261002", "20261005", "20261006", "20261007",
+}
+
 
 def _utc_now_iso() -> str:
     try:
@@ -169,7 +196,7 @@ def _clean_date_value(x: Any) -> str:
     return digits[:8] if len(digits) >= 8 else s
 
 
-def _first_existing_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
+def _first_existing_col(df: Optional[pd.DataFrame], candidates: Sequence[str]) -> Optional[str]:
     if df is None or df.empty:
         return None
     lower_map = {str(c).lower(): c for c in df.columns}
@@ -261,7 +288,7 @@ def _ctx_trade_date(ctx: Any) -> str:
     if not isinstance(ctx, dict):
         return ""
     for k in ("trade_date", "TRADE_DATE", "asof", "date", "snapshot_date"):
-        s = _safe_str(ctx.get(k))
+        s = _clean_date_value(ctx.get(k))
         if len(s) == 8 and s.isdigit():
             return s
     return ""
@@ -400,7 +427,6 @@ def _load_limit_df(settings, ctx, trade_date: str) -> pd.DataFrame:
         if df is not None and not df.empty:
             return df
 
-    # 优先直接命中历史快照目录，避免仅依赖当前 ctx/snapshot_dir 导致历史验证日全空。
     for snap in _warehouse_snapshot_dir_candidates(trade_date):
         if not snap.exists():
             continue
@@ -440,10 +466,9 @@ def _load_daily_df(settings, ctx, trade_date: str) -> pd.DataFrame:
     snap = _resolve_snapshot_dir(settings, ctx, trade_date)
     if snap is None:
         return pd.DataFrame()
-    for fn in ("daily.csv",):
-        p = snap / fn
-        if p.exists():
-            return _read_csv_guess(p)
+    p = snap / "daily.csv"
+    if p.exists():
+        return _read_csv_guess(p)
     return pd.DataFrame()
 
 
@@ -457,10 +482,61 @@ def _list_trade_dates(settings) -> List[str]:
                 dates = list(fn()) or []
             except Exception:
                 pass
-    return sorted([d for d in dates if isinstance(d, str) and len(d) == 8 and d.isdigit()])
+    clean = sorted({_clean_date_value(d) for d in dates if _clean_date_value(d)})
+    return [d for d in clean if len(d) == 8 and d.isdigit()]
+
+
+def _extra_closed_dates_from_env() -> set:
+    raw = os.getenv("A_TOP10_EXTRA_CLOSED_DATES") or os.getenv("TOP10_EXTRA_CLOSED_DATES") or ""
+    out = set()
+    for item in re.split(r"[,;\s]+", raw.strip()):
+        d = _clean_date_value(item)
+        if len(d) == 8 and d.isdigit():
+            out.add(d)
+    return out
+
+
+def _is_a_share_trade_day(dt: datetime) -> bool:
+    d = dt.strftime("%Y%m%d")
+    if dt.weekday() >= 5:
+        return False
+    if d in A_SHARE_CLOSED_DATES or d in _extra_closed_dates_from_env():
+        return False
+    return True
+
+
+def _scan_prev_next_a_share_trade_date(trade_date: str) -> Tuple[str, str]:
+    try:
+        d = datetime.strptime(trade_date, "%Y%m%d")
+    except Exception:
+        return "", ""
+
+    prev_d = d - timedelta(days=1)
+    next_d = d + timedelta(days=1)
+
+    # 上限 45 天，避免异常日期造成死循环。
+    for _ in range(45):
+        if _is_a_share_trade_day(prev_d):
+            break
+        prev_d -= timedelta(days=1)
+    else:
+        prev_d = None
+
+    for _ in range(45):
+        if _is_a_share_trade_day(next_d):
+            break
+        next_d += timedelta(days=1)
+    else:
+        next_d = None
+
+    return (
+        prev_d.strftime("%Y%m%d") if prev_d is not None else "",
+        next_d.strftime("%Y%m%d") if next_d is not None else "",
+    )
 
 
 def _prev_next_trade_date(calendar: List[str], trade_date: str) -> Tuple[str, str]:
+    trade_date = _clean_date_value(trade_date)
     if calendar and trade_date in calendar:
         i = calendar.index(trade_date)
         prev_td = calendar[i - 1] if i - 1 >= 0 else ""
@@ -470,24 +546,20 @@ def _prev_next_trade_date(calendar: List[str], trade_date: str) -> Tuple[str, st
 
 
 def _prev_next_trade_date_with_fallback(calendar: List[str], trade_date: str) -> Tuple[str, str]:
+    """
+    统一交易日锚点解析。
+
+    优先使用 data_repo 的 snapshot calendar；当历史/未来快照不完整时，
+    使用 A 股休市日历兜底，而不是用“自然工作日”硬猜。
+
+    核心修复：20260430 的 next_td 必须为 20260506，而不是 20260501。
+    """
+    trade_date = _clean_date_value(trade_date)
     prev_td, next_td = _prev_next_trade_date(calendar, trade_date)
-    if prev_td and next_td:
-        return prev_td, next_td
-    try:
-        d = datetime.strptime(trade_date, "%Y%m%d")
-    except Exception:
-        return prev_td or "", next_td or ""
-    prev_d = d - timedelta(days=1)
-    while prev_d.weekday() >= 5:
-        prev_d -= timedelta(days=1)
-    next_d = d + timedelta(days=1)
-    while next_d.weekday() >= 5:
-        next_d += timedelta(days=1)
-    if not prev_td:
-        prev_td = prev_d.strftime("%Y%m%d")
-    if not next_td:
-        next_td = next_d.strftime("%Y%m%d")
-    return prev_td, next_td
+    fallback_prev, fallback_next = _scan_prev_next_a_share_trade_date(trade_date)
+
+    # 如果 snapshot calendar 只缺一边，用专业日历补齐；如果两边都有，以 snapshot 为准。
+    return prev_td or fallback_prev, next_td or fallback_next
 
 
 def _normalize_rank(df: pd.DataFrame) -> pd.Series:
@@ -546,26 +618,17 @@ def _canonicalize_prediction_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
 
 
 def _canonicalize_decision_source_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
-    """
-    决策源表标准化：
-    - 仅服务 top10-decision/data/pred/pred_source_latest.csv
-    - 只收敛字段，不做任何重排序
-    - rank / 行顺序 / 原价值排序保持不变
-    """
     if df is None or df.empty:
         return pd.DataFrame(columns=DECISION_SOURCE_BASE_COLS)
-
     src = df.copy()
     out = pd.DataFrame(index=src.index)
     code_col = _first_existing_col(src, CODE_COL_CANDIDATES)
     name_col = _first_existing_col(src, NAME_COL_CANDIDATES)
     board_col = _first_existing_col(src, BOARD_COL_CANDIDATES)
-
     out["rank"] = _normalize_rank(src)
     out["ts_code"] = src[code_col] if code_col else ""
     out["name"] = src[name_col] if name_col else ""
     out["board"] = src[board_col] if board_col else ""
-
     prob_series = src["Probability"] if "Probability" in src.columns else (
         src["prob_final"] if "prob_final" in src.columns else (src["prob_ml"] if "prob_ml" in src.columns else "")
     )
@@ -579,7 +642,6 @@ def _canonicalize_decision_source_frame(df: Optional[pd.DataFrame]) -> pd.DataFr
         errors="coerce",
     )
     out["rank"] = pd.to_numeric(out["rank"], errors="coerce")
-
     return out.reindex(columns=DECISION_SOURCE_BASE_COLS, fill_value="")
 
 
@@ -639,7 +701,6 @@ def _canonicalize_feature_history_batch(
     out = pd.DataFrame(index=src.index)
     code_col = _first_existing_col(src, CODE_COL_CANDIDATES)
     name_col = _first_existing_col(src, NAME_COL_CANDIDATES)
-
     out["run_time_utc"] = run_time_utc
     out["trade_date"] = trade_date
     out["ts_code"] = src[code_col] if code_col else ""
@@ -658,17 +719,9 @@ def _canonicalize_feature_history_batch(
     out["prob_rule"] = src["prob_rule"] if "prob_rule" in src.columns else ""
 
     for col in [
-        "is_sample_mature",
-        "mature_reason",
-        "label_delay_flag",
-        "y_limit_hit",
-        "y_next_ret",
-        "learnable_flag",
-        "reject_reason",
-        "sample_quality_grade",
-        "batch_quality_score",
-        "gate_version",
-        "label_version",
+        "is_sample_mature", "mature_reason", "label_delay_flag", "y_limit_hit", "y_next_ret",
+        "learnable_flag", "reject_reason", "sample_quality_grade", "batch_quality_score",
+        "gate_version", "label_version",
     ]:
         out[col] = src[col] if col in src.columns else ""
 
@@ -790,7 +843,7 @@ def _format_ret_pct(x: Any) -> str:
         v = float(x)
         if pd.isna(v):
             return ""
-        return f"{v*100:.2f}%"
+        return f"{v * 100:.2f}%"
     except Exception:
         return ""
 
@@ -837,11 +890,9 @@ def _df_to_md_table(df: pd.DataFrame, cols: Optional[Sequence[str]] = None) -> s
         headers = list(x.columns)
 
         def esc(v: Any) -> str:
-            s = str(v).replace("\n", " ").replace("\r", " ").replace("|", "\\|")
-            return s
+            return str(v).replace("\n", " ").replace("\r", " ").replace("|", "\\|")
 
-        lines = []
-        lines.append("| " + " | ".join(esc(h) for h in headers) + " |")
+        lines = ["| " + " | ".join(esc(h) for h in headers) + " |"]
         lines.append("| " + " | ".join("---" for _ in headers) + " |")
         for _, row in x.iterrows():
             lines.append("| " + " | ".join(esc(row[h]) for h in headers) + " |")
@@ -866,7 +917,12 @@ def _limit_hit_code_sets(limit_df: pd.DataFrame) -> Tuple[set, set]:
     return ts_set, c6_set
 
 
-def _topn_to_hit_df(topn_df: Optional[pd.DataFrame], limit_df: pd.DataFrame, verify_daily_df: Optional[pd.DataFrame] = None, verify_date: str = "") -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def _topn_to_hit_df(
+    topn_df: Optional[pd.DataFrame],
+    limit_df: pd.DataFrame,
+    verify_daily_df: Optional[pd.DataFrame] = None,
+    verify_date: str = "",
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     pred = _canonicalize_prediction_frame(topn_df)
     metrics = {"hit_count": 0, "top_count": 0, "limit_count": _count_limitups(limit_df), "hit_rate": "", "avg_ret": "", "median_ret": ""}
     if pred.empty:
@@ -896,7 +952,7 @@ def _topn_to_hit_df(topn_df: Optional[pd.DataFrame], limit_df: pd.DataFrame, ver
             hit_count += 1
         tclose = pd.to_numeric(row.get("close"), errors="coerce")
         nclose = next_close_map.get(ts) if ts else next_close_map.get(c6)
-        if pd.notna(tclose) and nclose is not None:
+        if pd.notna(tclose) and nclose is not None and float(tclose) != 0:
             rets.append(float(nclose) / float(tclose) - 1.0)
         else:
             rets.append(pd.NA)
@@ -945,7 +1001,6 @@ def _build_recent_perf_df(hit_hist: pd.DataFrame, settings, ctx) -> pd.DataFrame
         td = _clean_date_value(row.get("trade_date"))
         vd = _clean_date_value(row.get("verify_date"))
         limit_df = _load_limit_df(settings, {}, vd) if vd else pd.DataFrame()
-
         hit_v = pd.to_numeric(row.get("hit"), errors="coerce")
         limit_count = _count_limitups(limit_df)
         rows.append({
@@ -985,17 +1040,6 @@ def _standardize_candidate_pool(full_df: Optional[pd.DataFrame], topn_df: Option
     return out
 
 
-def _load_step7_latest_hit(learning_dir: Path) -> Dict[str, Any]:
-    p = learning_dir / "step7_report_latest.json"
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return data.get("latest_hit") or {}
-    except Exception:
-        return {}
-
-
 def _write_feature_history(learning_dir: Path, batch_df: pd.DataFrame) -> pd.DataFrame:
     history_path = learning_dir / "feature_history.csv"
     existing_df = _read_csv_guess(history_path)
@@ -1008,6 +1052,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     outdir = Path(getattr(getattr(settings, "io", None), "outputs_dir", None) or "outputs")
     _ensure_dir(outdir)
 
+    trade_date = _clean_date_value(trade_date)
     run_meta = _get_run_meta()
     learning_dir = outdir / "learning"
     warehouse_dir = outdir / "_warehouse" / "pred_top10"
@@ -1055,7 +1100,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
     prev_topn_df = _load_json_topn(outdir, prev_td)
     prev_verify_daily = _load_daily_df(settings, ctx, trade_date)
-    prev_hit_df, prev_metrics = _topn_to_hit_df(prev_topn_df, limit_df_current, prev_verify_daily, trade_date)
+    prev_hit_df, _ = _topn_to_hit_df(prev_topn_df, limit_df_current, prev_verify_daily, trade_date)
     if not prev_hit_df.empty:
         prev_hit_df["trade_date"] = prev_td
         prev_hit_df["verify_date"] = trade_date
@@ -1117,10 +1162,6 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     _write_text_overwrite(outdir / "latest.md", md_text, encoding="utf-8")
 
     topn_out = _enrich_prediction_with_meta(topn_df, trade_date, next_td, run_meta)
-
-    # 关键改造点：
-    # pred_decisio_latest.csv 现在直接收敛为 decision 标准源表，
-    # 仅改字段契约，不改原排序，不改 rank，不改 full_df 行顺序。
     full_out = _enrich_decision_source_with_meta(full_df, trade_date, next_td, run_meta)
 
     _write_csv_overwrite(topn_out, learning_dir / f"pred_top10_{trade_date}.csv")
