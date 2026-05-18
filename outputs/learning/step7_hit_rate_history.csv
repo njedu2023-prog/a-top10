@@ -69,4 +69,5 @@
 20260512,20260513,10,4,0.4,src=feature_history_v3
 20260513,20260514,10,3,0.3,src=feature_history_v3
 20260514,20260515,10,3,0.3,src=feature_history_v3
-20260515,,0,,,pending_or_no_mature_rows
+20260515,20260518,10,3,0.3,src=feature_history_v3
+20260518,,0,,,pending_or_no_mature_rows
