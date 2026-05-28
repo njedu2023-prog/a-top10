@@ -1,9 +1,9 @@
 {
-  "ts": "2026-05-27 22:41:59",
+  "ts": "2026-05-28 08:41:31",
   "run_mode": "auto_daily",
-  "today_yyyymmdd": "20260527",
-  "latest_snapshot_yyyymmdd": "20260526",
-  "label_upper_bound_yyyymmdd": "20260526",
+  "today_yyyymmdd": "20260528",
+  "latest_snapshot_yyyymmdd": "20260527",
+  "label_upper_bound_yyyymmdd": "20260527",
   "feature_history_file": "outputs/learning/feature_history.csv",
   "latest_hit": {
     "trade_date": "20260525",
@@ -1119,19 +1119,19 @@
     "rejected_rows": 49,
     "top_reasons": [
       {
-        "reason": "pending_next_snapshot",
+        "reason": "pending_truth_source",
         "count": 49
       }
     ],
     "reasons": {
-      "pending_next_snapshot": 49
+      "pending_truth_source": 49
     },
     "trade_dates": {
       "20260526": {
         "rejected_rows": 49,
         "top_reasons": [
           {
-            "reason": "pending_next_snapshot",
+            "reason": "pending_truth_source",
             "count": 49
           }
         ]
@@ -1278,5 +1278,7 @@
       "reason": "ok_partial_pass_dates_trained"
     }
   },
-  "warnings": []
+  "warnings": [
+    "truth_source_not_ready: trade_date=20260526, verify_date=20260527"
+  ]
 }

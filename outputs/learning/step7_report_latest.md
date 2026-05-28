@@ -1,10 +1,10 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-05-27 22:41:59
+- 生成时间：2026-05-28 08:41:31
 - RunMode：auto_daily
-- Today：20260527
-- LatestSnapshot：20260526
-- LabelUpperBound：20260526
+- Today：20260528
+- LatestSnapshot：20260527
+- LabelUpperBound：20260527
 
 ## 1) 最新命中
 
@@ -46,7 +46,7 @@
 
 | reason | count |
 | --- | --- |
-| pending_next_snapshot | 49 |
+| pending_truth_source | 49 |
 
 ## 3) 训练执行结果
 
@@ -59,3 +59,7 @@
 - pass_trade_dates：77
 - fail_trade_dates：1
 - reason：ok_partial_pass_dates_trained
+
+## 4) Warnings
+
+- truth_source_not_ready: trade_date=20260526, verify_date=20260527
