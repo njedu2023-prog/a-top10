@@ -3,7 +3,6 @@ name: Run Top10 Engine (Auto Daily)
 on:
   schedule:
     - cron: "35 11 * * 1-5"
-
   workflow_dispatch:
     inputs:
       trade_date:
@@ -13,6 +12,9 @@ on:
 
 permissions:
   contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
   group: top10-daily
@@ -25,7 +27,6 @@ defaults:
 jobs:
   run:
     runs-on: ubuntu-latest
-
     env:
       TZ: Asia/Shanghai
       PYTHONUTF8: "1"
@@ -61,12 +62,12 @@ jobs:
 
     steps:
       - name: Checkout engine repo (a-top10)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -80,45 +81,24 @@ jobs:
           pip install -U tabulate
           pip install -U lightgbm
 
-      # Resolve trade_date
-      # - 手动指定 trade_date：严格校验 YYYYMMDD 且必须是 A 股交易日
-      # - 定时任务：如果当天不是 A 股交易日，直接跳过，不重复提交旧预测
-      # - 手动留空：仍允许自动寻找最近合格快照，便于节假日人工回放/补跑
-      - name: Resolve trade_date (manual or auto, with A-share calendar + P0 gate)
+      # Resolve trade_date (P0 gate: open_times & seal_amount required)
+      - name: Resolve trade_date (manual or auto, with P0 gate)
         id: resolve_date
         run: |
           set -euo pipefail
 
           MANUAL="${{ github.event.inputs.trade_date || '' }}"
-          EVENT_NAME="${{ github.event_name }}"
-
-          echo "skip_run=false" >> "$GITHUB_OUTPUT"
-
           if [ -n "$MANUAL" ]; then
             echo "Use manual trade_date=$MANUAL"
-            if ! python -c "import sys; from a_top10.config import is_a_share_trading_day; td=str(sys.argv[1]).strip(); assert len(td)==8 and td.isdigit(), f'invalid trade_date format: {td}'; assert is_a_share_trading_day(td), f'manual trade_date is not an A-share trading day: {td}'" "$MANUAL"; then
-              echo "ERROR: manual trade_date invalid or not A-share trading day: $MANUAL"
-              exit 3
-            fi
             echo "trade_date=$MANUAL" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          today="$(date +%Y%m%d)"
-
-          if [ "$EVENT_NAME" = "schedule" ]; then
-            if ! python -c "import sys; from a_top10.config import is_a_share_trading_day; sys.exit(0 if is_a_share_trading_day(str(sys.argv[1]).strip()) else 1)" "$today"; then
-              echo "Today=$today is not an A-share trading day. Skip scheduled run."
-              echo "skip_run=true" >> "$GITHUB_OUTPUT"
-              echo "trade_date=" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-
           echo "Auto resolve latest snapshot trade_date (P0: open_times & seal_amount required)"
+          today="$(date +%Y%m%d)"
           base="https://raw.githubusercontent.com/${DATA_GITHUB_USER}/${DATA_REPO}/${DATA_BRANCH}/${RAW_DIR}"
-
           found=""
+
           for i in $(seq 0 "$LOOKBACK_DAYS"); do
             d="$(date -d "${today} -${i} day" +%Y%m%d)"
             y="${d:0:4}"
@@ -126,12 +106,14 @@ jobs:
             url_probe="${base}/${y}/${d}/${PROBE_FILE}"
             code="$(curl -s -o /dev/null -w "%{http_code}" -I "$url_probe" || true)"
             echo "[probe] ${d} daily => ${code}"
+
             if [ "$code" != "200" ]; then
               continue
             fi
 
             tmp="$(mktemp)"
             url_ll="${base}/${y}/${d}/limit_list_d.csv"
+
             if ! curl -fsSL --retry 2 --retry-delay 1 -o "$tmp" "$url_ll"; then
               echo "[probe] ${d} limit_list_d.csv download FAIL"
               rm -f "$tmp" || true
@@ -162,25 +144,19 @@ jobs:
           echo "Resolved trade_date=$found"
           echo "trade_date=$found" >> "$GITHUB_OUTPUT"
 
-      - name: Skip scheduled non-trading day
-        if: ${{ steps.resolve_date.outputs.skip_run == 'true' }}
-        run: |
-          echo "A-share non-trading day: scheduled workflow skipped cleanly."
-
       # Sync ONLY the resolved trade_date directory into _warehouse (system contract)
       - name: Sync TOP3 snapshot to _warehouse (ONLY trade_date dir)
-        if: ${{ steps.resolve_date.outputs.skip_run != 'true' }}
         id: sync_top3
         run: |
           set -euo pipefail
 
           trade_date="${{ steps.resolve_date.outputs.trade_date }}"
           year="${trade_date:0:4}"
-
           src_dir="${RAW_DIR}/${year}/${trade_date}"
           dest_dir="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${year}/${trade_date}"
 
           rm -rf _tmp_top3 || true
+
           git clone --depth 1 --filter=blob:none --sparse \
             --branch "${DATA_BRANCH}" \
             "https://github.com/${DATA_GITHUB_USER}/${DATA_REPO}.git" _tmp_top3
@@ -205,19 +181,19 @@ jobs:
 
       # Debug: print header/columns for limit_list_d.csv (proof of sync)
       - name: Debug synced limit_list_d (header + columns)
-        if: ${{ steps.resolve_date.outputs.skip_run != 'true' }}
         run: |
           set -euo pipefail
+
           td="${{ steps.resolve_date.outputs.trade_date }}"
           y="${td:0:4}"
           f="${WAREHOUSE_ROOT}/${DATA_REPO}/${RAW_DIR}/${y}/${td}/limit_list_d.csv"
+
           echo "[debug] file=$f"
           head -n 2 "$f" || true
           python -c "import pandas as pd; df=pd.read_csv(r'$f'); print(df.columns.tolist()); print('rows=', len(df))"
 
       # Quality gate (required files + key columns)
       - name: Quality gate (required files + key columns)
-        if: ${{ steps.resolve_date.outputs.skip_run != 'true' }}
         run: |
           set -euo pipefail
 
@@ -233,6 +209,7 @@ jobs:
               missing_required="${missing_required} ${rf}"
             fi
           done
+
           if [ -n "$missing_required" ]; then
             echo "ERROR: required snapshot files missing:${missing_required}"
             exit 21
@@ -242,8 +219,8 @@ jobs:
 
       # Upload snapshot dir as artifact (optional but recommended as audit proof)
       - name: Upload synced snapshot dir (artifact)
-        if: ${{ always() && steps.resolve_date.outputs.skip_run != 'true' }}
-        uses: actions/upload-artifact@v4
+        if: always()
+        uses: actions/upload-artifact@v6
         with:
           name: top3_snapshot_${{ steps.resolve_date.outputs.trade_date }}_${{ github.run_id }}
           path: ${{ steps.sync_top3.outputs.synced_dir }}
@@ -251,32 +228,35 @@ jobs:
           retention-days: 30
 
       - name: Run Top10 Engine + Step7
-        if: ${{ steps.resolve_date.outputs.skip_run != 'true' }}
         env:
           TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
         run: |
           set -euo pipefail
+
           if [ -f "run.py" ]; then
             python run.py
           else
             python -m a_top10
           fi
+
           python -m a_top10.steps.step7_self_learning
 
       # ✅ Stamp (single file overwrite)
       - name: Stamp last run (always)
-        if: ${{ always() && steps.resolve_date.outputs.skip_run != 'true' }}
+        if: always()
         run: |
           set -euo pipefail
+
           td="${{ steps.resolve_date.outputs.trade_date }}"
           rid="${{ github.run_id }}"
           sha="${{ github.sha }}"
+
           mkdir -p outputs/learning
           echo "trade_date=${td} run_id=${rid} commit_sha=${sha} utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "outputs/learning/_last_run.txt"
 
       # ✅ Commit & push: outputs + models + _warehouse(today)
       - name: Commit & push outputs + models + _warehouse(today) (always)
-        if: ${{ always() && steps.resolve_date.outputs.skip_run != 'true' }}
+        if: always()
         run: |
           set -euo pipefail
 
