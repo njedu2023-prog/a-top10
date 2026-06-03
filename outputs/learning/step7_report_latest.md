@@ -1,24 +1,23 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-06-02 23:44:54
+- 生成时间：2026-06-04 00:03:30
 - RunMode：auto_daily
-- Today：20260602
-- LatestSnapshot：20260602
-- LabelUpperBound：20260602
+- Today：20260604
+- LatestSnapshot：20260603
+- LabelUpperBound：20260603
 
 ## 1) 最新命中
 
-- trade_date：20260601
-- verify_date：20260602
-- hit/topn：4/10
-- hit_rate：0.4
+- trade_date：20260602
+- verify_date：20260603
+- hit/topn：1/10
+- hit_rate：0.1
 - note：src=feature_history_v3
 
 ## 1.1) 近10日 Top10 命中率（done-only）
 
 | trade_date | verify_date | topn | hit | hit_rate |
 | --- | --- | --- | --- | --- |
-| 20260519 | 20260520 | 10 | 3 | 0.3 |
 | 20260520 | 20260521 | 10 | 3 | 0.3 |
 | 20260521 | 20260522 | 10 | 5 | 0.5 |
 | 20260522 | 20260525 | 10 | 4 | 0.4 |
@@ -28,20 +27,21 @@
 | 20260528 | 20260529 | 10 | 2 | 0.2 |
 | 20260529 | 20260601 | 10 | 1 | 0.1 |
 | 20260601 | 20260602 | 10 | 4 | 0.4 |
+| 20260602 | 20260603 | 10 | 1 | 0.1 |
 
 ## 2) 批级闸门
 
 - pass：True
 - reason：partial_pass_bad_trade_dates_excluded
-- trade_dates：83
-- pass_dates：82
+- trade_dates：84
+- pass_dates：83
 - fail_dates：1
-- eligible_train_rows：5555
+- eligible_train_rows：5621
 
 ## 2.1) 样本拒绝分布
 
-- total_rows：5621
-- learnable_rows：5555
+- total_rows：5687
+- learnable_rows：5621
 - rejected_rows：66
 
 | reason | count |
@@ -53,9 +53,9 @@
 - trained：True
 - updated：True
 - level：level3
-- train_rows：5555
-- pos/neg：948/4607
+- train_rows：5621
+- pos/neg：959/4662
 - feature_coverage：1.0
-- pass_trade_dates：82
+- pass_trade_dates：83
 - fail_trade_dates：1
 - reason：ok_partial_pass_dates_trained

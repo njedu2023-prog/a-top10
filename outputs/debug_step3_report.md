@@ -1,16 +1,16 @@
 # Step3 Debug Report
 
-- trade_date: `20260602`
+- trade_date: `20260603`
 - rows: 66
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260602`
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260603`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5507
-- daily_basic.csv: 5507
+- daily.csv: 5511
+- daily_basic.csv: 5511
 - top_list.csv: 86
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 67
+- limit_list_d.csv: 66
 - limit_break_d.csv: 0
 - stk_limit.csv: 7631
 
@@ -50,15 +50,15 @@
 
 ```json
 {
-  "trade_date": "20260602",
+  "trade_date": "20260603",
   "step": "step3_strength_score_v3_closeout",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260602",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260603",
   "files": {
-    "daily.csv": 5507,
-    "daily_basic.csv": 5507,
+    "daily.csv": 5511,
+    "daily_basic.csv": 5511,
     "top_list.csv": 86,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 67,
+    "limit_list_d.csv": 66,
     "limit_break_d.csv": 0,
     "stk_limit.csv": 7631
   },
