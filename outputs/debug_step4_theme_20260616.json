@@ -1,0 +1,85 @@
+{
+  "step5_feature_passthrough": {
+    "mapped": {},
+    "missing": [
+      "StrengthScore",
+      "turnover_rate"
+    ]
+  },
+  "trade_date": "20260616",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260616",
+  "params": {
+    "rank_decay_k": 0.18,
+    "topk_industry": 40,
+    "dragon_bonus": 0.08,
+    "north_bonus": 0.05,
+    "fuzzy_max_rows": 300
+  },
+  "source_rows": {
+    "candidate": 118,
+    "hot_boards": 10,
+    "stock_basic": 5529,
+    "top_list": 92,
+    "moneyflow_hsgt": 1
+  },
+  "industry_score_map": {
+    "ok": true,
+    "reason": "",
+    "industry_col": "industry",
+    "rank_col": "rank",
+    "heat_col": "",
+    "size": 10,
+    "top5": [
+      {
+        "industry": "元器件",
+        "theme_heat": 1.0,
+        "board_rank": 1
+      },
+      {
+        "industry": "电气设备",
+        "theme_heat": 0.7946272018253463,
+        "board_rank": 2
+      },
+      {
+        "industry": "化工原料",
+        "theme_heat": 0.6230854212758787,
+        "board_rank": 3
+      },
+      {
+        "industry": "通信设备",
+        "theme_heat": 0.479801681970459,
+        "board_rank": 4
+      },
+      {
+        "industry": "铝",
+        "theme_heat": 0.36012104274902346,
+        "board_rank": 5
+      }
+    ]
+  },
+  "apply": {
+    "candidate_rows": 118,
+    "candidate_code_col": "ts_code",
+    "theme_main_before_ratio": 1.0,
+    "theme_main_after_ratio": 1.0,
+    "matched_industry_count": 72,
+    "matched_industry_exact": 0,
+    "matched_industry_norm": 72,
+    "matched_industry_fuzzy": 0,
+    "lhb_hits": 28,
+    "north_hits": 0,
+    "reason": "theme boost applied"
+  },
+  "diagnosis": "theme boost applied",
+  "quality_distribution": {
+    "A": 72,
+    "C": 46
+  },
+  "missing_rate": {
+    "theme_main": 0.0,
+    "theme_heat": 0.38983050847457623,
+    "board_rank": 0.38983050847457623,
+    "lhb_net_buy": 0.7627118644067796,
+    "ThemeBoost": 0.0
+  }
+}
