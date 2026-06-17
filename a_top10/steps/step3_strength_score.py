@@ -42,6 +42,7 @@ from a_top10.intraday_features import (
     get_intraday_defaults,
     get_intraday_dict,
 )
+from a_top10.config import is_a_share_trading_day, prev_a_share_trading_day
 
 
 # =========================================================
@@ -137,14 +138,22 @@ def _log1p_safe(s: pd.Series) -> pd.Series:
 def _resolve_trade_date(s=None) -> str:
     td = os.getenv("TRADE_DATE", "").strip()
     if td:
-        return td
+        try:
+            if is_a_share_trading_day(td):
+                return td
+            return prev_a_share_trading_day(td)
+        except Exception:
+            pass
     if s is not None:
         for k in ("trade_date", "TRADE_DATE"):
             if hasattr(s, k):
                 v = str(getattr(s, k) or "").strip()
                 if v:
-                    return v
-    return datetime.now().strftime("%Y%m%d")
+                    try:
+                        return v if is_a_share_trading_day(v) else prev_a_share_trading_day(v)
+                    except Exception:
+                        pass
+    return prev_a_share_trading_day(datetime.now().strftime("%Y%m%d"))
 
 
 def _normalize_ts_code(df: pd.DataFrame, col: str = "ts_code") -> pd.DataFrame:
