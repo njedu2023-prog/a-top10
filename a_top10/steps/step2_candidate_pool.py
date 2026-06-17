@@ -176,6 +176,68 @@ def _filter_bad_names(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, int]]:
     return out, stats
 
 
+def _must_close_limit_up(s: Settings) -> bool:
+    try:
+        candidate_pool = getattr(getattr(s, "filters", None), "candidate_pool", None)
+        if candidate_pool is not None and hasattr(candidate_pool, "must_close_limit_up"):
+            return bool(getattr(candidate_pool, "must_close_limit_up"))
+    except Exception:
+        pass
+    return True
+
+
+def _filter_close_limit_up(df: pd.DataFrame, enabled: bool = True) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    stats: Dict[str, Any] = {
+        "enabled": bool(enabled),
+        "method": "none",
+        "input_rows": int(len(df)) if isinstance(df, pd.DataFrame) else 0,
+        "kept_rows": int(len(df)) if isinstance(df, pd.DataFrame) else 0,
+        "dropped_rows": 0,
+    }
+    if not enabled or df is None or df.empty:
+        return df, stats
+
+    out = df.copy()
+    mask = pd.Series([True] * len(out), index=out.index)
+    method = []
+
+    lt_col = _first_existing_col(out, ["limit_type", "limit", "type", "涨停类型", "涨跌停类型"])
+    if lt_col:
+        lt = _safe_series(out, lt_col).str.upper()
+        lt_mask = lt.isin(["U", "UP", "1", "ZT", "涨停", "UP_LIMIT", "LIMIT_UP"])
+        if lt_mask.any():
+            mask &= lt_mask
+            method.append(f"{lt_col}=limit_up")
+
+    status_col = _first_existing_col(out, ["limit_status", "status", "封板状态", "状态"])
+    if status_col:
+        st = _safe_series(out, status_col)
+        open_like = st.str.contains("炸板|开板|未封|失败|broken|open", case=False, regex=True, na=False)
+        if open_like.any():
+            mask &= ~open_like
+            method.append(f"{status_col}=closed")
+
+    close_col = _first_existing_col(out, ["close", "收盘价"])
+    up_col = _first_existing_col(out, ["up_limit", "涨停价"])
+    if close_col and up_col:
+        close = pd.to_numeric(out[close_col], errors="coerce")
+        up_limit = pd.to_numeric(out[up_col], errors="coerce")
+        price_mask = close.notna() & up_limit.notna() & (close >= up_limit * 0.999)
+        if price_mask.any():
+            mask &= price_mask
+            method.append("close>=up_limit")
+
+    if not method:
+        stats["method"] = "trusted_limit_list_d"
+        return out, stats
+
+    out = out.loc[mask].copy()
+    stats["method"] = "+".join(method)
+    stats["kept_rows"] = int(len(out))
+    stats["dropped_rows"] = int(stats["input_rows"] - stats["kept_rows"])
+    return out, stats
+
+
 def _merge_stock_basic(base_df: pd.DataFrame, stock_basic: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     dbg: Dict[str, Any] = {
         "ok": False,
@@ -288,7 +350,7 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
         "base_source": "",
         "base_rows": 0,
         "stock_basic_used": False,
-        "filters": {"drop_st": 0, "drop_delist": 0},
+        "filters": {"drop_st": 0, "drop_delist": 0, "close_limit_up": {}},
         "industry_merge": {},
         "final_rows": 0,
         "final_cols": [],
@@ -303,6 +365,8 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
     base_df = _normalize_code_column(base_raw)
     base_df = _ensure_name_col(base_df)
     base_df = _ensure_industry_board_cols(base_df)
+    base_df, close_limit_stats = _filter_close_limit_up(base_df, enabled=_must_close_limit_up(s))
+    debug["filters"]["close_limit_up"] = close_limit_stats
 
     stock_basic = ctx.get("stock_basic")
     if isinstance(stock_basic, pd.DataFrame) and not stock_basic.empty:
