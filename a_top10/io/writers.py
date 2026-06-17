@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
 from a_top10.intraday_features import build_intraday_debug_summary
+from a_top10.config import next_a_share_trading_day, prev_a_share_trading_day
 
 
 CODE_COL_CANDIDATES = ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"]
@@ -588,6 +589,21 @@ def _list_trade_dates(settings) -> List[str]:
     dates: List[str] = []
     dr = getattr(settings, "data_repo", None)
     if dr is not None:
+        fn = getattr(dr, "list_trade_dates", None)
+        if callable(fn):
+            try:
+                dates = list(fn()) or []
+            except Exception:
+                dates = []
+        if not dates:
+            fn = getattr(dr, "list_snapshot_dates", None)
+            if callable(fn):
+                try:
+                    dates = list(fn()) or []
+                except Exception:
+                    pass
+
+    if not dates:
         fn = getattr(dr, "list_snapshot_dates", None)
         if callable(fn):
             try:
@@ -619,32 +635,11 @@ def _is_a_share_trade_day(dt: datetime) -> bool:
 
 def _scan_prev_next_a_share_trade_date(trade_date: str) -> Tuple[str, str]:
     try:
-        d = datetime.strptime(trade_date, "%Y%m%d")
+        prev_td = prev_a_share_trading_day(trade_date)
+        next_td = next_a_share_trading_day(trade_date)
+        return prev_td, next_td
     except Exception:
         return "", ""
-
-    prev_d = d - timedelta(days=1)
-    next_d = d + timedelta(days=1)
-
-    # 上限 45 天，避免异常日期造成死循环。
-    for _ in range(45):
-        if _is_a_share_trade_day(prev_d):
-            break
-        prev_d -= timedelta(days=1)
-    else:
-        prev_d = None
-
-    for _ in range(45):
-        if _is_a_share_trade_day(next_d):
-            break
-        next_d += timedelta(days=1)
-    else:
-        next_d = None
-
-    return (
-        prev_d.strftime("%Y%m%d") if prev_d is not None else "",
-        next_d.strftime("%Y%m%d") if next_d is not None else "",
-    )
 
 
 def _prev_next_trade_date(calendar: List[str], trade_date: str) -> Tuple[str, str]:
@@ -657,21 +652,34 @@ def _prev_next_trade_date(calendar: List[str], trade_date: str) -> Tuple[str, st
     return "", ""
 
 
-def _prev_next_trade_date_with_fallback(calendar: List[str], trade_date: str) -> Tuple[str, str]:
+def _prev_next_trade_date_with_fallback(
+    calendar: List[str], trade_date: str, settings: Any
+) -> Tuple[str, str]:
     """
     统一交易日锚点解析。
 
-    优先使用 data_repo 的 snapshot calendar；当历史/未来快照不完整时，
-    使用 A 股休市日历兜底，而不是用“自然工作日”硬猜。
+    优先使用 settings.data_repo 的交易日历能力；当其不可用时，
+    退回到 snapshot calendar；再退回到 A 股节假日兜底。
 
     核心修复：20260430 的 next_td 必须为 20260506，而不是 20260501。
     """
     trade_date = _clean_date_value(trade_date)
-    prev_td, next_td = _prev_next_trade_date(calendar, trade_date)
-    fallback_prev, fallback_next = _scan_prev_next_a_share_trade_date(trade_date)
+    data_repo = getattr(settings, "data_repo", None)
+    if data_repo is not None:
+        try:
+            prev_td = data_repo.prev_trade_date(trade_date)
+            next_td = data_repo.next_trade_date(trade_date)
+            if prev_td and next_td:
+                return prev_td, next_td
+        except Exception:
+            pass
 
-    # 如果 snapshot calendar 只缺一边，用专业日历补齐；如果两边都有，以 snapshot 为准。
-    return prev_td or fallback_prev, next_td or fallback_next
+    prev_td, next_td = _prev_next_trade_date(calendar, trade_date)
+    if prev_td or next_td:
+        return prev_td, next_td
+
+    # 如果 snapshot calendar 只缺一边，用专业日历补齐；如果两边都缺，用兜底日历补齐。
+    return _scan_prev_next_a_share_trade_date(trade_date)
 
 
 def _normalize_rank(df: pd.DataFrame) -> pd.Series:
@@ -1278,7 +1286,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         topn_df = _to_df(topn)
 
     calendar = _list_trade_dates(settings)
-    prev_td, next_td = _prev_next_trade_date_with_fallback(calendar, trade_date)
+    prev_td, next_td = _prev_next_trade_date_with_fallback(calendar, trade_date, settings)
 
     limit_df_current = _load_limit_df(settings, ctx, trade_date)
     daily_df_current = _load_daily_df(settings, ctx, trade_date)
