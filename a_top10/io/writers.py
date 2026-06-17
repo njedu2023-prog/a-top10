@@ -18,6 +18,27 @@ TURNOVER_COL_CANDIDATES = ["turnover_rate", "换手率"]
 SEAL_AMOUNT_COL_CANDIDATES = ["seal_amount", "封单额", "封单金额"]
 OPEN_TIMES_COL_CANDIDATES = ["open_times", "炸板次数", "开板次数"]
 
+INTRADAY_REPORT_COLS = [
+    "final_score_v2",
+    "final_score_base",
+    "strength_plus_score",
+    "intraday_quality_score",
+    "intraday_risk_score",
+    "late_withdraw_score",
+    "reseal_score",
+    "open_board_count",
+    "auction_strength_score",
+    "auction_real_volume_score",
+    "seal_stability_score",
+    "intraday_bonus",
+    "intraday_risk_penalty",
+    "intraday_hard_risk_flag",
+    "risk_level",
+    "risk_tags",
+    "intraday_data_status",
+    "auction_data_status",
+]
+
 
 V3_PRED_BASE_COLS = [
     "rank",
@@ -30,6 +51,24 @@ V3_PRED_BASE_COLS = [
     "prob_lr",
     "prob_lgbm",
     "prob_rule",
+    "final_score_v2",
+    "final_score_base",
+    "strength_plus_score",
+    "intraday_quality_score",
+    "intraday_risk_score",
+    "late_withdraw_score",
+    "reseal_score",
+    "open_board_count",
+    "auction_strength_score",
+    "auction_real_volume_score",
+    "seal_stability_score",
+    "intraday_bonus",
+    "intraday_risk_penalty",
+    "intraday_hard_risk_flag",
+    "risk_level",
+    "risk_tags",
+    "intraday_data_status",
+    "auction_data_status",
     "seal_amount",
     "open_times",
     "turnover_rate",
@@ -67,6 +106,21 @@ FEATURE_HISTORY_COLS = [
     "prob_lr",
     "prob_lgbm",
     "prob_rule",
+    "final_score_base",
+    "final_score_v2",
+    "strength_plus_score",
+    "intraday_quality_score",
+    "intraday_risk_score",
+    "late_withdraw_score",
+    "reseal_score",
+    "open_board_count",
+    "auction_strength_score",
+    "auction_real_volume_score",
+    "seal_stability_score",
+    "intraday_available",
+    "auction_available",
+    "risk_level",
+    "risk_tags",
     "is_sample_mature",
     "mature_reason",
     "label_delay_flag",
@@ -607,11 +661,19 @@ def _canonicalize_prediction_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     out["prob_lr"] = src["prob_lr"] if "prob_lr" in src.columns else ""
     out["prob_lgbm"] = src["prob_lgbm"] if "prob_lgbm" in src.columns else ""
     out["prob_rule"] = src["prob_rule"] if "prob_rule" in src.columns else ""
+    for col in INTRADAY_REPORT_COLS:
+        out[col] = src[col] if col in src.columns else ""
     out["seal_amount"] = _extract_numeric(src, SEAL_AMOUNT_COL_CANDIDATES)
     out["open_times"] = _extract_numeric(src, OPEN_TIMES_COL_CANDIDATES)
     out["turnover_rate"] = _extract_numeric(src, TURNOVER_COL_CANDIDATES)
     out["close"] = _extract_numeric(src, CLOSE_COL_CANDIDATES)
-    for col in ["Probability", "StrengthScore", "ThemeBoost", "prob_lr", "prob_lgbm", "prob_rule"]:
+    for col in [
+        "Probability", "StrengthScore", "ThemeBoost", "prob_lr", "prob_lgbm", "prob_rule",
+        "final_score_v2", "final_score_base", "strength_plus_score", "intraday_quality_score",
+        "intraday_risk_score", "late_withdraw_score", "reseal_score", "open_board_count",
+        "auction_strength_score", "auction_real_volume_score", "seal_stability_score",
+        "intraday_bonus", "intraday_risk_penalty", "intraday_hard_risk_flag",
+    ]:
         out[col] = pd.to_numeric(out[col], errors="coerce")
     out["rank"] = pd.to_numeric(out["rank"], errors="coerce")
     return out.reindex(columns=V3_PRED_BASE_COLS, fill_value="")
@@ -717,6 +779,24 @@ def _canonicalize_feature_history_batch(
     out["prob_lr"] = src["prob_lr"] if "prob_lr" in src.columns else ""
     out["prob_lgbm"] = src["prob_lgbm"] if "prob_lgbm" in src.columns else ""
     out["prob_rule"] = src["prob_rule"] if "prob_rule" in src.columns else ""
+    for col in [
+        "final_score_base",
+        "final_score_v2",
+        "strength_plus_score",
+        "intraday_quality_score",
+        "intraday_risk_score",
+        "late_withdraw_score",
+        "reseal_score",
+        "open_board_count",
+        "auction_strength_score",
+        "auction_real_volume_score",
+        "seal_stability_score",
+        "intraday_available",
+        "auction_available",
+        "risk_level",
+        "risk_tags",
+    ]:
+        out[col] = src[col] if col in src.columns else ""
 
     for col in [
         "is_sample_mature", "mature_reason", "label_delay_flag", "y_limit_hit", "y_next_ret",
@@ -736,6 +816,10 @@ def _canonicalize_feature_history_batch(
         "Probability", "StrengthScore", "ThemeBoost", "seal_amount", "open_times", "turnover_rate",
         "prob_lr", "prob_lgbm", "prob_rule", "is_sample_mature", "label_delay_flag",
         "y_limit_hit", "y_next_ret", "learnable_flag", "batch_quality_score", "close",
+        "final_score_base", "final_score_v2", "strength_plus_score", "intraday_quality_score",
+        "intraday_risk_score", "late_withdraw_score", "reseal_score", "open_board_count",
+        "auction_strength_score", "auction_real_volume_score", "seal_stability_score",
+        "intraday_available", "auction_available",
     ]:
         out[col] = pd.to_numeric(out[col], errors="coerce")
 
@@ -856,7 +940,19 @@ def _rename_human(df: pd.DataFrame) -> pd.DataFrame:
         "Probability": "涨停概率",
         "_prob_src": "概率来源",
         "StrengthScore": "强度得分",
+        "strength_plus_score": "强度分",
         "ThemeBoost": "题材加成",
+        "final_score_v2": "最终分",
+        "final_score_base": "原始分",
+        "intraday_quality_score": "分时质量",
+        "intraday_risk_score": "分时风险",
+        "late_withdraw_score": "尾盘风险",
+        "reseal_score": "回封分",
+        "open_board_count": "炸板数",
+        "auction_strength_score": "竞价强度",
+        "risk_level": "风险级别",
+        "risk_tags": "风险标签",
+        "intraday_data_status": "分时状态",
         "board": "板块",
         "trade_date": "预测日",
         "verify_date": "验证日",
@@ -1095,6 +1191,28 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     json_path = outdir / f"predict_top10_{trade_date}.json"
     _write_text_overwrite(json_path, json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
 
+    try:
+        intraday_debug_path = outdir / f"debug_intraday_{trade_date}.json"
+        src_for_debug = full_df if full_df is not None and not full_df.empty else topn_df
+        dbg_df = _to_df(src_for_debug)
+        top_dbg = _to_df(topn_df)
+        ctx_debug = ctx.get("debug", {}) if isinstance(ctx, dict) else {}
+        intraday_input = ctx_debug.get("intraday_input", {}) if isinstance(ctx_debug, dict) else {}
+        debug_intraday = {
+            "intraday_enabled": bool(getattr(getattr(settings, "intraday", None), "enabled", True)),
+            "intraday_rows": int(intraday_input.get("intraday_features_rows", 0) or 0),
+            "auction_rows": int(intraday_input.get("stk_auction_rows", 0) or 0),
+            "candidate_rows": int(len(dbg_df)) if dbg_df is not None else 0,
+            "matched_intraday_rows": int((pd.to_numeric(dbg_df.get("intraday_available"), errors="coerce").fillna(0) > 0).sum()) if dbg_df is not None and not dbg_df.empty and "intraday_available" in dbg_df.columns else 0,
+            "matched_auction_rows": int((pd.to_numeric(dbg_df.get("auction_available"), errors="coerce").fillna(0) > 0).sum()) if dbg_df is not None and not dbg_df.empty and "auction_available" in dbg_df.columns else 0,
+            "topn_intraday_available_ratio": float((pd.to_numeric(top_dbg.get("intraday_available"), errors="coerce").fillna(0) > 0).mean()) if top_dbg is not None and not top_dbg.empty and "intraday_available" in top_dbg.columns else 0.0,
+            "topn_hard_risk_count": int((pd.to_numeric(top_dbg.get("intraday_hard_risk_flag"), errors="coerce").fillna(0) > 0).sum()) if top_dbg is not None and not top_dbg.empty and "intraday_hard_risk_flag" in top_dbg.columns else 0,
+            "fallback_used": bool(int(intraday_input.get("intraday_features_rows", 0) or 0) == 0 or int(intraday_input.get("stk_auction_rows", 0) or 0) == 0),
+        }
+        _write_text_overwrite(intraday_debug_path, json.dumps(debug_intraday, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[WARN] debug_intraday write failed: {e}")
+
     topn_v3 = _canonicalize_prediction_frame(topn_df)
     candidate_pool_df = _standardize_candidate_pool(full_df, topn_df)
 
@@ -1115,26 +1233,51 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     perf_summary_df = _build_recent_summary_df(step7_hist)
 
     if not topn_v3.empty:
-        for col in ["Probability", "StrengthScore", "ThemeBoost"]:
-            topn_v3[col] = topn_v3[col].map(_format_score if col != "Probability" else _format_probability)
+        for col in [
+            "Probability", "StrengthScore", "ThemeBoost", "final_score_v2", "final_score_base",
+            "strength_plus_score", "intraday_quality_score", "intraday_risk_score",
+            "late_withdraw_score", "reseal_score", "auction_strength_score",
+        ]:
+            if col in topn_v3.columns:
+                topn_v3[col] = topn_v3[col].map(_format_score if col != "Probability" else _format_probability)
     if not candidate_pool_df.empty:
-        for col in ["Probability", "StrengthScore", "ThemeBoost"]:
-            candidate_pool_df[col] = candidate_pool_df[col].map(_format_score if col != "Probability" else _format_probability)
+        for col in [
+            "Probability", "StrengthScore", "ThemeBoost", "final_score_v2", "final_score_base",
+            "strength_plus_score", "intraday_quality_score", "intraday_risk_score",
+            "late_withdraw_score", "reseal_score", "auction_strength_score",
+        ]:
+            if col in candidate_pool_df.columns:
+                candidate_pool_df[col] = candidate_pool_df[col].map(_format_score if col != "Probability" else _format_probability)
 
     md_lines: List[str] = [f"# {trade_date} 预测报告\n"]
+    md_lines.append(
+        "本次 Top10 排名已接入 a-share-top3-data 上游分时增强数据。"
+        "新增数据包括集合竞价、涨停路径、炸板回封、尾盘撤退等。"
+        "该模块主要用于识别 D 日涨停质量和隔夜风险。"
+        "当分时数据缺失时，系统按中性值降级，不把缺失视为高风险。\n"
+    )
     md_lines.append(f"## {trade_date} 预测：{next_td} 涨停 Top10（按涨停概率降序）\n")
     if topn_v3.empty:
         reason = _safe_str(gate.get("reason") if isinstance(gate, dict) else "")
         md_lines.append(f"⚠️ Gate 未通过，Top10 为空。{reason}\n")
     else:
-        md_lines.append(_df_to_md_table(topn_v3, cols=["rank", "ts_code", "name", "Probability", "_prob_src", "StrengthScore", "ThemeBoost", "board"]))
+        md_lines.append(_df_to_md_table(topn_v3, cols=[
+            "rank", "ts_code", "name", "final_score_v2", "final_score_base", "Probability",
+            "strength_plus_score", "ThemeBoost", "intraday_quality_score", "intraday_risk_score",
+            "late_withdraw_score", "reseal_score", "open_board_count", "auction_strength_score",
+            "risk_level", "risk_tags", "intraday_data_status",
+        ]))
         md_lines.append("")
 
     md_lines.append(f"## {trade_date} 候选池补充表（Top10 之外，按涨停概率降序）\n")
     if candidate_pool_df.empty:
         md_lines.append("（无 Top10 之外的候选样本）\n")
     else:
-        md_lines.append(_df_to_md_table(candidate_pool_df, cols=["rank", "ts_code", "name", "Probability", "_prob_src", "StrengthScore", "ThemeBoost", "board"]))
+        md_lines.append(_df_to_md_table(candidate_pool_df, cols=[
+            "rank", "ts_code", "name", "final_score_v2", "Probability", "strength_plus_score",
+            "ThemeBoost", "intraday_quality_score", "intraday_risk_score", "risk_level",
+            "risk_tags", "intraday_data_status",
+        ]))
         md_lines.append("")
 
     md_lines.append(f"## {prev_td} 预测在 {trade_date} 收盘后的命中情况\n")
