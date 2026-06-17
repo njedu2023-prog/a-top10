@@ -57,6 +57,10 @@ jobs:
         top_list.csv
         limit_up_tags.csv
 
+      OPTIONAL_INTRADAY_FILES: >-
+        stk_auction.csv
+        intraday_features.csv
+
       LOOKBACK_DAYS: "20"
       PROBE_FILE: "daily.csv"
 
@@ -216,6 +220,14 @@ jobs:
           fi
 
           python -c "import pandas as pd,os,sys; snap=sys.argv[1]; df=pd.read_csv(os.path.join(snap,'limit_list_d.csv')); must=['limit_type','up_limit','down_limit','open_times','seal_amount']; miss=[c for c in must if c not in df.columns]; assert not miss, f'missing cols {miss}'; all_empty=lambda s: s.isna().all() or (s.astype(str).str.strip()=='').all(); bad=[c for c in must if all_empty(df[c])]; assert not bad, f'cols all-empty {bad}'" "$snap_dir"
+
+          for f in $OPTIONAL_INTRADAY_FILES; do
+            if [ -f "$snap_dir/$f" ]; then
+              echo "[OK] optional intraday file found: $f"
+            else
+              echo "[WARN] optional intraday file missing: $f"
+            fi
+          done
 
       # Upload snapshot dir as artifact (optional but recommended as audit proof)
       - name: Upload synced snapshot dir (artifact)
