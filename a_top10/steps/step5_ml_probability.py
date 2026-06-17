@@ -45,6 +45,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from a_top10.intraday_features import ML_INTRADAY_FEATURES
+
 try:
     import joblib
 except Exception:
@@ -70,6 +72,18 @@ FEATURES = [
     "seal_amount",
     "open_times",
     "turnover_rate",
+    "limitup_quality_score",
+    "intraday_risk_score",
+    "late_withdraw_score",
+    "reseal_score",
+    "open_board_count",
+    "auction_strength_score",
+    "auction_real_volume_score",
+    "seal_stability_score",
+    "intraday_quality_score",
+    "strength_plus_score",
+    "intraday_available",
+    "auction_available",
 ]
 
 VALID_RUN_MODES = {"replay", "train", "auto_daily"}
@@ -384,13 +398,35 @@ def _ensure_inference_input(df: pd.DataFrame) -> pd.DataFrame:
     不对外伪造契约字段。
     """
     df = _ensure_df(df)
+    defaults = {
+        "limitup_quality_score": 0.50,
+        "intraday_risk_score": 0.00,
+        "late_withdraw_score": 0.00,
+        "reseal_score": 0.50,
+        "open_board_count": 0.00,
+        "auction_strength_score": 0.50,
+        "auction_real_volume_score": 0.50,
+        "seal_stability_score": 0.50,
+        "intraday_quality_score": 0.50,
+        "strength_plus_score": np.nan,
+        "intraday_available": 0.00,
+        "auction_available": 0.00,
+    }
     for c in FEATURES:
         if c not in df.columns:
-            df[c] = np.nan
+            df[c] = defaults.get(c, np.nan)
 
     feat = df.copy()
     for c in FEATURES:
-        feat[c] = _to_numeric_nullable(feat[c]).fillna(0.0)
+        default = defaults.get(c, 0.0)
+        if c == "strength_plus_score":
+            if "StrengthScore" in feat.columns:
+                default_sr = pd.to_numeric(feat["StrengthScore"], errors="coerce").fillna(0.0)
+            else:
+                default_sr = pd.Series([0.0] * len(feat), index=feat.index, dtype="float64")
+            feat[c] = _to_numeric_nullable(feat[c]).fillna(default_sr)
+        else:
+            feat[c] = _to_numeric_nullable(feat[c]).fillna(float(default))
 
     return feat
 
@@ -781,7 +817,8 @@ def _calc_prob_rule(df: pd.DataFrame) -> pd.Series:
     """
     feat = _ensure_inference_input(df)
 
-    strength = _clip01(feat["StrengthScore"] / 100.0)
+    strength_axis = feat["strength_plus_score"] if "strength_plus_score" in feat.columns else feat["StrengthScore"]
+    strength = _clip01(strength_axis / 100.0)
     theme = _clip01(feat["ThemeBoost"])  # ThemeBoost 本身就是 0~1
 
     turnover = feat["turnover_rate"].astype(float)
@@ -958,6 +995,23 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
     out["_prob_src"] = _prob_src.astype("object")
     out["run_mode"] = _resolve_run_mode()
     out["run_time_utc"] = _utc_now_iso()
+
+    try:
+        debug_path = outputs_dir / "learning" / "step5_debug_latest.json"
+        debug_path.parent.mkdir(parents=True, exist_ok=True)
+        debug = {
+            "trade_date": trade_date,
+            "intraday_features_in_ml": list(ML_INTRADAY_FEATURES),
+            "feature_count": int(len(FEATURES)),
+            "intraday_feature_coverage": {
+                "intraday_available_ratio": float(pd.to_numeric(out.get("intraday_available"), errors="coerce").fillna(0).gt(0).mean()) if len(out) else 0.0,
+                "auction_available_ratio": float(pd.to_numeric(out.get("auction_available"), errors="coerce").fillna(0).gt(0).mean()) if len(out) else 0.0,
+            },
+            "prob_source_counts": out["_prob_src"].value_counts(dropna=False).to_dict() if "_prob_src" in out.columns else {},
+        }
+        debug_path.write_text(json.dumps(debug, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
     clip_min = float(cfg.get("clip_min", 0.0))
     clip_max = float(cfg.get("clip_max", 1.0))
