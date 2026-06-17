@@ -15,6 +15,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+from a_top10.config import prev_a_share_trading_day
+
 
 OUTPUT_DIR = Path("outputs")
 
@@ -95,7 +97,7 @@ def save_reports(top10_list, trade_date=None, gate_passed=True):
     - latest.md
     """
     if trade_date is None:
-        trade_date = datetime.today().strftime("%Y%m%d")
+        trade_date = prev_a_share_trading_day(datetime.now().strftime("%Y%m%d"))
 
     json_file = write_json(top10_list, trade_date)
     md_file = write_markdown(top10_list, trade_date, gate_passed)
