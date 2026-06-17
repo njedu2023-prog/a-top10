@@ -684,7 +684,33 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     }
 
     intraday_cfg = getattr(s, "intraday", None)
+    snapshot_file_status = {}
+    data_repo = getattr(s, "data_repo", None)
+    if hasattr(data_repo, "snapshot_file_status"):
+        try:
+            snapshot_file_status = data_repo.snapshot_file_status(trade_date)
+        except Exception:
+            snapshot_file_status = {}
+    intraday_file_exists = bool((snap / "intraday_features.csv").exists())
+    auction_file_exists = bool((snap / "stk_auction.csv").exists())
+    required_columns_missing = []
+    if intraday_file_exists and isinstance(intraday_features_raw, pd.DataFrame) and not intraday_features_raw.empty and (
+        not isinstance(intraday_features, pd.DataFrame) or intraday_features.empty
+    ):
+        required_columns_missing.append("intraday_features.ts_code")
+    if auction_file_exists and isinstance(stk_auction_raw, pd.DataFrame) and not stk_auction_raw.empty and (
+        not isinstance(stk_auction, pd.DataFrame) or stk_auction.empty
+    ):
+        required_columns_missing.append("stk_auction.ts_code")
     intraday_input_debug: Dict[str, Any] = {
+        "intraday_file_exists": intraday_file_exists,
+        "intraday_rows": int(len(intraday_features)) if isinstance(intraday_features, pd.DataFrame) else 0,
+        "intraday_columns": list(intraday_features.columns) if isinstance(intraday_features, pd.DataFrame) else [],
+        "auction_file_exists": auction_file_exists,
+        "auction_rows": int(len(stk_auction)) if isinstance(stk_auction, pd.DataFrame) else 0,
+        "auction_columns": list(stk_auction.columns) if isinstance(stk_auction, pd.DataFrame) else [],
+        "required_columns_missing": required_columns_missing,
+        "snapshot_file_status": snapshot_file_status,
         "stk_auction_rows": int(len(stk_auction)) if isinstance(stk_auction, pd.DataFrame) else 0,
         "intraday_features_rows": int(len(intraday_features)) if isinstance(intraday_features, pd.DataFrame) else 0,
         "stk_auction_columns": list(stk_auction.columns) if isinstance(stk_auction, pd.DataFrame) else [],
