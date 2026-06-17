@@ -45,7 +45,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from a_top10.config import Settings
+from a_top10.config import Settings, next_a_share_trading_day
 
 
 # ============================================================
@@ -344,6 +344,12 @@ def _next_snapshot_after(trade_date: str, snapshot_dates: List[str], upper_bound
     for d in snapshot_dates:
         if d > td and d <= ub:
             return d
+    try:
+        nxt = next_a_share_trading_day(td)
+    except Exception:
+        return ""
+    if re.match(r"^\d{8}$", nxt) and nxt <= ub:
+        return nxt
     return ""
 
 
