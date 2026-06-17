@@ -46,6 +46,7 @@ import numpy as np
 import pandas as pd
 
 from a_top10.intraday_features import ML_INTRADAY_FEATURES
+from a_top10.config import is_a_share_trading_day, prev_a_share_trading_day
 
 try:
     import joblib
@@ -173,8 +174,13 @@ def _guess_trade_date(df: pd.DataFrame) -> str:
                 return v
     env_td = os.getenv("TRADE_DATE", "").strip()
     if re.match(r"^\d{8}$", env_td):
-        return env_td
-    return pd.Timestamp.today().strftime("%Y%m%d")
+        try:
+            if is_a_share_trading_day(env_td):
+                return env_td
+            return prev_a_share_trading_day(env_td)
+        except Exception:
+            pass
+    return prev_a_share_trading_day(pd.Timestamp.today().strftime("%Y%m%d"))
 
 
 def _get_outputs_dir(s=None) -> Path:
