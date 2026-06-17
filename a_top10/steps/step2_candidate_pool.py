@@ -10,6 +10,11 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from a_top10.config import Settings
+from a_top10.intraday_features import (
+    get_intraday_defaults,
+    get_intraday_dict,
+    merge_intraday_to_candidates,
+)
 
 
 # ============================================================
@@ -317,6 +322,35 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
     debug["filters"] = filter_stats
 
     candidates_df = _finalize_schema(candidates_df)
+
+    intraday = ctx.get("intraday_features")
+    auction = ctx.get("stk_auction")
+    defaults = get_intraday_defaults(s)
+    quality_weights = get_intraday_dict(s, "quality_weights")
+    before_intraday_cols = set(candidates_df.columns)
+    candidates_df = merge_intraday_to_candidates(
+        candidates=candidates_df,
+        intraday=intraday if isinstance(intraday, pd.DataFrame) else pd.DataFrame(),
+        auction=auction if isinstance(auction, pd.DataFrame) else pd.DataFrame(),
+        defaults=defaults,
+        weights=quality_weights,
+    )
+
+    intraday_rows = int(len(intraday)) if isinstance(intraday, pd.DataFrame) else 0
+    auction_rows = int(len(auction)) if isinstance(auction, pd.DataFrame) else 0
+    intraday_matched = int((pd.to_numeric(candidates_df.get("intraday_available"), errors="coerce").fillna(0) > 0).sum())
+    auction_matched = int((pd.to_numeric(candidates_df.get("auction_available"), errors="coerce").fillna(0) > 0).sum())
+    debug["intraday_merge"] = {
+        "intraday_file_rows": intraday_rows,
+        "auction_file_rows": auction_rows,
+        "candidate_rows": int(len(candidates_df)),
+        "intraday_matched_rows": intraday_matched,
+        "auction_matched_rows": auction_matched,
+        "intraday_match_ratio": float(intraday_matched / max(1, len(candidates_df))),
+        "auction_match_ratio": float(auction_matched / max(1, len(candidates_df))),
+        "missing_policy": str(getattr(getattr(s, "intraday", None), "missing_policy", "neutral")),
+        "added_columns": sorted([c for c in candidates_df.columns if c not in before_intraday_cols]),
+    }
 
     debug["final_rows"] = int(len(candidates_df))
     debug["final_cols"] = list(candidates_df.columns)
