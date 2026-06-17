@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from a_top10.config import load_settings
+from a_top10.config import is_a_share_trading_day, load_settings, prev_a_share_trading_day
 from a_top10.io.writers import write_outputs
 from a_top10.steps.step0_input_layer import step0_build_universe
 from a_top10.steps.step1_emotion_gate import step1_emotion_gate
@@ -63,6 +63,13 @@ def _resolve_run_mode(run_mode: str) -> str:
             f"Invalid run_mode='{run_mode}'. Expected one of: {sorted(VALID_RUN_MODES)}"
         )
     return mode
+
+
+def _normalize_trade_date(trade_date: str, settings: Any) -> str:
+    td = str(trade_date or "").strip()
+    if not td:
+        return settings.trade_date_resolver()
+    return td if is_a_share_trading_day(td) else prev_a_share_trading_day(td)
 
 
 def _apply_run_mode_env(run_mode: str) -> None:
@@ -174,7 +181,7 @@ def run_pipeline(
     _apply_run_mode_env(mode)
 
     settings = load_settings(config_path)
-    td = trade_date.strip() or settings.trade_date_resolver()
+    td = _normalize_trade_date(trade_date, settings)
     out_dir = _force_outputs_dir(settings)
 
     entry_train_allowed = _should_train_at_entry(mode, train_model)
