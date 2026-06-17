@@ -94,7 +94,27 @@ jobs:
           MANUAL="${{ github.event.inputs.trade_date || '' }}"
           if [ -n "$MANUAL" ]; then
             echo "Use manual trade_date=$MANUAL"
-            echo "trade_date=$MANUAL" >> "$GITHUB_OUTPUT"
+            trade_date_resolved="$(python - "$MANUAL" <<'PY'
+            import sys
+            import re
+            from datetime import datetime
+            from a_top10.config import is_a_share_trading_day, prev_a_share_trading_day
+
+            td = sys.argv[1]
+            if re.fullmatch(r"\d{8}", td) and is_a_share_trading_day(td):
+                print(td)
+                sys.exit(0)
+
+            if re.fullmatch(r"\d{8}", td):
+                print(prev_a_share_trading_day(td))
+            else:
+                print(prev_a_share_trading_day(datetime.now().strftime("%Y%m%d")))
+            PY)"
+            if [ "$trade_date_resolved" != "$MANUAL" ]; then
+              echo "⚠️ 输入日期 $MANUAL 非交易日或异常，已修正为：$trade_date_resolved"
+            fi
+
+            echo "trade_date=$trade_date_resolved" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -261,6 +281,11 @@ jobs:
           else
             echo "[WARN] outputs/debug_intraday_${td}.json missing"
           fi
+
+      - name: Validate intraday refine artifacts
+        run: |
+          set -euo pipefail
+          python3 tools/check_intraday_refine.py --outputs outputs --trade-date "${{ steps.resolve_date.outputs.trade_date }}"
 
       # ✅ Stamp (single file overwrite)
       - name: Stamp last run (always)
