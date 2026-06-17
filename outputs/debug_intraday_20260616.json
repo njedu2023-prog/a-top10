@@ -1,0 +1,11 @@
+{
+  "intraday_enabled": true,
+  "intraday_rows": 80,
+  "auction_rows": 5507,
+  "candidate_rows": 50,
+  "matched_intraday_rows": 37,
+  "matched_auction_rows": 49,
+  "topn_intraday_available_ratio": 0.2,
+  "topn_hard_risk_count": 2,
+  "fallback_used": false
+}

@@ -27,6 +27,8 @@
 - is_limit_up_pool: 0.0000
 - StrengthScore: 0.0000
 - limit_strength_raw: 0.0000
+- intraday_quality_score: 0.0000
+- strength_plus_score: 0.0000
 
 ## Nonnull rate
 - close: 1.0000
@@ -36,11 +38,15 @@
 - limit_type: 1.0000
 - up_limit: 1.0000
 - StrengthScore: 1.0000
+- intraday_quality_score: 1.0000
+- strength_plus_score: 1.0000
 
 ## Nonzero rate
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
 - open_times: 0.5000
+- intraday_available: 0.6695
+- auction_available: 0.9915
 
 ## Strength quality distribution
 - A: 118
@@ -74,7 +80,9 @@
     "down_limit": 0.0,
     "is_limit_up_pool": 0.0,
     "StrengthScore": 0.0,
-    "limit_strength_raw": 0.0
+    "limit_strength_raw": 0.0,
+    "intraday_quality_score": 0.0,
+    "strength_plus_score": 0.0
   },
   "nonnull_rate": {
     "close": 1.0,
@@ -83,12 +91,16 @@
     "open_times": 1.0,
     "limit_type": 1.0,
     "up_limit": 1.0,
-    "StrengthScore": 1.0
+    "StrengthScore": 1.0,
+    "intraday_quality_score": 1.0,
+    "strength_plus_score": 1.0
   },
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
-    "open_times": 0.5
+    "open_times": 0.5,
+    "intraday_available": 0.6694915254237288,
+    "auction_available": 0.9915254237288136
   },
   "quality_distribution": {
     "A": 118

@@ -1,5 +1,5 @@
 {
-  "ts": "2026-06-17 00:11:30",
+  "ts": "2026-06-17 15:43:06",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260617",
   "latest_snapshot_yyyymmdd": "20260616",
@@ -1336,8 +1336,8 @@
   "train_result": {
     "run_mode": "auto_daily",
     "allow_model_update": true,
-    "trained": true,
-    "updated": true,
+    "trained": false,
+    "updated": false,
     "detail": {
       "train_rows": 6410,
       "pos": 1078,
@@ -1445,8 +1445,8 @@
       "eligible_train_rows": 6410,
       "eligible_positive_rows": 1078,
       "step5_train_result": {
-        "ok": true,
-        "updated": true,
+        "ok": false,
+        "updated": false,
         "run_mode": "auto_daily",
         "lr": {
           "run_mode": "auto_daily",
@@ -1455,16 +1455,15 @@
           "level": "level3",
           "mature_samples": 6410,
           "positive_samples": 1078,
-          "feature_coverage": 1.0,
+          "feature_coverage": 0.29411764705882343,
           "formal_update_allowed": true,
           "trial_training_only": false,
-          "ok": true,
-          "trained": true,
-          "updated": true,
-          "reason": "formal_model_updated",
+          "ok": false,
+          "trained": false,
+          "updated": false,
+          "reason": "insufficient_feature_coverage",
           "data_reason": "ok",
-          "eligible_trade_dates_count": 92,
-          "path": "models/step5_lr.joblib"
+          "eligible_trade_dates_count": 92
         },
         "lgbm": {
           "run_mode": "auto_daily",
@@ -1473,16 +1472,15 @@
           "level": "level3",
           "mature_samples": 6410,
           "positive_samples": 1078,
-          "feature_coverage": 1.0,
+          "feature_coverage": 0.29411764705882343,
           "formal_update_allowed": true,
           "trial_training_only": false,
-          "ok": true,
-          "trained": true,
-          "updated": true,
-          "reason": "formal_model_updated",
+          "ok": false,
+          "trained": false,
+          "updated": false,
+          "reason": "insufficient_feature_coverage",
           "data_reason": "ok",
-          "eligible_trade_dates_count": 92,
-          "path": "models/step5_lgbm.joblib"
+          "eligible_trade_dates_count": 92
         }
       },
       "reason": "ok_partial_pass_dates_trained"

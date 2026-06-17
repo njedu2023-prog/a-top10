@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-06-17 00:11:30
+- 生成时间：2026-06-17 15:43:06
 - RunMode：auto_daily
 - Today：20260617
 - LatestSnapshot：20260616
@@ -50,8 +50,8 @@
 
 ## 3) 训练执行结果
 
-- trained：True
-- updated：True
+- trained：False
+- updated：False
 - level：level3
 - train_rows：6410
 - pos/neg：1078/5332
