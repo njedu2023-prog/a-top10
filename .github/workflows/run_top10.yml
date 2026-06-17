@@ -223,8 +223,22 @@ jobs:
 
           for f in $OPTIONAL_INTRADAY_FILES; do
             if [ -f "$snap_dir/$f" ]; then
-              echo "[OK] optional intraday file found: $f"
+              echo "[INTRADAY] $f exists: yes"
+              python - "$snap_dir/$f" <<'PY'
+import pandas as pd, sys
+p = sys.argv[1]
+try:
+    df = pd.read_csv(p, nrows=5)
+    rows = sum(1 for _ in open(p, "rb")) - 1
+    miss = [c for c in ["ts_code"] if c not in df.columns]
+    print(f"[INTRADAY] {p.split('/')[-1]} rows: {max(rows, 0)}")
+    if miss:
+        print(f"[WARN] optional intraday file key columns missing: {miss}")
+except Exception as e:
+    print(f"[WARN] optional intraday file read failed: {e}")
+PY
             else
+              echo "[INTRADAY] $f exists: no"
               echo "[WARN] optional intraday file missing: $f"
             fi
           done
@@ -252,6 +266,19 @@ jobs:
           fi
 
           python -m a_top10.steps.step7_self_learning
+
+          td="${{ steps.resolve_date.outputs.trade_date }}"
+          if [ -f "outputs/debug_intraday_${td}.json" ]; then
+            python - "outputs/debug_intraday_${td}.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+print(f"[INTRADAY] matched candidate rows: {d.get('matched_count', 0)}")
+print(f"[INTRADAY] matched top10 rows: {d.get('topn_matched_count', 0)}")
+print(f"[INTRADAY] fallback policy: {d.get('fallback_policy', 'neutral')}")
+PY
+          else
+            echo "[WARN] outputs/debug_intraday_${td}.json missing"
+          fi
 
       # ✅ Stamp (single file overwrite)
       - name: Stamp last run (always)
