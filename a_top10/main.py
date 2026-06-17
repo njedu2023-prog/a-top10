@@ -222,8 +222,10 @@ def run_pipeline(
         ctx["candidates"] = candidates
 
         # Step3
-        strength_df = _require_dataframe(run_step3(candidates), "run_step3")
+        strength_df = _require_dataframe(run_step3(candidates, s=settings, ctx=ctx), "run_step3")
         ctx["strength_df"] = strength_df
+        ctx["step3_df"] = strength_df
+        ctx["step3_strength_df"] = strength_df
 
         # Step4
         ctx = _require_ctx_dict(run_step4(settings, ctx))
