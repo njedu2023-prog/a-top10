@@ -95,6 +95,53 @@ risk:
   remove_high_accel: true
   remove_next_day_nuke: true
 
+intraday:
+  enabled: true
+  require_intraday_features: false
+  require_stk_auction: false
+  missing_policy: "neutral"
+
+  quality_weights:
+    limitup_quality: 0.35
+    reseal_score: 0.25
+    auction_strength: 0.20
+    seal_stability: 0.10
+    late_withdraw_inverse: 0.10
+
+  strength_plus:
+    base_strength_weight: 0.75
+    intraday_quality_weight: 0.25
+
+  final_score:
+    quality_bonus_weight: 0.03
+    risk_penalty_weight: 0.05
+    late_withdraw_penalty_weight: 0.04
+    open_board_penalty_weight: 0.02
+    auction_bonus_weight: 0.015
+
+  hard_filters:
+    enable: true
+    max_late_withdraw_score: 0.80
+    max_intraday_risk_score: 0.85
+    max_open_board_count: 4
+    min_limitup_quality_score: 0.30
+
+  defaults:
+    intraday_available: 0
+    auction_available: 0
+    limitup_quality_score: 0.50
+    intraday_risk_score: 0.00
+    late_withdraw_score: 0.00
+    reseal_score: 0.50
+    open_board_count: 0
+    auction_strength_score: 0.50
+    auction_real_volume_score: 0.50
+    seal_stability_score: 0.50
+
+  report:
+    show_intraday_columns: true
+    show_intraday_explanation: true
+
 # ===== V2：Step6 纯终排配置 =====
 step6:
   score_mode: "add"      # add | geo
