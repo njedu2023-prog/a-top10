@@ -1427,7 +1427,8 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
                 md_lines.append(f"- {_safe_str(r.get('ts_code'))} {_safe_str(r.get('name'))}：{_safe_str(r.get('risk_label'))}，最终分已按分时风控扣减。")
             md_lines.append("")
 
-    md_lines.append(f"## {trade_date} 候选池补充表（Top10 之外，按涨停概率降序）\n")
+    md_lines.append(f"## {trade_date} 预测：{next_td} 候选池补充表\n")
+    md_lines.append("Top10 之外的全部候选，按涨停概率降序排列。\n")
     if candidate_pool_df.empty:
         md_lines.append("（无 Top10 之外的候选样本）\n")
     else:
