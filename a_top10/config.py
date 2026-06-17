@@ -321,7 +321,7 @@ class Settings:
     def trade_date_resolver(self) -> str:
         td = os.getenv("TRADE_DATE", "").strip()
         if td:
-            return td
+            return td if is_a_share_trading_day(td) else prev_a_share_trading_day(td)
         today = datetime.now().strftime("%Y%m%d")
         if is_a_share_trading_day(today):
             return today
@@ -405,7 +405,7 @@ def load_settings(config_path: str) -> Settings:
     )
 
     # Preserve raw config blocks that downstream steps already probe with getattr().
-    for block in ("ml", "training", "step6", "theme", "scores", "risk", "output"):
+    for block in ("filters", "ml", "training", "step6", "theme", "scores", "risk", "output"):
         if block in raw and isinstance(raw.get(block), dict):
             setattr(s, block, _dict_to_namespace(raw.get(block) or {}))
 
