@@ -33,6 +33,14 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from a_top10.intraday_features import (
+    calc_intraday_quality_score,
+    calc_strength_plus_score,
+    ensure_intraday_columns,
+    get_intraday_defaults,
+    get_intraday_dict,
+)
+
 
 # =========================================================
 # Basic utils
@@ -705,6 +713,9 @@ def calc_strength_score(
 
         out["limit_strength_raw"] = np.nan
         out["StrengthScore"] = np.nan
+        out["base_strength_score"] = out["StrengthScore"]
+        out = ensure_intraday_columns(out, get_intraday_defaults(s))
+        out["strength_plus_score"] = out["StrengthScore"]
         out = _build_strength_quality_fields(out)
 
         debug["snapshot_dir"] = None
@@ -796,6 +807,18 @@ def calc_strength_score(
 
     strength01 = _clip01(raw01 * quality_adj)
     out["StrengthScore"] = (strength01 * 100.0).round(6)
+    out["base_strength_score"] = out["StrengthScore"]
+
+    defaults = get_intraday_defaults(s)
+    out = ensure_intraday_columns(out, defaults)
+    out["intraday_quality_score"] = calc_intraday_quality_score(
+        out,
+        get_intraday_dict(s, "quality_weights"),
+    ).round(6)
+    out["strength_plus_score"] = calc_strength_plus_score(
+        out,
+        get_intraday_dict(s, "strength_plus"),
+    ).round(6)
 
     out["_f_momo"] = f_momo
     out["_f_amt"] = f_amt
@@ -834,6 +857,8 @@ def calc_strength_score(
         "is_limit_up_pool": miss_rate(is_limit_up_pool),
         "StrengthScore": miss_rate(out["StrengthScore"]),
         "limit_strength_raw": miss_rate(out["limit_strength_raw"]),
+        "intraday_quality_score": miss_rate(out["intraday_quality_score"]),
+        "strength_plus_score": miss_rate(out["strength_plus_score"]),
     }
     debug["nonnull_rate"] = {
         "close": nonnull_rate(close),
@@ -843,11 +868,15 @@ def calc_strength_score(
         "limit_type": float(out["limit_type"].notna().mean()) if len(out) else 0.0,
         "up_limit": nonnull_rate(up_limit),
         "StrengthScore": nonnull_rate(out["StrengthScore"]),
+        "intraday_quality_score": nonnull_rate(out["intraday_quality_score"]),
+        "strength_plus_score": nonnull_rate(out["strength_plus_score"]),
     }
     debug["nonzero_rate"] = {
         "StrengthScore": nonzero_rate(out["StrengthScore"]),
         "limit_strength_raw": nonzero_rate(out["limit_strength_raw"]),
         "open_times": nonzero_rate(open_times),
+        "intraday_available": nonzero_rate(out["intraday_available"]),
+        "auction_available": nonzero_rate(out["auction_available"]),
     }
     debug["quality_distribution"] = (
         out["strength_quality_flag"].value_counts(dropna=False).to_dict()
@@ -856,8 +885,8 @@ def calc_strength_score(
     debug["duplicate_contract_cols_after_closeout"] = duplicate_cols
 
     out = out.sort_values(
-        by=["StrengthScore", "limit_strength_raw", "ts_code"],
-        ascending=[False, False, True],
+        by=["strength_plus_score", "StrengthScore", "limit_strength_raw", "ts_code"],
+        ascending=[False, False, False, True],
     ).reset_index(drop=True)
 
     return out, debug
@@ -894,6 +923,21 @@ def _formal_output_columns(scored: pd.DataFrame) -> List[str]:
         "limit_open_count",
         "limit_strength_raw",
         "StrengthScore",
+        "base_strength_score",
+        "intraday_quality_score",
+        "strength_plus_score",
+        "intraday_available",
+        "auction_available",
+        "limitup_quality_score",
+        "intraday_risk_score",
+        "late_withdraw_score",
+        "reseal_score",
+        "open_board_count",
+        "auction_strength_score",
+        "auction_real_volume_score",
+        "seal_stability_score",
+        "intraday_data_status",
+        "auction_data_status",
         "strength_feature_count",
         "strength_missing_fields",
         "strength_quality_flag",
