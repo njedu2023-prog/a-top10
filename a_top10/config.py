@@ -174,6 +174,29 @@ class DataRepo:
     def minute_dir(self, trade_date: str, freq: str = "1min") -> Path:
         return self.snapshot_dir(trade_date) / "minute" / freq
 
+    def snapshot_file_status(self, trade_date: str) -> dict:
+        d = self.snapshot_dir(trade_date)
+        files = [
+            "daily.csv",
+            "daily_basic.csv",
+            "limit_list_d.csv",
+            "hot_boards.csv",
+            "top_list.csv",
+            "limit_up_tags.csv",
+            "stk_auction.csv",
+            "intraday_features.csv",
+        ]
+        out = {}
+        for name in files:
+            p = d / name
+            exists = p.exists()
+            out[name] = {
+                "exists": bool(exists),
+                "path": str(p),
+                "size": int(p.stat().st_size) if exists else 0,
+            }
+        return out
+
     # ---------- Step5 训练闭环需要：列出全部 snapshot 日期 ----------
     def list_snapshot_dates(self) -> list[str]:
         """
@@ -266,12 +289,16 @@ class IntradayCfg:
     require_intraday_features: bool = False
     require_stk_auction: bool = False
     missing_policy: str = "neutral"
+    neutral_values: Dict[str, Any] = field(default_factory=dict)
     quality_weights: Dict[str, float] = field(default_factory=dict)
+    soft_risk_weights: Dict[str, float] = field(default_factory=dict)
     strength_plus: Dict[str, float] = field(default_factory=dict)
     final_score: Dict[str, float] = field(default_factory=dict)
     hard_filters: Dict[str, Any] = field(default_factory=dict)
+    hard_risk_rules: Dict[str, Any] = field(default_factory=dict)
     defaults: Dict[str, Any] = field(default_factory=dict)
     report: Dict[str, Any] = field(default_factory=dict)
+    debug: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -365,12 +392,16 @@ def load_settings(config_path: str) -> Settings:
         ),
         require_stk_auction=bool(intraday_raw.get("require_stk_auction", s.intraday.require_stk_auction)),
         missing_policy=str(intraday_raw.get("missing_policy", s.intraday.missing_policy)),
+        neutral_values=dict(intraday_raw.get("neutral_values", {}) or {}),
         quality_weights=dict(intraday_raw.get("quality_weights", {}) or {}),
+        soft_risk_weights=dict(intraday_raw.get("soft_risk_weights", {}) or {}),
         strength_plus=dict(intraday_raw.get("strength_plus", {}) or {}),
         final_score=dict(intraday_raw.get("final_score", {}) or {}),
         hard_filters=dict(intraday_raw.get("hard_filters", {}) or {}),
+        hard_risk_rules=dict(intraday_raw.get("hard_risk_rules", {}) or {}),
         defaults=dict(intraday_raw.get("defaults", {}) or {}),
         report=dict(intraday_raw.get("report", {}) or {}),
+        debug=dict(intraday_raw.get("debug", {}) or {}),
     )
 
     # Preserve raw config blocks that downstream steps already probe with getattr().
