@@ -34,7 +34,9 @@ import numpy as np
 import pandas as pd
 
 from a_top10.intraday_features import (
+    calc_intraday_confidence_score,
     calc_intraday_quality_score,
+    calc_intraday_soft_risk_score,
     calc_strength_plus_score,
     ensure_intraday_columns,
     get_intraday_defaults,
@@ -815,9 +817,22 @@ def calc_strength_score(
         out,
         get_intraday_dict(s, "quality_weights"),
     ).round(6)
+    out["intraday_soft_risk_score"] = calc_intraday_soft_risk_score(
+        out,
+        get_intraday_dict(s, "soft_risk_weights"),
+    ).round(6)
+    out["intraday_risk_score"] = np.maximum(
+        pd.to_numeric(out.get("intraday_risk_score"), errors="coerce").fillna(0.0),
+        pd.to_numeric(out["intraday_soft_risk_score"], errors="coerce").fillna(0.0),
+    ).clip(0.0, 1.0)
+    out["intraday_confidence_score"] = calc_intraday_confidence_score(out).round(6)
     out["strength_plus_score"] = calc_strength_plus_score(
         out,
         get_intraday_dict(s, "strength_plus"),
+    ).round(6)
+    out["intraday_strength_adjustment"] = (
+        pd.to_numeric(out["strength_plus_score"], errors="coerce").fillna(0.0)
+        - pd.to_numeric(out["StrengthScore"], errors="coerce").fillna(0.0)
     ).round(6)
 
     out["_f_momo"] = f_momo
@@ -858,6 +873,7 @@ def calc_strength_score(
         "StrengthScore": miss_rate(out["StrengthScore"]),
         "limit_strength_raw": miss_rate(out["limit_strength_raw"]),
         "intraday_quality_score": miss_rate(out["intraday_quality_score"]),
+        "intraday_soft_risk_score": miss_rate(out["intraday_soft_risk_score"]),
         "strength_plus_score": miss_rate(out["strength_plus_score"]),
     }
     debug["nonnull_rate"] = {
@@ -869,6 +885,7 @@ def calc_strength_score(
         "up_limit": nonnull_rate(up_limit),
         "StrengthScore": nonnull_rate(out["StrengthScore"]),
         "intraday_quality_score": nonnull_rate(out["intraday_quality_score"]),
+        "intraday_soft_risk_score": nonnull_rate(out["intraday_soft_risk_score"]),
         "strength_plus_score": nonnull_rate(out["strength_plus_score"]),
     }
     debug["nonzero_rate"] = {
@@ -925,17 +942,27 @@ def _formal_output_columns(scored: pd.DataFrame) -> List[str]:
         "StrengthScore",
         "base_strength_score",
         "intraday_quality_score",
+        "intraday_strength_adjustment",
         "strength_plus_score",
         "intraday_available",
+        "intraday_status",
+        "intraday_missing_reason",
+        "intraday_source_date",
+        "intraday_feature_version",
+        "intraday_matched_key",
         "auction_available",
         "limitup_quality_score",
+        "intraday_soft_risk_score",
+        "intraday_hard_risk_flag",
         "intraday_risk_score",
         "late_withdraw_score",
         "reseal_score",
         "open_board_count",
+        "open_board_risk_score",
         "auction_strength_score",
         "auction_real_volume_score",
         "seal_stability_score",
+        "intraday_confidence_score",
         "intraday_data_status",
         "auction_data_status",
         "strength_feature_count",
