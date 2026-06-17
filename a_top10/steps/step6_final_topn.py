@@ -33,6 +33,16 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from a_top10.intraday_features import (
+    build_risk_tags,
+    calc_intraday_bonus,
+    calc_intraday_hard_flags,
+    calc_intraday_risk_penalty,
+    ensure_intraday_columns,
+    get_intraday_defaults,
+    get_intraday_dict,
+)
+
 
 # =========================================================
 # utils
@@ -245,7 +255,7 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         if prob_final_col is not None:
             warnings.append("step6 fallback: prob_final missing, fallback to old Probability field.")
 
-    strength_col = _first_existing_col(out, ["StrengthScore", "strengthscore", "strength", "_strength", "强度得分", "强度"])
+    strength_col = _first_existing_col(out, ["strength_plus_score", "StrengthScore", "strengthscore", "strength", "_strength", "强度得分", "强度"])
     theme_col = _first_existing_col(out, ["ThemeBoost", "themeboost", "theme_boost", "theme", "_theme", "题材加成", "热度"])
 
     # ---------- normalize ----------
@@ -294,6 +304,24 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     out2["strength01"] = strength01.astype("float64")
     out2["theme01"] = theme01.astype("float64")
     out2["final_score"] = final_score.astype("float64")
+    out2["final_score_base"] = out2["final_score"].astype("float64")
+
+    out2 = ensure_intraday_columns(out2, get_intraday_defaults(s))
+    out2["intraday_bonus"] = calc_intraday_bonus(out2, get_intraday_dict(s, "final_score"))
+    out2["intraday_risk_penalty"] = calc_intraday_risk_penalty(out2, get_intraday_dict(s, "final_score"))
+    out2 = calc_intraday_hard_flags(out2, get_intraday_dict(s, "hard_filters"))
+    out2["final_score_v2"] = (
+        out2["final_score_base"]
+        + out2["intraday_bonus"]
+        - out2["intraday_risk_penalty"]
+        - 0.08 * pd.to_numeric(out2["intraday_hard_risk_flag"], errors="coerce").fillna(0)
+    ).clip(0.0, 1.0)
+    out2["risk_tags"] = out2.apply(build_risk_tags, axis=1)
+    out2["risk_level"] = np.where(
+        pd.to_numeric(out2["intraday_hard_risk_flag"], errors="coerce").fillna(0) > 0,
+        "高",
+        np.where(out2["risk_tags"].astype(str).str.strip() != "", "中", "低"),
+    )
     out2["score"] = out2["final_score"].astype("float64")   # 兼容旧 score
     out2["prob"] = out2["prob_final"].astype("float64")     # 兼容旧 prob
     out2["ts_code"] = ts_series
@@ -308,7 +336,7 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
 
     if cfg.min_score is not None:
         before = len(out2)
-        out2 = out2[out2["final_score"] >= float(cfg.min_score)].copy()
+        out2 = out2[out2["final_score_v2"] >= float(cfg.min_score)].copy()
         if len(out2) < before:
             warnings.append(f"filtered by min_score={cfg.min_score}: {before}->{len(out2)}")
 
@@ -319,7 +347,7 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     # ---------- dedup ----------
     if cfg.dedup_by_ts_code and "ts_code" in out2.columns:
         out2 = out2.sort_values(
-            ["final_score", "prob_final", "StrengthScore", "ts_code"],
+            ["final_score_v2", "prob_final", "StrengthScore", "ts_code"],
             ascending=[False, False, False, True],
             kind="mergesort",
         ).drop_duplicates(subset=["ts_code"], keep="first").copy()
@@ -335,12 +363,13 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
 
     # ---------- full ranking ----------
     full_sorted = out2.sort_values(
-        ["final_score", "prob_final", "StrengthScore", "_tiebreak_hash"],
+        ["final_score_v2", "prob_final", "StrengthScore", "_tiebreak_hash"],
         ascending=[False, False, False, True],
         kind="mergesort",
     ).reset_index(drop=True)
 
     full_sorted["rank"] = np.arange(1, len(full_sorted) + 1)
+    full_sorted["rank_v2"] = full_sorted["rank"]
 
     prefer_cols = [
         "rank",
@@ -353,11 +382,28 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "prob_ml",
         "prob_final",
         "Probability",
+        "final_score_base",
+        "intraday_bonus",
+        "intraday_risk_penalty",
+        "intraday_hard_risk_flag",
+        "final_score_v2",
         "final_score",
         "score",
         "prob",
         "strength01",
         "theme01",
+        "intraday_quality_score",
+        "intraday_risk_score",
+        "late_withdraw_score",
+        "reseal_score",
+        "open_board_count",
+        "auction_strength_score",
+        "auction_real_volume_score",
+        "seal_stability_score",
+        "intraday_data_status",
+        "auction_data_status",
+        "risk_level",
+        "risk_tags",
     ]
     exist = [c for c in prefer_cols if c in full_sorted.columns]
     others = [c for c in full_sorted.columns if c not in exist and c != "_tiebreak_hash"]
@@ -420,6 +466,7 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
             "main_probability_field": "prob_final",
             "compat_probability_field": "Probability",
             "main_score_field": "final_score",
+            "upgraded_score_field": "final_score_v2",
         },
     }
 
