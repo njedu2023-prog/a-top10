@@ -34,13 +34,17 @@ import numpy as np
 import pandas as pd
 
 from a_top10.intraday_features import (
+    build_risk_level,
     build_risk_tags,
     calc_intraday_bonus,
     calc_intraday_hard_flags,
+    calc_intraday_hard_risk_penalty,
     calc_intraday_risk_penalty,
+    calc_intraday_soft_risk_penalty,
     ensure_intraday_columns,
     get_intraday_defaults,
     get_intraday_dict,
+    get_hard_risk_rules,
 )
 
 
@@ -305,23 +309,27 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     out2["theme01"] = theme01.astype("float64")
     out2["final_score"] = final_score.astype("float64")
     out2["final_score_base"] = out2["final_score"].astype("float64")
+    out2["raw_final_score"] = out2["final_score"].astype("float64")
 
     out2 = ensure_intraday_columns(out2, get_intraday_defaults(s))
     out2["intraday_bonus"] = calc_intraday_bonus(out2, get_intraday_dict(s, "final_score"))
+    out2 = calc_intraday_hard_flags(out2, get_hard_risk_rules(s))
+    out2["intraday_soft_risk_penalty"] = calc_intraday_soft_risk_penalty(out2, get_intraday_dict(s, "final_score"))
+    out2["intraday_hard_risk_penalty"] = calc_intraday_hard_risk_penalty(out2, get_intraday_dict(s, "final_score"))
     out2["intraday_risk_penalty"] = calc_intraday_risk_penalty(out2, get_intraday_dict(s, "final_score"))
-    out2 = calc_intraday_hard_flags(out2, get_intraday_dict(s, "hard_filters"))
+    out2["intraday_total_penalty"] = (
+        pd.to_numeric(out2["intraday_soft_risk_penalty"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(out2["intraday_hard_risk_penalty"], errors="coerce").fillna(0.0)
+    ).astype("float64")
     out2["final_score_v2"] = (
-        out2["final_score_base"]
+        out2["raw_final_score"]
         + out2["intraday_bonus"]
-        - out2["intraday_risk_penalty"]
-        - 0.08 * pd.to_numeric(out2["intraday_hard_risk_flag"], errors="coerce").fillna(0)
+        - out2["intraday_soft_risk_penalty"]
+        - out2["intraday_hard_risk_penalty"]
     ).clip(0.0, 1.0)
-    out2["risk_tags"] = out2.apply(build_risk_tags, axis=1)
-    out2["risk_level"] = np.where(
-        pd.to_numeric(out2["intraday_hard_risk_flag"], errors="coerce").fillna(0) > 0,
-        "高",
-        np.where(out2["risk_tags"].astype(str).str.strip() != "", "中", "低"),
-    )
+    out2["risk_label"] = out2.apply(build_risk_tags, axis=1)
+    out2["risk_tags"] = out2["risk_label"]
+    out2["risk_level"] = out2.apply(build_risk_level, axis=1)
     out2["score"] = out2["final_score"].astype("float64")   # 兼容旧 score
     out2["prob"] = out2["prob_final"].astype("float64")     # 兼容旧 prob
     out2["ts_code"] = ts_series
@@ -382,9 +390,13 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "prob_ml",
         "prob_final",
         "Probability",
+        "raw_final_score",
         "final_score_base",
         "intraday_bonus",
+        "intraday_soft_risk_penalty",
+        "intraday_hard_risk_penalty",
         "intraday_risk_penalty",
+        "intraday_total_penalty",
         "intraday_hard_risk_flag",
         "final_score_v2",
         "final_score",
@@ -392,17 +404,27 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "prob",
         "strength01",
         "theme01",
+        "intraday_available",
+        "intraday_status",
+        "intraday_missing_reason",
+        "intraday_source_date",
+        "intraday_feature_version",
+        "intraday_matched_key",
         "intraday_quality_score",
+        "intraday_soft_risk_score",
         "intraday_risk_score",
         "late_withdraw_score",
         "reseal_score",
         "open_board_count",
+        "open_board_risk_score",
         "auction_strength_score",
         "auction_real_volume_score",
         "seal_stability_score",
+        "intraday_confidence_score",
         "intraday_data_status",
         "auction_data_status",
         "risk_level",
+        "risk_label",
         "risk_tags",
     ]
     exist = [c for c in prefer_cols if c in full_sorted.columns]
