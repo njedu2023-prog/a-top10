@@ -11,6 +11,8 @@ import requests
 from pathlib import Path
 from datetime import datetime
 
+from a_top10.config import is_a_share_trading_day, prev_a_share_trading_day
+
 # 你的数据仓库信息
 GITHUB_USER = "njedu2023-prog"
 DATA_REPO = "a-share-top3-data"
@@ -67,4 +69,6 @@ def pull_snapshot(trade_date: str):
 if __name__ == "__main__":
     # 自动用今天的日期（你也可以指定）
     today = datetime.now().strftime("%Y%m%d")
+    if not is_a_share_trading_day(today):
+        today = prev_a_share_trading_day(today)
     pull_snapshot(today)
