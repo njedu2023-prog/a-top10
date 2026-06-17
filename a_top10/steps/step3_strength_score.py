@@ -1059,7 +1059,7 @@ def run_step3(
     candidates_df: Any,
     s=None,
     ctx: Optional[Dict[str, Any]] = None,
-    top_k: int = 50,
+    top_k: Optional[int] = None,
 ) -> pd.DataFrame:
     trade_date = _resolve_trade_date(s=s)
     scored, debug = calc_strength_score(candidates_df, trade_date=trade_date, s=s, ctx=ctx)
@@ -1069,9 +1069,10 @@ def run_step3(
     except Exception:
         pass
 
-    top_k = max(1, int(top_k or 50))
-    if len(scored) > top_k:
-        scored = scored.head(top_k).copy()
+    if top_k is not None:
+        top_k = max(1, int(top_k))
+        if len(scored) > top_k:
+            scored = scored.head(top_k).copy()
 
     return scored
 
@@ -1080,7 +1081,7 @@ def run(
     df: Any,
     s=None,
     ctx: Optional[Dict[str, Any]] = None,
-    top_k: int = 50,
+    top_k: Optional[int] = None,
 ) -> pd.DataFrame:
     return run_step3(df, s=s, ctx=ctx, top_k=top_k)
 
