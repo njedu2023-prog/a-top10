@@ -94,22 +94,7 @@ jobs:
           MANUAL="${{ github.event.inputs.trade_date || '' }}"
           if [ -n "$MANUAL" ]; then
             echo "Use manual trade_date=$MANUAL"
-            trade_date_resolved="$(python - "$MANUAL" <<'PY'
-            import sys
-            import re
-            from datetime import datetime
-            from a_top10.config import is_a_share_trading_day, prev_a_share_trading_day
-
-            td = sys.argv[1]
-            if re.fullmatch(r"\d{8}", td) and is_a_share_trading_day(td):
-                print(td)
-                sys.exit(0)
-
-            if re.fullmatch(r"\d{8}", td):
-                print(prev_a_share_trading_day(td))
-            else:
-                print(prev_a_share_trading_day(datetime.now().strftime("%Y%m%d")))
-            PY)"
+            trade_date_resolved="$(python -c "import re,sys; from datetime import datetime; from a_top10.config import is_a_share_trading_day, prev_a_share_trading_day; td=sys.argv[1]; print(td if re.fullmatch(r'\d{8}', td) and is_a_share_trading_day(td) else prev_a_share_trading_day(td if re.fullmatch(r'\d{8}', td) else datetime.now().strftime('%Y%m%d')))" "$MANUAL")"
             if [ "$trade_date_resolved" != "$MANUAL" ]; then
               echo "⚠️ 输入日期 $MANUAL 非交易日或异常，已修正为：$trade_date_resolved"
             fi
@@ -253,7 +238,7 @@ jobs:
 
       # Upload snapshot dir as artifact (optional but recommended as audit proof)
       - name: Upload synced snapshot dir (artifact)
-        if: always()
+        if: ${{ success() && steps.sync_top3.outputs.synced_dir != '' }}
         uses: actions/upload-artifact@v6
         with:
           name: top3_snapshot_${{ steps.resolve_date.outputs.trade_date }}_${{ github.run_id }}
@@ -289,7 +274,7 @@ jobs:
 
       # ✅ Stamp (single file overwrite)
       - name: Stamp last run (always)
-        if: always()
+        if: ${{ always() && steps.resolve_date.outputs.trade_date != '' }}
         run: |
           set -euo pipefail
 
@@ -302,7 +287,7 @@ jobs:
 
       # ✅ Commit & push: outputs + models + _warehouse(today)
       - name: Commit & push outputs + models + _warehouse(today) (always)
-        if: always()
+        if: ${{ always() && steps.resolve_date.outputs.trade_date != '' }}
         run: |
           set -euo pipefail
 
