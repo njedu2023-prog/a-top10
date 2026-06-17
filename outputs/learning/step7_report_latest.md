@@ -1,6 +1,6 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-06-17 22:38:24
+- 生成时间：2026-06-17 23:24:58
 - RunMode：auto_daily
 - Today：20260617
 - LatestSnapshot：20260617
@@ -40,13 +40,13 @@
 
 ## 2.1) 样本拒绝分布
 
-- total_rows：6578
+- total_rows：6616
 - learnable_rows：6528
-- rejected_rows：50
+- rejected_rows：88
 
 | reason | count |
 | --- | --- |
-| pending_next_snapshot | 50 |
+| pending_next_snapshot | 88 |
 
 ## 3) 训练执行结果
 

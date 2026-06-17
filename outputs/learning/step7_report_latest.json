@@ -1,5 +1,5 @@
 {
-  "ts": "2026-06-17 22:38:24",
+  "ts": "2026-06-17 23:24:58",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260617",
   "latest_snapshot_yyyymmdd": "20260617",
@@ -1322,25 +1322,25 @@
     "eligible_positive_rows": 1097
   },
   "reject_reason_summary": {
-    "total_rows": 6578,
+    "total_rows": 6616,
     "learnable_rows": 6528,
-    "rejected_rows": 50,
+    "rejected_rows": 88,
     "top_reasons": [
       {
         "reason": "pending_next_snapshot",
-        "count": 50
+        "count": 88
       }
     ],
     "reasons": {
-      "pending_next_snapshot": 50
+      "pending_next_snapshot": 88
     },
     "trade_dates": {
       "20260617": {
-        "rejected_rows": 50,
+        "rejected_rows": 88,
         "top_reasons": [
           {
             "reason": "pending_next_snapshot",
-            "count": 50
+            "count": 88
           }
         ]
       }
