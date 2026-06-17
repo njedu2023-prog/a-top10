@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional, Tuple
 import pandas as pd
 import yaml
 
+from types import SimpleNamespace
+
 
 # =========================================================
 # A 股交易日历兜底
@@ -160,6 +162,18 @@ class DataRepo:
     def read_top_list(self, trade_date: str) -> pd.DataFrame:
         return self.read_csv_if_exists(self.snapshot_dir(trade_date) / "top_list.csv")
 
+    def read_stk_auction(self, trade_date: str) -> pd.DataFrame:
+        return self.read_csv_if_exists(self.snapshot_dir(trade_date) / "stk_auction.csv")
+
+    def read_intraday_features(self, trade_date: str) -> pd.DataFrame:
+        return self.read_csv_if_exists(self.snapshot_dir(trade_date) / "intraday_features.csv")
+
+    def has_file(self, trade_date: str, filename: str) -> bool:
+        return (self.snapshot_dir(trade_date) / filename).exists()
+
+    def minute_dir(self, trade_date: str, freq: str = "1min") -> Path:
+        return self.snapshot_dir(trade_date) / "minute" / freq
+
     # ---------- Step5 训练闭环需要：列出全部 snapshot 日期 ----------
     def list_snapshot_dates(self) -> list[str]:
         """
@@ -247,6 +261,20 @@ class DataRepoCfg:
 
 
 @dataclass
+class IntradayCfg:
+    enabled: bool = True
+    require_intraday_features: bool = False
+    require_stk_auction: bool = False
+    missing_policy: str = "neutral"
+    quality_weights: Dict[str, float] = field(default_factory=dict)
+    strength_plus: Dict[str, float] = field(default_factory=dict)
+    final_score: Dict[str, float] = field(default_factory=dict)
+    hard_filters: Dict[str, Any] = field(default_factory=dict)
+    defaults: Dict[str, Any] = field(default_factory=dict)
+    report: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class Settings:
     version: str = "0.1"
     timezone: str = "Asia/Shanghai"
@@ -254,6 +282,7 @@ class Settings:
     data_repo: DataRepoCfg = field(default_factory=DataRepoCfg)
     io: IOCfg = field(default_factory=IOCfg)
     emotion_gate: EmotionGateCfg = field(default_factory=EmotionGateCfg)
+    intraday: IntradayCfg = field(default_factory=IntradayCfg)
 
     def __post_init__(self):
         self.data_repo = DataRepo(
@@ -327,4 +356,36 @@ def load_settings(config_path: str) -> Settings:
         min_max连板高度=int(eg.get("min_max连板高度", s.emotion_gate.min_max连板高度)),
     )
 
+    # -------- intraday --------
+    intraday_raw = raw.get("intraday", {}) or {}
+    s.intraday = IntradayCfg(
+        enabled=bool(intraday_raw.get("enabled", s.intraday.enabled)),
+        require_intraday_features=bool(
+            intraday_raw.get("require_intraday_features", s.intraday.require_intraday_features)
+        ),
+        require_stk_auction=bool(intraday_raw.get("require_stk_auction", s.intraday.require_stk_auction)),
+        missing_policy=str(intraday_raw.get("missing_policy", s.intraday.missing_policy)),
+        quality_weights=dict(intraday_raw.get("quality_weights", {}) or {}),
+        strength_plus=dict(intraday_raw.get("strength_plus", {}) or {}),
+        final_score=dict(intraday_raw.get("final_score", {}) or {}),
+        hard_filters=dict(intraday_raw.get("hard_filters", {}) or {}),
+        defaults=dict(intraday_raw.get("defaults", {}) or {}),
+        report=dict(intraday_raw.get("report", {}) or {}),
+    )
+
+    # Preserve raw config blocks that downstream steps already probe with getattr().
+    for block in ("ml", "training", "step6", "theme", "scores", "risk", "output"):
+        if block in raw and isinstance(raw.get(block), dict):
+            setattr(s, block, _dict_to_namespace(raw.get(block) or {}))
+
     return s
+
+
+def _dict_to_namespace(obj: Dict[str, Any]) -> SimpleNamespace:
+    converted = {}
+    for k, v in obj.items():
+        if isinstance(v, dict):
+            converted[k] = _dict_to_namespace(v)
+        else:
+            converted[k] = v
+    return SimpleNamespace(**converted)
