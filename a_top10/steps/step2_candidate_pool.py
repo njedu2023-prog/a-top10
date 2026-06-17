@@ -327,6 +327,7 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
     auction = ctx.get("stk_auction")
     defaults = get_intraday_defaults(s)
     quality_weights = get_intraday_dict(s, "quality_weights")
+    soft_risk_weights = get_intraday_dict(s, "soft_risk_weights")
     before_intraday_cols = set(candidates_df.columns)
     candidates_df = merge_intraday_to_candidates(
         candidates=candidates_df,
@@ -334,21 +335,30 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
         auction=auction if isinstance(auction, pd.DataFrame) else pd.DataFrame(),
         defaults=defaults,
         weights=quality_weights,
+        soft_risk_weights=soft_risk_weights,
     )
 
     intraday_rows = int(len(intraday)) if isinstance(intraday, pd.DataFrame) else 0
     auction_rows = int(len(auction)) if isinstance(auction, pd.DataFrame) else 0
     intraday_matched = int((pd.to_numeric(candidates_df.get("intraday_available"), errors="coerce").fillna(0) > 0).sum())
     auction_matched = int((pd.to_numeric(candidates_df.get("auction_available"), errors="coerce").fillna(0) > 0).sum())
+    status_counts = candidates_df.get("intraday_status", pd.Series(dtype="object")).fillna("").astype(str).value_counts().to_dict()
     debug["intraday_merge"] = {
         "intraday_file_rows": intraday_rows,
         "auction_file_rows": auction_rows,
         "candidate_rows": int(len(candidates_df)),
         "intraday_matched_rows": intraday_matched,
         "auction_matched_rows": auction_matched,
+        "missing_rows": int(len(candidates_df) - intraday_matched),
         "intraday_match_ratio": float(intraday_matched / max(1, len(candidates_df))),
         "auction_match_ratio": float(auction_matched / max(1, len(candidates_df))),
         "missing_policy": str(getattr(getattr(s, "intraday", None), "missing_policy", "neutral")),
+        "missing_reason_count": status_counts,
+        "default_value_counts": {
+            "quality_default": int(pd.to_numeric(candidates_df.get("limitup_quality_is_default", 0), errors="coerce").fillna(0).sum()),
+            "reseal_default": int(pd.to_numeric(candidates_df.get("reseal_is_default", 0), errors="coerce").fillna(0).sum()),
+            "auction_default": int(pd.to_numeric(candidates_df.get("auction_strength_is_default", 0), errors="coerce").fillna(0).sum()),
+        },
         "added_columns": sorted([c for c in candidates_df.columns if c not in before_intraday_cols]),
     }
 
