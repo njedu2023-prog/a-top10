@@ -9,6 +9,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
+from a_top10.intraday_features import build_intraday_debug_summary
+
 
 CODE_COL_CANDIDATES = ["ts_code", "code", "TS_CODE", "证券代码", "股票代码"]
 NAME_COL_CANDIDATES = ["name", "stock_name", "名称", "股票", "证券名称", "股票简称"]
@@ -21,19 +23,34 @@ OPEN_TIMES_COL_CANDIDATES = ["open_times", "炸板次数", "开板次数"]
 INTRADAY_REPORT_COLS = [
     "final_score_v2",
     "final_score_base",
+    "raw_final_score",
+    "final_score",
     "strength_plus_score",
+    "intraday_available",
+    "intraday_status",
+    "intraday_missing_reason",
+    "intraday_source_date",
+    "intraday_feature_version",
+    "intraday_matched_key",
     "intraday_quality_score",
+    "intraday_soft_risk_score",
+    "intraday_hard_risk_flag",
     "intraday_risk_score",
     "late_withdraw_score",
     "reseal_score",
     "open_board_count",
+    "open_board_risk_score",
     "auction_strength_score",
     "auction_real_volume_score",
     "seal_stability_score",
+    "intraday_confidence_score",
     "intraday_bonus",
+    "intraday_soft_risk_penalty",
+    "intraday_hard_risk_penalty",
     "intraday_risk_penalty",
-    "intraday_hard_risk_flag",
+    "intraday_total_penalty",
     "risk_level",
+    "risk_label",
     "risk_tags",
     "intraday_data_status",
     "auction_data_status",
@@ -53,19 +70,34 @@ V3_PRED_BASE_COLS = [
     "prob_rule",
     "final_score_v2",
     "final_score_base",
+    "raw_final_score",
+    "final_score",
     "strength_plus_score",
+    "intraday_available",
+    "intraday_status",
+    "intraday_missing_reason",
+    "intraday_source_date",
+    "intraday_feature_version",
+    "intraday_matched_key",
     "intraday_quality_score",
+    "intraday_soft_risk_score",
+    "intraday_hard_risk_flag",
     "intraday_risk_score",
     "late_withdraw_score",
     "reseal_score",
     "open_board_count",
+    "open_board_risk_score",
     "auction_strength_score",
     "auction_real_volume_score",
     "seal_stability_score",
+    "intraday_confidence_score",
     "intraday_bonus",
+    "intraday_soft_risk_penalty",
+    "intraday_hard_risk_penalty",
     "intraday_risk_penalty",
-    "intraday_hard_risk_flag",
+    "intraday_total_penalty",
     "risk_level",
+    "risk_label",
     "risk_tags",
     "intraday_data_status",
     "auction_data_status",
@@ -87,6 +119,23 @@ DECISION_SOURCE_BASE_COLS = [
     "StrengthScore",
     "ThemeBoost",
     "board",
+    "final_score",
+    "raw_final_score",
+    "final_score_v2",
+    "intraday_available",
+    "intraday_status",
+    "intraday_missing_reason",
+    "intraday_quality_score",
+    "intraday_soft_risk_score",
+    "intraday_hard_risk_flag",
+    "intraday_risk_score",
+    "late_withdraw_score",
+    "reseal_score",
+    "open_board_count",
+    "auction_strength_score",
+    "intraday_confidence_score",
+    "risk_level",
+    "risk_label",
 ]
 DECISION_SOURCE_META_COLS = ["trade_date", "verify_date", "run_id", "run_attempt", "commit_sha", "generated_at_utc"]
 DECISION_SOURCE_COLS = DECISION_SOURCE_META_COLS[:2] + DECISION_SOURCE_BASE_COLS + DECISION_SOURCE_META_COLS[2:]
@@ -106,20 +155,29 @@ FEATURE_HISTORY_COLS = [
     "prob_lr",
     "prob_lgbm",
     "prob_rule",
+    "raw_final_score",
     "final_score_base",
     "final_score_v2",
+    "intraday_total_penalty",
     "strength_plus_score",
+    "intraday_status",
+    "intraday_missing_reason",
     "intraday_quality_score",
+    "intraday_soft_risk_score",
+    "intraday_hard_risk_flag",
     "intraday_risk_score",
     "late_withdraw_score",
     "reseal_score",
     "open_board_count",
+    "open_board_risk_score",
     "auction_strength_score",
     "auction_real_volume_score",
     "seal_stability_score",
+    "intraday_confidence_score",
     "intraday_available",
     "auction_available",
     "risk_level",
+    "risk_label",
     "risk_tags",
     "is_sample_mature",
     "mature_reason",
@@ -669,10 +727,13 @@ def _canonicalize_prediction_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     out["close"] = _extract_numeric(src, CLOSE_COL_CANDIDATES)
     for col in [
         "Probability", "StrengthScore", "ThemeBoost", "prob_lr", "prob_lgbm", "prob_rule",
-        "final_score_v2", "final_score_base", "strength_plus_score", "intraday_quality_score",
-        "intraday_risk_score", "late_withdraw_score", "reseal_score", "open_board_count",
-        "auction_strength_score", "auction_real_volume_score", "seal_stability_score",
-        "intraday_bonus", "intraday_risk_penalty", "intraday_hard_risk_flag",
+        "final_score_v2", "final_score_base", "raw_final_score", "final_score", "strength_plus_score",
+        "intraday_available", "intraday_quality_score", "intraday_soft_risk_score",
+        "intraday_hard_risk_flag", "intraday_risk_score", "late_withdraw_score", "reseal_score",
+        "open_board_count", "open_board_risk_score", "auction_strength_score",
+        "auction_real_volume_score", "seal_stability_score", "intraday_confidence_score",
+        "intraday_bonus", "intraday_soft_risk_penalty", "intraday_hard_risk_penalty",
+        "intraday_risk_penalty", "intraday_total_penalty",
     ]:
         out[col] = pd.to_numeric(out[col], errors="coerce")
     out["rank"] = pd.to_numeric(out["rank"], errors="coerce")
@@ -703,6 +764,34 @@ def _canonicalize_decision_source_frame(df: Optional[pd.DataFrame]) -> pd.DataFr
         src["ThemeBoost"] if "ThemeBoost" in src.columns else (src["题材加成"] if "题材加成" in src.columns else ""),
         errors="coerce",
     )
+    passthrough = [
+        "final_score",
+        "raw_final_score",
+        "final_score_v2",
+        "intraday_available",
+        "intraday_status",
+        "intraday_missing_reason",
+        "intraday_quality_score",
+        "intraday_soft_risk_score",
+        "intraday_hard_risk_flag",
+        "intraday_risk_score",
+        "late_withdraw_score",
+        "reseal_score",
+        "open_board_count",
+        "auction_strength_score",
+        "intraday_confidence_score",
+        "risk_level",
+        "risk_label",
+    ]
+    for col in passthrough:
+        out[col] = src[col] if col in src.columns else ""
+    for col in [
+        "final_score", "raw_final_score", "final_score_v2", "intraday_available",
+        "intraday_quality_score", "intraday_soft_risk_score", "intraday_hard_risk_flag",
+        "intraday_risk_score", "late_withdraw_score", "reseal_score", "open_board_count",
+        "auction_strength_score", "intraday_confidence_score",
+    ]:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
     out["rank"] = pd.to_numeric(out["rank"], errors="coerce")
     return out.reindex(columns=DECISION_SOURCE_BASE_COLS, fill_value="")
 
@@ -781,19 +870,28 @@ def _canonicalize_feature_history_batch(
     out["prob_rule"] = src["prob_rule"] if "prob_rule" in src.columns else ""
     for col in [
         "final_score_base",
+        "raw_final_score",
         "final_score_v2",
+        "intraday_total_penalty",
         "strength_plus_score",
+        "intraday_status",
+        "intraday_missing_reason",
         "intraday_quality_score",
+        "intraday_soft_risk_score",
+        "intraday_hard_risk_flag",
         "intraday_risk_score",
         "late_withdraw_score",
         "reseal_score",
         "open_board_count",
+        "open_board_risk_score",
         "auction_strength_score",
         "auction_real_volume_score",
         "seal_stability_score",
+        "intraday_confidence_score",
         "intraday_available",
         "auction_available",
         "risk_level",
+        "risk_label",
         "risk_tags",
     ]:
         out[col] = src[col] if col in src.columns else ""
@@ -816,9 +914,12 @@ def _canonicalize_feature_history_batch(
         "Probability", "StrengthScore", "ThemeBoost", "seal_amount", "open_times", "turnover_rate",
         "prob_lr", "prob_lgbm", "prob_rule", "is_sample_mature", "label_delay_flag",
         "y_limit_hit", "y_next_ret", "learnable_flag", "batch_quality_score", "close",
-        "final_score_base", "final_score_v2", "strength_plus_score", "intraday_quality_score",
-        "intraday_risk_score", "late_withdraw_score", "reseal_score", "open_board_count",
+        "final_score_base", "raw_final_score", "final_score_v2", "intraday_total_penalty",
+        "strength_plus_score", "intraday_quality_score", "intraday_soft_risk_score",
+        "intraday_hard_risk_flag", "intraday_risk_score", "late_withdraw_score",
+        "reseal_score", "open_board_count", "open_board_risk_score",
         "auction_strength_score", "auction_real_volume_score", "seal_stability_score",
+        "intraday_confidence_score",
         "intraday_available", "auction_available",
     ]:
         out[col] = pd.to_numeric(out[col], errors="coerce")
@@ -944,14 +1045,20 @@ def _rename_human(df: pd.DataFrame) -> pd.DataFrame:
         "ThemeBoost": "题材加成",
         "final_score_v2": "最终分",
         "final_score_base": "原始分",
+        "raw_final_score": "原始分",
         "intraday_quality_score": "分时质量",
-        "intraday_risk_score": "分时风险",
+        "intraday_soft_risk_score": "软风险",
+        "intraday_hard_risk_flag": "硬风险",
+        "intraday_risk_score": "综合风险",
         "late_withdraw_score": "尾盘风险",
         "reseal_score": "回封分",
         "open_board_count": "炸板数",
         "auction_strength_score": "竞价强度",
+        "intraday_available": "覆盖",
         "risk_level": "风险级别",
+        "risk_label": "风险标签",
         "risk_tags": "风险标签",
+        "intraday_status": "分时状态",
         "intraday_data_status": "分时状态",
         "board": "板块",
         "trade_date": "预测日",
@@ -1191,6 +1298,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     json_path = outdir / f"predict_top10_{trade_date}.json"
     _write_text_overwrite(json_path, json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
 
+    intraday_debug: Dict[str, Any] = {}
     try:
         intraday_debug_path = outdir / f"debug_intraday_{trade_date}.json"
         src_for_debug = full_df if full_df is not None and not full_df.empty else topn_df
@@ -1198,23 +1306,34 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         top_dbg = _to_df(topn_df)
         ctx_debug = ctx.get("debug", {}) if isinstance(ctx, dict) else {}
         intraday_input = ctx_debug.get("intraday_input", {}) if isinstance(ctx_debug, dict) else {}
-        debug_intraday = {
-            "intraday_enabled": bool(getattr(getattr(settings, "intraday", None), "enabled", True)),
-            "intraday_rows": int(intraday_input.get("intraday_features_rows", 0) or 0),
-            "auction_rows": int(intraday_input.get("stk_auction_rows", 0) or 0),
-            "candidate_rows": int(len(dbg_df)) if dbg_df is not None else 0,
-            "matched_intraday_rows": int((pd.to_numeric(dbg_df.get("intraday_available"), errors="coerce").fillna(0) > 0).sum()) if dbg_df is not None and not dbg_df.empty and "intraday_available" in dbg_df.columns else 0,
-            "matched_auction_rows": int((pd.to_numeric(dbg_df.get("auction_available"), errors="coerce").fillna(0) > 0).sum()) if dbg_df is not None and not dbg_df.empty and "auction_available" in dbg_df.columns else 0,
-            "topn_intraday_available_ratio": float((pd.to_numeric(top_dbg.get("intraday_available"), errors="coerce").fillna(0) > 0).mean()) if top_dbg is not None and not top_dbg.empty and "intraday_available" in top_dbg.columns else 0.0,
-            "topn_hard_risk_count": int((pd.to_numeric(top_dbg.get("intraday_hard_risk_flag"), errors="coerce").fillna(0) > 0).sum()) if top_dbg is not None and not top_dbg.empty and "intraday_hard_risk_flag" in top_dbg.columns else 0,
-            "fallback_used": bool(int(intraday_input.get("intraday_features_rows", 0) or 0) == 0 or int(intraday_input.get("stk_auction_rows", 0) or 0) == 0),
-        }
-        _write_text_overwrite(intraday_debug_path, json.dumps(debug_intraday, ensure_ascii=False, indent=2), encoding="utf-8")
+        intraday_debug = build_intraday_debug_summary(dbg_df, top_dbg, intraday_input, trade_date)
+        intraday_debug["intraday_enabled"] = bool(getattr(getattr(settings, "intraday", None), "enabled", True))
+        intraday_debug["fallback_policy"] = str(getattr(getattr(settings, "intraday", None), "missing_policy", "neutral"))
+        intraday_debug["fallback_used"] = bool(intraday_debug.get("intraday_rows", 0) == 0 or intraday_debug.get("matched_count", 0) == 0)
+        _write_text_overwrite(intraday_debug_path, json.dumps(intraday_debug, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        audit_cols = [
+            "rank", "ts_code", "name", "intraday_available", "intraday_status", "intraday_missing_reason",
+            "limitup_quality_score", "intraday_quality_score", "intraday_soft_risk_score",
+            "intraday_hard_risk_flag", "intraday_risk_score", "late_withdraw_score", "reseal_score",
+            "open_board_count", "auction_strength_score", "intraday_confidence_score",
+            "risk_level", "risk_label", "raw_final_score", "intraday_bonus",
+            "intraday_soft_risk_penalty", "intraday_hard_risk_penalty", "intraday_total_penalty",
+            "final_score_v2",
+        ]
+        audit_df = _canonicalize_prediction_frame(dbg_df)
+        for col in audit_cols:
+            if col not in audit_df.columns:
+                audit_df[col] = dbg_df[col] if isinstance(dbg_df, pd.DataFrame) and col in dbg_df.columns else ""
+        _write_csv_overwrite(audit_df.reindex(columns=audit_cols, fill_value=""), outdir / f"intraday_audit_{trade_date}.csv")
     except Exception as e:
-        print(f"[WARN] debug_intraday write failed: {e}")
+        print(f"[WARN] intraday debug/audit write failed: {e}")
 
     topn_v3 = _canonicalize_prediction_frame(topn_df)
     candidate_pool_df = _standardize_candidate_pool(full_df, topn_df)
+    for df_cov in (topn_v3, candidate_pool_df):
+        if not df_cov.empty and "intraday_available" in df_cov.columns:
+            df_cov["intraday_coverage"] = pd.to_numeric(df_cov["intraday_available"], errors="coerce").fillna(0).map(lambda x: "是" if x > 0 else "否")
 
     prev_topn_df = _load_json_topn(outdir, prev_td)
     prev_verify_daily = _load_daily_df(settings, ctx, trade_date)
@@ -1235,16 +1354,16 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     if not topn_v3.empty:
         for col in [
             "Probability", "StrengthScore", "ThemeBoost", "final_score_v2", "final_score_base",
-            "strength_plus_score", "intraday_quality_score", "intraday_risk_score",
-            "late_withdraw_score", "reseal_score", "auction_strength_score",
+            "strength_plus_score", "intraday_quality_score", "intraday_soft_risk_score",
+            "intraday_risk_score", "late_withdraw_score", "reseal_score", "auction_strength_score",
         ]:
             if col in topn_v3.columns:
                 topn_v3[col] = topn_v3[col].map(_format_score if col != "Probability" else _format_probability)
     if not candidate_pool_df.empty:
         for col in [
             "Probability", "StrengthScore", "ThemeBoost", "final_score_v2", "final_score_base",
-            "strength_plus_score", "intraday_quality_score", "intraday_risk_score",
-            "late_withdraw_score", "reseal_score", "auction_strength_score",
+            "strength_plus_score", "intraday_quality_score", "intraday_soft_risk_score",
+            "intraday_risk_score", "late_withdraw_score", "reseal_score", "auction_strength_score",
         ]:
             if col in candidate_pool_df.columns:
                 candidate_pool_df[col] = candidate_pool_df[col].map(_format_score if col != "Probability" else _format_probability)
@@ -1256,6 +1375,19 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         "该模块主要用于识别 D 日涨停质量和隔夜风险。"
         "当分时数据缺失时，系统按中性值降级，不把缺失视为高风险。\n"
     )
+    md_lines.append("## 分时增强数据覆盖率\n")
+    md_lines.append(f"- 候选池数量：{intraday_debug.get('candidate_count', 0)}")
+    md_lines.append(f"- intraday_features 行数：{intraday_debug.get('intraday_rows', 0)}")
+    md_lines.append(f"- 成功匹配数量：{intraday_debug.get('matched_count', 0)}")
+    md_lines.append(f"- 候选池覆盖率：{_format_pct(intraday_debug.get('matched_rate', 0))}")
+    md_lines.append(f"- Top10 覆盖率：{_format_pct(intraday_debug.get('topn_matched_rate', 0))}")
+    md_lines.append(f"- 分时缺失数量：{intraday_debug.get('missing_count', 0)}")
+    risk_counts = intraday_debug.get("risk_counts", {}) if isinstance(intraday_debug, dict) else {}
+    risk_labels = intraday_debug.get("risk_label_counts", {}) if isinstance(intraday_debug, dict) else {}
+    md_lines.append(f"- 高风险数量：{int(risk_counts.get('high', 0) or 0) + int(risk_counts.get('extreme', 0) or 0)}")
+    md_lines.append(f"- 尾盘撤退数量：{int(risk_labels.get('尾盘撤退', 0) or 0)}")
+    md_lines.append(f"- 多次炸板数量：{int(risk_labels.get('多次炸板', 0) or 0)}\n")
+
     md_lines.append(f"## {trade_date} 预测：{next_td} 涨停 Top10（按涨停概率降序）\n")
     if topn_v3.empty:
         reason = _safe_str(gate.get("reason") if isinstance(gate, dict) else "")
@@ -1263,20 +1395,37 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     else:
         md_lines.append(_df_to_md_table(topn_v3, cols=[
             "rank", "ts_code", "name", "final_score_v2", "final_score_base", "Probability",
-            "strength_plus_score", "ThemeBoost", "intraday_quality_score", "intraday_risk_score",
-            "late_withdraw_score", "reseal_score", "open_board_count", "auction_strength_score",
-            "risk_level", "risk_tags", "intraday_data_status",
+            "strength_plus_score", "ThemeBoost", "intraday_quality_score", "intraday_soft_risk_score",
+            "intraday_hard_risk_flag", "late_withdraw_score", "reseal_score", "open_board_count",
+            "auction_strength_score", "intraday_coverage", "risk_level", "risk_label",
         ]))
         md_lines.append("")
+        md_lines.append("## 分时风控解释\n")
+        md_lines.append("- 分时质量：衡量 D 日涨停路径、回封承接、竞价强度和尾盘稳定性。")
+        md_lines.append("- 软风险：连续风险分，越高代表 D 日分时结构越危险。")
+        md_lines.append("- 硬风险：触发强风控阈值时为 1。")
+        md_lines.append("- 尾盘风险：识别尾盘封单衰减、放量砸板、资金撤退。")
+        md_lines.append("- 回封分：衡量炸板后重新封板的承接质量。")
+        md_lines.append("- 炸板数：D 日涨停打开次数。")
+        md_lines.append("- 覆盖：表示该股票是否成功匹配上游分时增强数据。\n")
+        risk_notes_df = topn_v3[
+            topn_v3.get("risk_label", pd.Series([], dtype=str)).astype(str).str.contains("尾盘撤退|多次炸板|分时高风险|回封偏弱|低置信", regex=True, na=False)
+        ].head(int(getattr(getattr(settings, "intraday", None), "report", {}).get("max_risk_notes", 10) if isinstance(getattr(getattr(settings, "intraday", None), "report", {}), dict) else 10))
+        md_lines.append("## 高风险个股提示\n")
+        if risk_notes_df.empty:
+            md_lines.append("（无高风险个股提示）\n")
+        else:
+            for _, r in risk_notes_df.iterrows():
+                md_lines.append(f"- {_safe_str(r.get('ts_code'))} {_safe_str(r.get('name'))}：{_safe_str(r.get('risk_label'))}，最终分已按分时风控扣减。")
+            md_lines.append("")
 
     md_lines.append(f"## {trade_date} 候选池补充表（Top10 之外，按涨停概率降序）\n")
     if candidate_pool_df.empty:
         md_lines.append("（无 Top10 之外的候选样本）\n")
     else:
         md_lines.append(_df_to_md_table(candidate_pool_df, cols=[
-            "rank", "ts_code", "name", "final_score_v2", "Probability", "strength_plus_score",
-            "ThemeBoost", "intraday_quality_score", "intraday_risk_score", "risk_level",
-            "risk_tags", "intraday_data_status",
+            "rank", "ts_code", "name", "final_score_v2", "Probability", "intraday_quality_score",
+            "intraday_risk_score", "risk_level", "risk_label", "intraday_coverage",
         ]))
         md_lines.append("")
 
@@ -1313,6 +1462,8 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
     _write_csv_overwrite(full_out, decisio_dir / f"pred_decisio_{trade_date}.csv")
     _write_csv_overwrite(full_out, decisio_dir / "pred_decisio_latest.csv")
+    _write_csv_overwrite(full_out, decisio_dir / f"pred_source_{trade_date}.csv")
+    _write_csv_overwrite(full_out, decisio_dir / "pred_source_latest.csv")
 
     feature_source = full_df if full_df is not None and not full_df.empty else topn_df
     feature_batch = _canonicalize_feature_history_batch(
