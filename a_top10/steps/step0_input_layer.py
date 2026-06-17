@@ -507,6 +507,8 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     hot_boards_raw = _read_csv_if_exists(snap / "hot_boards.csv")
     top_list_raw = _read_csv_if_exists(snap / "top_list.csv")
     stock_basic_raw = _read_csv_if_exists(snap / "stock_basic.csv")
+    stk_auction_raw = _read_csv_if_exists(snap / "stk_auction.csv")
+    intraday_features_raw = _read_csv_if_exists(snap / "intraday_features.csv")
 
     # optional table for market metrics fallback (NOT required)
     stk_limit_raw = _read_csv_if_exists(snap / "stk_limit.csv")
@@ -521,6 +523,8 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     daily_basic, dbg_daily_basic = _normalize_industry_table(daily_basic_raw, "daily_basic")
 
     stk_limit, dbg_stk_limit_code = _normalize_table_ts_code(stk_limit_raw)
+    stk_auction, dbg_stk_auction_code = _normalize_table_ts_code(stk_auction_raw)
+    intraday_features, dbg_intraday_features_code = _normalize_table_ts_code(intraday_features_raw)
 
     # hot_boards: keep as-is (it is industry-centric table); still record basic shape
     hot_boards = hot_boards_raw.copy() if isinstance(hot_boards_raw, pd.DataFrame) else pd.DataFrame()
@@ -649,6 +653,8 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
             "top_list": int(len(top_list)) if isinstance(top_list, pd.DataFrame) else 0,
             "stock_basic": int(len(stock_basic)) if isinstance(stock_basic, pd.DataFrame) else 0,
             "stk_limit": int(len(stk_limit)) if isinstance(stk_limit, pd.DataFrame) else 0,
+            "stk_auction": int(len(stk_auction)) if isinstance(stk_auction, pd.DataFrame) else 0,
+            "intraday_features": int(len(intraday_features)) if isinstance(intraday_features, pd.DataFrame) else 0,
             "universe": int(len(universe)) if isinstance(universe, pd.DataFrame) else 0,
         },
 
@@ -668,12 +674,31 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
             "stock_basic": dbg_stock_basic,
             "daily_basic": dbg_daily_basic,
             "stk_limit": dbg_stk_limit_code,
+            "stk_auction": dbg_stk_auction_code,
+            "intraday_features": dbg_intraday_features_code,
         },
         "industry_apply": dbg_industry_apply,
 
         # ✅ new: market calc trace
         "market_calc": market_calc,
     }
+
+    intraday_cfg = getattr(s, "intraday", None)
+    intraday_input_debug: Dict[str, Any] = {
+        "stk_auction_rows": int(len(stk_auction)) if isinstance(stk_auction, pd.DataFrame) else 0,
+        "intraday_features_rows": int(len(intraday_features)) if isinstance(intraday_features, pd.DataFrame) else 0,
+        "stk_auction_columns": list(stk_auction.columns) if isinstance(stk_auction, pd.DataFrame) else [],
+        "intraday_features_columns": list(intraday_features.columns) if isinstance(intraday_features, pd.DataFrame) else [],
+        "intraday_enabled_by_config": bool(getattr(intraday_cfg, "enabled", True)),
+        "intraday_available": bool(isinstance(intraday_features, pd.DataFrame) and len(intraday_features) > 0),
+        "auction_available": bool(isinstance(stk_auction, pd.DataFrame) and len(stk_auction) > 0),
+        "missing_policy": str(getattr(intraday_cfg, "missing_policy", "neutral")),
+    }
+
+    if bool(getattr(intraday_cfg, "require_intraday_features", False)) and intraday_input_debug["intraday_features_rows"] <= 0:
+        raise RuntimeError("intraday_features.csv required by config but missing/empty")
+    if bool(getattr(intraday_cfg, "require_stk_auction", False)) and intraday_input_debug["stk_auction_rows"] <= 0:
+        raise RuntimeError("stk_auction.csv required by config but missing/empty")
 
     # 9) ctx
     ctx: Dict[str, Any] = {
@@ -690,6 +715,10 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         "limit_list_d": limit_list_d,
         "limit_break_d": limit_break_d,
         "stk_limit": stk_limit,  # ✅ optional, safe to expose for later use/debug
+        "stk_auction": stk_auction,
+        "auction_df": stk_auction,
+        "intraday_features": intraday_features,
+        "intraday_df": intraday_features,
 
         # compatibility keys
         "boards": hot_boards,
@@ -701,6 +730,9 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         "stock_basic": stock_basic,
 
         "market": market,
+        "debug": {
+            "intraday_input": intraday_input_debug,
+        },
     }
     return ctx
 
