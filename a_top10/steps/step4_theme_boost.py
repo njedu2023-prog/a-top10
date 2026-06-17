@@ -1005,6 +1005,17 @@ def _apply_board_heat_and_events(
     ).clip(0.0, 1.0)
 
     out["ThemeBoost"] = boost.astype("float64")
+    out["theme_boost_raw"] = out["ThemeBoost"]
+    if "intraday_risk_score" in out.columns:
+        intraday_risk = pd.to_numeric(out["intraday_risk_score"], errors="coerce").fillna(0.0)
+    else:
+        intraday_risk = pd.Series([0.0] * len(out), index=out.index, dtype="float64")
+    out["theme_intraday_cap_flag"] = (intraday_risk >= 0.75).astype(int)
+    out["theme_boost_after_intraday_cap"] = out["theme_boost_raw"].where(
+        out["theme_intraday_cap_flag"] <= 0,
+        (out["theme_boost_raw"] * 0.50).clip(0.0, 1.0),
+    )
+    out["ThemeBoost"] = out["theme_boost_after_intraday_cap"].astype("float64")
     out["题材加成"] = out["ThemeBoost"]
     out["板块"] = out["theme_main"].fillna("").astype(str)
 
@@ -1189,6 +1200,9 @@ def _formal_output_columns(df: pd.DataFrame) -> List[str]:
         "lhb_net_buy",
         "north_money_flag",
         "ThemeBoost",
+        "theme_boost_raw",
+        "theme_boost_after_intraday_cap",
+        "theme_intraday_cap_flag",
         "题材加成",
         "板块",
         "theme_feature_count",
