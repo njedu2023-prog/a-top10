@@ -1,16 +1,16 @@
 # Step3 Debug Report
 
-- trade_date: `20260616`
-- rows: 118
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260616`
+- trade_date: `20260617`
+- rows: 88
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260617`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5513
-- daily_basic.csv: 5513
-- top_list.csv: 92
+- daily.csv: 5509
+- daily_basic.csv: 5509
+- top_list.csv: 141
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 119
+- limit_list_d.csv: 88
 - limit_break_d.csv: 0
 - stk_limit.csv: 7656
 
@@ -28,6 +28,7 @@
 - StrengthScore: 0.0000
 - limit_strength_raw: 0.0000
 - intraday_quality_score: 0.0000
+- intraday_soft_risk_score: 0.0000
 - strength_plus_score: 0.0000
 
 ## Nonnull rate
@@ -39,32 +40,33 @@
 - up_limit: 1.0000
 - StrengthScore: 1.0000
 - intraday_quality_score: 1.0000
+- intraday_soft_risk_score: 1.0000
 - strength_plus_score: 1.0000
 
 ## Nonzero rate
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
-- open_times: 0.5000
-- intraday_available: 0.6695
-- auction_available: 0.9915
+- open_times: 0.5114
+- intraday_available: 0.9091
+- auction_available: 1.0000
 
 ## Strength quality distribution
-- A: 118
+- A: 88
 
 ## Duplicate contract columns after closeout
 - none
 
 ```json
 {
-  "trade_date": "20260616",
+  "trade_date": "20260617",
   "step": "step3_strength_score_v3_closeout",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260616",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260617",
   "files": {
-    "daily.csv": 5513,
-    "daily_basic.csv": 5513,
-    "top_list.csv": 92,
+    "daily.csv": 5509,
+    "daily_basic.csv": 5509,
+    "top_list.csv": 141,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 119,
+    "limit_list_d.csv": 88,
     "limit_break_d.csv": 0,
     "stk_limit.csv": 7656
   },
@@ -82,6 +84,7 @@
     "StrengthScore": 0.0,
     "limit_strength_raw": 0.0,
     "intraday_quality_score": 0.0,
+    "intraday_soft_risk_score": 0.0,
     "strength_plus_score": 0.0
   },
   "nonnull_rate": {
@@ -93,17 +96,18 @@
     "up_limit": 1.0,
     "StrengthScore": 1.0,
     "intraday_quality_score": 1.0,
+    "intraday_soft_risk_score": 1.0,
     "strength_plus_score": 1.0
   },
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
-    "open_times": 0.5,
-    "intraday_available": 0.6694915254237288,
-    "auction_available": 0.9915254237288136
+    "open_times": 0.5113636363636364,
+    "intraday_available": 0.9090909090909091,
+    "auction_available": 1.0
   },
   "quality_distribution": {
-    "A": 118
+    "A": 88
   },
   "duplicate_contract_cols_after_closeout": []
 }

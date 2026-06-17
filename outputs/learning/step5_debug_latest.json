@@ -1,23 +1,27 @@
 {
-  "trade_date": "20260616",
+  "trade_date": "20260617",
   "intraday_features_in_ml": [
     "limitup_quality_score",
+    "intraday_quality_score",
+    "intraday_soft_risk_score",
+    "intraday_hard_risk_flag",
     "intraday_risk_score",
     "late_withdraw_score",
     "reseal_score",
     "open_board_count",
+    "open_board_risk_score",
     "auction_strength_score",
     "auction_real_volume_score",
     "seal_stability_score",
-    "intraday_quality_score",
+    "intraday_confidence_score",
     "strength_plus_score",
     "intraday_available",
     "auction_available"
   ],
-  "feature_count": 17,
+  "feature_count": 21,
   "intraday_feature_coverage": {
-    "intraday_available_ratio": 0.74,
-    "auction_available_ratio": 0.98
+    "intraday_available_ratio": 0.98,
+    "auction_available_ratio": 1.0
   },
   "prob_source_counts": {
     "fallback_rule": 50
