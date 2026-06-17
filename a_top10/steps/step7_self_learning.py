@@ -67,6 +67,25 @@ REQUIRED_HARD_FIELDS = [
     "_prob_src",
 ]
 
+INTRADAY_HISTORY_FIELDS = [
+    "final_score_base",
+    "final_score_v2",
+    "prob_final",
+    "strength_plus_score",
+    "intraday_quality_score",
+    "intraday_risk_score",
+    "late_withdraw_score",
+    "reseal_score",
+    "open_board_count",
+    "auction_strength_score",
+    "auction_real_volume_score",
+    "seal_stability_score",
+    "intraday_available",
+    "auction_available",
+    "risk_level",
+    "risk_tags",
+]
+
 MICROSTRUCTURE_FIELDS = [
     "turnover_rate",
     "open_times",
@@ -347,6 +366,22 @@ def _ensure_v3_feature_history_columns(df: pd.DataFrame) -> pd.DataFrame:
         "open_times": np.nan,
         "seal_amount": np.nan,
         "close": np.nan,
+        "final_score_base": np.nan,
+        "final_score_v2": np.nan,
+        "prob_final": np.nan,
+        "strength_plus_score": np.nan,
+        "intraday_quality_score": np.nan,
+        "intraday_risk_score": np.nan,
+        "late_withdraw_score": np.nan,
+        "reseal_score": np.nan,
+        "open_board_count": np.nan,
+        "auction_strength_score": np.nan,
+        "auction_real_volume_score": np.nan,
+        "seal_stability_score": np.nan,
+        "intraday_available": np.nan,
+        "auction_available": np.nan,
+        "risk_level": "",
+        "risk_tags": "",
         "is_sample_mature": 0,
         "mature_reason": "",
         "label_delay_flag": 0,
@@ -382,6 +417,20 @@ def _ensure_v3_feature_history_columns(df: pd.DataFrame) -> pd.DataFrame:
         "open_times",
         "seal_amount",
         "close",
+        "final_score_base",
+        "final_score_v2",
+        "prob_final",
+        "strength_plus_score",
+        "intraday_quality_score",
+        "intraday_risk_score",
+        "late_withdraw_score",
+        "reseal_score",
+        "open_board_count",
+        "auction_strength_score",
+        "auction_real_volume_score",
+        "seal_stability_score",
+        "intraday_available",
+        "auction_available",
         "y_limit_hit",
         "y_next_ret",
         "batch_quality_score",
@@ -391,7 +440,7 @@ def _ensure_v3_feature_history_columns(df: pd.DataFrame) -> pd.DataFrame:
     for c in ["is_sample_mature", "label_delay_flag", "learnable_flag"]:
         d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0).astype(int)
 
-    for c in ["mature_reason", "reject_reason", "sample_quality_grade", "gate_version", "label_version", "_prob_src", "verify_date"]:
+    for c in ["mature_reason", "reject_reason", "sample_quality_grade", "gate_version", "label_version", "_prob_src", "verify_date", "risk_level", "risk_tags"]:
         d[c] = d[c].astype(str)
     d["verify_date"] = d["verify_date"].map(_normalize_yyyymmdd_value)
 
