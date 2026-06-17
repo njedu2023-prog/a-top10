@@ -12,6 +12,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from a_top10.config import is_a_share_trading_day, prev_a_share_trading_day
 
 
 REQUIRED_AUDIT_COLUMNS = {
@@ -91,6 +92,15 @@ def _latest_trade_date(outputs: Path) -> str:
     return files[-1].stem.replace("intraday_audit_", "")
 
 
+def _normalize_trade_date(td: str) -> str:
+    td = str(td or "").strip()
+    if len(td) != 8 or not td.isdigit():
+        raise ValueError(f"invalid trade_date: {td}")
+    if is_a_share_trading_day(td):
+        return td
+    return prev_a_share_trading_day(td)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--outputs", default="outputs")
@@ -98,7 +108,7 @@ def main() -> int:
     args = ap.parse_args()
 
     outputs = Path(args.outputs)
-    trade_date = args.trade_date.strip() or _latest_trade_date(outputs)
+    trade_date = _normalize_trade_date(args.trade_date.strip()) if args.trade_date.strip() else _latest_trade_date(outputs)
     audit_path = outputs / f"intraday_audit_{trade_date}.csv"
     debug_path = outputs / f"debug_intraday_{trade_date}.json"
     md_path = outputs / f"predict_top10_{trade_date}.md"
