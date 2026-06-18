@@ -1380,18 +1380,38 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     md_lines.append("## 分时增强数据覆盖率\n")
     risk_counts = intraday_debug.get("risk_counts", {}) if isinstance(intraday_debug, dict) else {}
     risk_labels = intraday_debug.get("risk_label_counts", {}) if isinstance(intraday_debug, dict) else {}
-    coverage_df = pd.DataFrame([
-        {"指标": "候选池数量", "数值": intraday_debug.get("candidate_count", 0)},
-        {"指标": "intraday_features 行数", "数值": intraday_debug.get("intraday_rows", 0)},
-        {"指标": "成功匹配数量", "数值": intraday_debug.get("matched_count", 0)},
-        {"指标": "候选池覆盖率", "数值": _format_pct(intraday_debug.get("matched_rate", 0))},
-        {"指标": "Top10 覆盖率", "数值": _format_pct(intraday_debug.get("topn_matched_rate", 0))},
-        {"指标": "分时缺失数量", "数值": intraday_debug.get("missing_count", 0)},
-        {"指标": "高风险数量", "数值": int(risk_counts.get("high", 0) or 0) + int(risk_counts.get("extreme", 0) or 0)},
-        {"指标": "尾盘撤退数量", "数值": int(risk_labels.get("尾盘撤退", 0) or 0)},
-        {"指标": "多次炸板数量", "数值": int(risk_labels.get("多次炸板", 0) or 0)},
-    ])
-    md_lines.append(_df_to_md_table(coverage_df))
+    risk_notes_df = topn_v3[
+        topn_v3.get("risk_label", pd.Series([], dtype=str)).astype(str).str.contains("尾盘撤退|多次炸板|分时高风险|回封偏弱|低置信", regex=True, na=False)
+    ].head(int(getattr(getattr(settings, "intraday", None), "report", {}).get("max_risk_notes", 10) if isinstance(getattr(getattr(settings, "intraday", None), "report", {}), dict) else 10))
+    overview_rows = [
+        {"类别": "分时增强数据覆盖率", "项目": "候选池数量", "数值": intraday_debug.get("candidate_count", 0), "说明": ""},
+        {"类别": "分时增强数据覆盖率", "项目": "intraday_features 行数", "数值": intraday_debug.get("intraday_rows", 0), "说明": ""},
+        {"类别": "分时增强数据覆盖率", "项目": "成功匹配数量", "数值": intraday_debug.get("matched_count", 0), "说明": ""},
+        {"类别": "分时增强数据覆盖率", "项目": "候选池覆盖率", "数值": _format_pct(intraday_debug.get("matched_rate", 0)), "说明": ""},
+        {"类别": "分时增强数据覆盖率", "项目": "Top10 覆盖率", "数值": _format_pct(intraday_debug.get("topn_matched_rate", 0)), "说明": ""},
+        {"类别": "分时增强数据覆盖率", "项目": "分时缺失数量", "数值": intraday_debug.get("missing_count", 0), "说明": ""},
+        {"类别": "分时增强数据覆盖率", "项目": "高风险数量", "数值": int(risk_counts.get("high", 0) or 0) + int(risk_counts.get("extreme", 0) or 0), "说明": ""},
+        {"类别": "分时增强数据覆盖率", "项目": "尾盘撤退数量", "数值": int(risk_labels.get("尾盘撤退", 0) or 0), "说明": ""},
+        {"类别": "分时增强数据覆盖率", "项目": "多次炸板数量", "数值": int(risk_labels.get("多次炸板", 0) or 0), "说明": ""},
+        {"类别": "分时风控解释", "项目": "分时质量", "数值": "", "说明": "衡量 D 日涨停路径、回封承接、竞价强度和尾盘稳定性。"},
+        {"类别": "分时风控解释", "项目": "软风险", "数值": "", "说明": "连续风险分，越高代表 D 日分时结构越危险。"},
+        {"类别": "分时风控解释", "项目": "硬风险", "数值": "", "说明": "触发强风控阈值时为 1。"},
+        {"类别": "分时风控解释", "项目": "尾盘风险", "数值": "", "说明": "识别尾盘封单衰减、放量砸板、资金撤退。"},
+        {"类别": "分时风控解释", "项目": "回封分", "数值": "", "说明": "衡量炸板后重新封板的承接质量。"},
+        {"类别": "分时风控解释", "项目": "炸板数", "数值": "", "说明": "D 日涨停打开次数。"},
+        {"类别": "分时风控解释", "项目": "覆盖", "数值": "", "说明": "表示该股票是否成功匹配上游分时增强数据。"},
+    ]
+    if risk_notes_df.empty:
+        overview_rows.append({"类别": "高风险个股提示", "项目": "无", "数值": "", "说明": "无高风险个股提示"})
+    else:
+        for _, r in risk_notes_df.iterrows():
+            overview_rows.append({
+                "类别": "高风险个股提示",
+                "项目": f"{_safe_str(r.get('ts_code'))} {_safe_str(r.get('name'))}".strip(),
+                "数值": _safe_str(r.get("risk_label")),
+                "说明": "最终分已按分时风控扣减。",
+            })
+    md_lines.append(_df_to_md_table(pd.DataFrame(overview_rows)))
     md_lines.append("")
 
     md_lines.append(f"## {trade_date} 预测：{next_td} 涨停 Top10（按涨停概率降序）\n")
@@ -1406,41 +1426,6 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
             "auction_strength_score", "intraday_coverage", "risk_level", "risk_label",
         ]))
         md_lines.append("")
-        md_lines.append("## 分时风控解释\n")
-        risk_explain_df = pd.DataFrame([
-            {"字段": "分时质量", "含义": "衡量 D 日涨停路径、回封承接、竞价强度和尾盘稳定性。"},
-            {"字段": "软风险", "含义": "连续风险分，越高代表 D 日分时结构越危险。"},
-            {"字段": "硬风险", "含义": "触发强风控阈值时为 1。"},
-            {"字段": "尾盘风险", "含义": "识别尾盘封单衰减、放量砸板、资金撤退。"},
-            {"字段": "回封分", "含义": "衡量炸板后重新封板的承接质量。"},
-            {"字段": "炸板数", "含义": "D 日涨停打开次数。"},
-            {"字段": "覆盖", "含义": "表示该股票是否成功匹配上游分时增强数据。"},
-        ])
-        md_lines.append(_df_to_md_table(risk_explain_df))
-        md_lines.append("")
-        risk_notes_df = topn_v3[
-            topn_v3.get("risk_label", pd.Series([], dtype=str)).astype(str).str.contains("尾盘撤退|多次炸板|分时高风险|回封偏弱|低置信", regex=True, na=False)
-        ].head(int(getattr(getattr(settings, "intraday", None), "report", {}).get("max_risk_notes", 10) if isinstance(getattr(getattr(settings, "intraday", None), "report", {}), dict) else 10))
-        md_lines.append("## 高风险个股提示\n")
-        if risk_notes_df.empty:
-            md_lines.append(_df_to_md_table(pd.DataFrame([{
-                "代码": "",
-                "股票": "",
-                "风险标签": "",
-                "说明": "无高风险个股提示",
-            }])))
-            md_lines.append("")
-        else:
-            risk_note_rows = []
-            for _, r in risk_notes_df.iterrows():
-                risk_note_rows.append({
-                    "代码": _safe_str(r.get("ts_code")),
-                    "股票": _safe_str(r.get("name")),
-                    "风险标签": _safe_str(r.get("risk_label")),
-                    "说明": "最终分已按分时风控扣减。",
-                })
-            md_lines.append(_df_to_md_table(pd.DataFrame(risk_note_rows)))
-            md_lines.append("")
 
     md_lines.append(f"## {trade_date} 预测：{next_td} 候选池补充表\n")
     if candidate_pool_df.empty:
