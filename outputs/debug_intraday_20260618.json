@@ -1,0 +1,37 @@
+{
+  "trade_date": "20260618",
+  "candidate_count": 93,
+  "topn_count": 10,
+  "intraday_rows": 80,
+  "auction_rows": 5509,
+  "matched_count": 80,
+  "matched_rate": 0.8602150537634409,
+  "topn_matched_count": 7,
+  "topn_matched_rate": 0.7,
+  "missing_count": 13,
+  "missing_top10_count": 3,
+  "missing_reason_counts": {
+    "missing_stock": 13
+  },
+  "risk_counts": {
+    "low": 69,
+    "medium": 13,
+    "high": 11,
+    "extreme": 0
+  },
+  "default_value_counts": {
+    "quality_default": 13,
+    "reseal_default": 93,
+    "auction_default": 93
+  },
+  "risk_label_counts": {
+    "分时高风险": 80,
+    "分时缺失": 13,
+    "低置信": 13,
+    "多次炸板": 9,
+    "尾盘撤退": 8
+  },
+  "intraday_enabled": true,
+  "fallback_policy": "neutral",
+  "fallback_used": false
+}
