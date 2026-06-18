@@ -5,71 +5,189 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>A-Share TOP10</title>
 
-  <!-- Markdown 渲染库（前端直接把 .md 转成 HTML） -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
   <style>
     :root{
-      --bg:#ffffff; --fg:#111827; --muted:#6b7280; --line:#e5e7eb;
-      --card:#f9fafb;
+      --bg:#f5f7fb;
+      --fg:#111827;
+      --muted:#667085;
+      --line:#d9e1ec;
+      --card:#ffffff;
+      --soft:#f8fafc;
+      --accent:#2563eb;
+      --accent-soft:#eff6ff;
+      --danger:#b91c1c;
+      --shadow:0 10px 30px rgba(15,23,42,.07);
     }
+    *{box-sizing:border-box;}
     body{
       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-      margin:0; background:var(--bg); color:var(--fg);
+      margin:0;
+      background:var(--bg);
+      color:var(--fg);
     }
-    .wrap{max-width: 980px; margin: 0 auto; padding: 24px 16px 60px;}
-    header{display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:16px;}
-    h1{font-size:16px; margin:0; letter-spacing:.5px;}
-    .sub{color:var(--muted); font-size:13px; margin-top:6px; line-height:1.5;}
-    .nav{display:flex; gap:10px; align-items:center;}
+    .wrap{
+      width:min(100%, 1680px);
+      margin:0 auto;
+      padding:24px clamp(12px, 2.2vw, 32px) 64px;
+    }
+    header{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:16px;
+      margin-bottom:16px;
+    }
+    h1{
+      font-size:22px;
+      line-height:1.25;
+      margin:0;
+      letter-spacing:0;
+    }
+    .sub{
+      color:var(--muted);
+      font-size:13px;
+      margin-top:8px;
+      line-height:1.5;
+    }
+    .nav{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      flex-shrink:0;
+    }
     button{
+      width:40px;
+      height:40px;
       border:1px solid var(--line);
-      background:#fff; color:var(--fg);
-      padding:10px 12px; border-radius:10px;
-      cursor:pointer; font-size:14px;
+      background:var(--card);
+      color:var(--fg);
+      border-radius:8px;
+      cursor:pointer;
+      font-size:18px;
+      line-height:1;
+      box-shadow:0 1px 2px rgba(15,23,42,.04);
     }
-    button:hover{background:var(--card);}
+    button:hover{
+      border-color:#b9c7da;
+      background:var(--accent-soft);
+      color:var(--accent);
+    }
     .card{
       border:1px solid var(--line);
-      background: var(--card);
-      border-radius: 14px;
-      padding: 16px;
-      margin-top: 14px;
+      background:var(--card);
+      border-radius:8px;
+      padding:18px;
+      margin-top:14px;
+      box-shadow:var(--shadow);
+      overflow:hidden;
     }
-    .card h2{margin:0 0 10px; font-size:16px;}
-    .md{line-height:1.65;}
-    .md h1,.md h2,.md h3{margin-top:18px;}
-    .md table{border-collapse: collapse; width:100%; overflow:auto; display:block;}
-    .md th,.md td{border:1px solid var(--line); padding:8px 10px; font-size:14px; white-space:nowrap;}
-    .md blockquote{border-left:3px solid var(--line); margin:10px 0; padding:0 12px; color:var(--muted);}
-    .hint{color:var(--muted); font-size:13px;}
-    .err{color:#b91c1c; font-size:13px; white-space:pre-wrap;}
+    .card h2{
+      margin:0 0 12px;
+      font-size:17px;
+      line-height:1.35;
+    }
+    .md{
+      line-height:1.65;
+      overflow-x:auto;
+    }
+    .md h1,.md h2,.md h3{
+      margin:22px 0 12px;
+      line-height:1.35;
+      letter-spacing:0;
+    }
+    .md h1{font-size:22px;}
+    .md h2{font-size:18px;}
+    .md h3{font-size:16px;}
+    .md table{
+      border-collapse:collapse;
+      width:max-content;
+      min-width:100%;
+      margin:8px 0 18px;
+      background:var(--card);
+      table-layout:auto;
+    }
+    .md thead th{
+      position:sticky;
+      top:0;
+      z-index:1;
+      background:#eef4ff;
+      color:#1f2937;
+      font-weight:700;
+    }
+    .md th,.md td{
+      border:1px solid var(--line);
+      padding:9px 11px;
+      font-size:14px;
+      white-space:nowrap;
+      text-align:left;
+      vertical-align:middle;
+    }
+    .md tbody tr:nth-child(even) td{background:var(--soft);}
+    .md blockquote{
+      border-left:3px solid var(--line);
+      margin:10px 0;
+      padding:0 12px;
+      color:var(--muted);
+    }
+    .hint{
+      color:var(--muted);
+      font-size:13px;
+      line-height:1.5;
+    }
+    .err{
+      color:var(--danger);
+      font-size:13px;
+      white-space:pre-wrap;
+    }
     .topbar{
-      display:flex; justify-content:space-between; align-items:center;
-      margin: 14px 0 6px;
-      gap: 12px;
-      flex-wrap: wrap;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin:14px 0 6px;
+      gap:12px;
+      flex-wrap:wrap;
     }
-    .datebox{display:flex; align-items:center; gap:8px; color:var(--muted); font-size:14px;}
+    .datebox{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      color:var(--muted);
+      font-size:14px;
+    }
     input[type="date"]{
-      border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:14px;
-      background:#fff;
+      border:1px solid var(--line);
+      border-radius:8px;
+      padding:8px 10px;
+      font-size:14px;
+      background:var(--card);
+      color:var(--fg);
     }
     .badge{
       display:inline-block;
-      border:1px solid var(--line);
-      background:#fff;
+      border:1px solid #bfdbfe;
+      background:var(--accent-soft);
       border-radius:999px;
       padding:4px 10px;
       font-size:12px;
-      color:var(--muted);
+      color:#1d4ed8;
       margin-right:8px;
+    }
+    @media (max-width: 640px){
+      .wrap{padding:18px 10px 48px;}
+      header{align-items:flex-start;}
+      h1{font-size:18px;}
+      .card{padding:12px;}
+      .topbar{align-items:flex-start;}
+      .datebox{width:100%; justify-content:space-between;}
+      input[type="date"]{max-width:170px;}
+      .md th,.md td{padding:8px 9px; font-size:13px;}
     }
   </style>
 
   <script>
-    // =============== 基础工具 ===============
-    const LOOKBACK_DAYS = 60; // 没有日报时，最多向前回退多少天去找“最近可用日报”
+    const LOOKBACK_DAYS = 60;
 
     function yyyymmdd(date){
       const y = date.getFullYear();
@@ -105,7 +223,7 @@
         const dd = parseInt(d.slice(6,8),10);
         return new Date(y, m-1, dd);
       }
-      return new Date(); // 默认今天
+      return new Date();
     }
 
     function setQueryDate(date){
@@ -122,7 +240,6 @@
     }
 
     function mdPathFor(date){
-      // ✅ P1：此文件由 writers.py 写一次锁定（历史冻结）
       return `outputs/predict_top10_${yyyymmdd(date)}.md`;
     }
 
@@ -132,7 +249,6 @@
       return await res.text();
     }
 
-    // =============== 核心：找“最近存在的日报” ===============
     async function findNearestExistingReportDate(startDate){
       for(let i=0; i<=LOOKBACK_DAYS; i++){
         const d = new Date(startDate);
@@ -144,7 +260,6 @@
       return null;
     }
 
-    // =============== 读取运行信息 _last_run.txt ===============
     function parseKeyValueText(text){
       const out = {};
       (text || "").split(/\r?\n/).forEach(line=>{
@@ -185,7 +300,6 @@
       }
     }
 
-    // =============== 加载日报 ===============
     async function loadDailyReport(targetDate){
       const titleEl = document.getElementById('title');
       const reportEl = document.getElementById('report');
@@ -196,7 +310,6 @@
       errEl.textContent = "";
       reportEl.innerHTML = `<div class="hint">正在定位可用日报（最多回退 ${LOOKBACK_DAYS} 天）...</div>`;
 
-      // 1) 找最近存在的日报日期
       const useDate = await findNearestExistingReportDate(targetDate);
       if(!useDate){
         titleEl.textContent = `A-Share TOP10`;
@@ -207,7 +320,6 @@
         return;
       }
 
-      // 2) 更新日期选择器/提示（如果发生回退，给用户明确提示）
       picker.value = toDateInputValue(useDate);
       const targetStr = yyyymmdd(targetDate);
       const useStr = yyyymmdd(useDate);
@@ -215,19 +327,15 @@
         ? `提示：你选择的 ${targetStr} 无日报，已自动回退到最近可用日报 ${useStr}（历史冻结版）`
         : `提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告（历史冻结版）`;
 
-      // 3) 标题强制使用统一格式（动态日期）
       const niceDate = yyyy_mm_dd(useDate);
       titleEl.textContent = `A-Share TOP10 - ${niceDate}`;
       document.title = `A-Share TOP10 - ${niceDate}`;
 
-      // 4) 拉取并渲染 markdown（先删掉 md 第一行标题）
       const path = mdPathFor(useDate);
       reportEl.innerHTML = `<div class="hint">正在加载：${path}</div>`;
 
       try{
         const md = await fetchText(path);
-
-        // 去掉 md 的第一行标题（例如：# 20260213 预测报告）
         let md2 = md;
         const lines = md2.split(/\r?\n/);
         if (lines.length > 0 && lines[0].trim().startsWith('#')) {
@@ -243,7 +351,6 @@
       }
     }
 
-    // =============== 加载学习状态 ===============
     async function loadLearningStatus(){
       const mdPath = `outputs/learning/step7_report_latest.md`;
       const box = document.getElementById('learning');
@@ -261,7 +368,6 @@
       }
     }
 
-    // =============== 导航：跳过缺失日报 ===============
     async function jumpByDaysSkippingMissing(currentDate, delta){
       for(let i=1; i<=LOOKBACK_DAYS; i++){
         const d = new Date(currentDate);
@@ -315,12 +421,12 @@
         <h1 id="title">A-Share TOP10</h1>
         <div class="sub">
           <span class="badge">历史冻结</span>
-          <span id="run_stamp">正在读取运行信息…</span>
+          <span id="run_stamp">正在读取运行信息...</span>
         </div>
       </div>
       <div class="nav">
-        <button id="btn_prev">←</button>
-        <button id="btn_next">→</button>
+        <button id="btn_prev" title="上一份日报">←</button>
+        <button id="btn_next" title="下一份日报">→</button>
       </div>
     </header>
 
