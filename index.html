@@ -403,6 +403,7 @@
         }
 
         reportEl.innerHTML = marked.parse(md2);
+        alignCandidateTableToTop10(reportEl);
         setupCollapsibleReportSections(reportEl);
       }catch(e){
         reportEl.innerHTML = "";
@@ -466,6 +467,54 @@
           }
         });
       });
+    }
+
+    function alignCandidateTableToTop10(root){
+      const sections = Array.from(root.querySelectorAll("h2")).map(h2 => {
+        let table = null;
+        let node = h2.nextElementSibling;
+        while(node && node.tagName !== "H2"){
+          if(node.tagName === "TABLE"){
+            table = node;
+            break;
+          }
+          node = node.nextElementSibling;
+        }
+        return { h2, title: (h2.textContent || "").trim(), table };
+      });
+
+      const top = sections.find(item => item.title.includes("涨停 Top10") && item.table);
+      const candidate = sections.find(item => item.title.includes("候选池补充表") && item.table);
+      if(!top || !candidate) return;
+
+      const topHeaders = Array.from(top.table.querySelectorAll("thead th")).map(th => th.textContent.trim());
+      const candidateHeaders = Array.from(candidate.table.querySelectorAll("thead th")).map(th => th.textContent.trim());
+      if(!topHeaders.length || topHeaders.every((h, i) => candidateHeaders[i] === h)) return;
+
+      const oldIndex = new Map(candidateHeaders.map((h, i) => [h, i]));
+      const rows = Array.from(candidate.table.querySelectorAll("tbody tr"));
+      const theadRow = candidate.table.querySelector("thead tr");
+      if(!theadRow) return;
+
+      theadRow.innerHTML = topHeaders.map(h => `<th>${escapeHtml(h)}</th>`).join("");
+      rows.forEach(row => {
+        const cells = Array.from(row.children);
+        row.innerHTML = topHeaders.map(h => {
+          const idx = oldIndex.get(h);
+          const value = idx !== undefined && cells[idx] ? cells[idx].innerHTML : "";
+          return `<td>${value}</td>`;
+        }).join("");
+      });
+    }
+
+    function escapeHtml(value){
+      return String(value).replace(/[&<>"']/g, ch => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;"
+      }[ch]));
     }
 
     async function loadLearningStatus(){
