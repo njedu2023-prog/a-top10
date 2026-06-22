@@ -93,4 +93,5 @@
 20260615,20260616,10,2,0.2,src=feature_history_v3
 20260616,20260617,10,4,0.4,src=feature_history_v3
 20260617,20260618,10,1,0.1,src=feature_history_v3
-20260618,,0,,,pending_or_no_mature_rows
+20260618,20260622,10,3,0.3,src=feature_history_v3
+20260622,,0,,,pending_or_no_mature_rows
