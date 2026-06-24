@@ -1,18 +1,18 @@
 # Step3 Debug Report
 
-- trade_date: `20260623`
-- rows: 97
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260623`
+- trade_date: `20260624`
+- rows: 98
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260624`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5513
-- daily_basic.csv: 5513
-- top_list.csv: 111
+- daily.csv: 5512
+- daily_basic.csv: 5590
+- top_list.csv: 93
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 97
+- limit_list_d.csv: 98
 - limit_break_d.csv: 0
-- stk_limit.csv: 7663
+- stk_limit.csv: 7666
 
 ## Missing rate
 - close: 0.0000
@@ -46,29 +46,29 @@
 ## Nonzero rate
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
-- open_times: 0.5258
-- intraday_available: 0.8247
-- auction_available: 0.9794
+- open_times: 0.7143
+- intraday_available: 0.8163
+- auction_available: 1.0000
 
 ## Strength quality distribution
-- A: 97
+- A: 98
 
 ## Duplicate contract columns after closeout
 - none
 
 ```json
 {
-  "trade_date": "20260623",
+  "trade_date": "20260624",
   "step": "step3_strength_score_v3_closeout",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260623",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260624",
   "files": {
-    "daily.csv": 5513,
-    "daily_basic.csv": 5513,
-    "top_list.csv": 111,
+    "daily.csv": 5512,
+    "daily_basic.csv": 5590,
+    "top_list.csv": 93,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 97,
+    "limit_list_d.csv": 98,
     "limit_break_d.csv": 0,
-    "stk_limit.csv": 7663
+    "stk_limit.csv": 7666
   },
   "missing_rate": {
     "close": 0.0,
@@ -102,12 +102,12 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
-    "open_times": 0.5257731958762887,
-    "intraday_available": 0.8247422680412371,
-    "auction_available": 0.979381443298969
+    "open_times": 0.7142857142857143,
+    "intraday_available": 0.8163265306122449,
+    "auction_available": 1.0
   },
   "quality_distribution": {
-    "A": 97
+    "A": 98
   },
   "duplicate_contract_cols_after_closeout": []
 }
