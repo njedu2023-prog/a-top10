@@ -301,6 +301,10 @@
       return `outputs/predict_top10_${yyyymmdd(date)}.md`;
     }
 
+    function jsonPathFor(date){
+      return `outputs/predict_top10_${yyyymmdd(date)}.json`;
+    }
+
     async function fetchText(path){
       const res = await fetch(cacheBust(path), { cache: "no-store" });
       if(!res.ok) throw new Error(`${res.status} -> ${path}`);
@@ -403,7 +407,7 @@
         }
 
         reportEl.innerHTML = marked.parse(md2);
-        alignCandidateTableToTop10(reportEl);
+        await alignCandidateTableToTop10(reportEl, useDate);
         setupCollapsibleReportSections(reportEl);
       }catch(e){
         reportEl.innerHTML = "";
@@ -469,7 +473,7 @@
       });
     }
 
-    function alignCandidateTableToTop10(root){
+    async function alignCandidateTableToTop10(root, reportDate){
       const sections = Array.from(root.querySelectorAll("h2")).map(h2 => {
         let table = null;
         let node = h2.nextElementSibling;
@@ -489,22 +493,103 @@
 
       const topHeaders = Array.from(top.table.querySelectorAll("thead th")).map(th => th.textContent.trim());
       const candidateHeaders = Array.from(candidate.table.querySelectorAll("thead th")).map(th => th.textContent.trim());
-      if(!topHeaders.length || topHeaders.every((h, i) => candidateHeaders[i] === h)) return;
+      if(!topHeaders.length) return;
 
       const oldIndex = new Map(candidateHeaders.map((h, i) => [h, i]));
       const rows = Array.from(candidate.table.querySelectorAll("tbody tr"));
       const theadRow = candidate.table.querySelector("thead tr");
       if(!theadRow) return;
 
+      const fillMap = await loadCandidateFillMap(reportDate);
       theadRow.innerHTML = topHeaders.map(h => `<th>${escapeHtml(h)}</th>`).join("");
       rows.forEach(row => {
         const cells = Array.from(row.children);
+        const codeIdx = oldIndex.get("代码");
+        const code = codeIdx !== undefined && cells[codeIdx] ? cells[codeIdx].textContent.trim() : "";
+        const record = fillMap.get(code) || null;
         row.innerHTML = topHeaders.map(h => {
           const idx = oldIndex.get(h);
-          const value = idx !== undefined && cells[idx] ? cells[idx].innerHTML : "";
-          return `<td>${value}</td>`;
+          const existing = idx !== undefined && cells[idx] ? cells[idx].innerHTML : "";
+          const filled = record ? valueForCandidateHeader(record, h, existing) : existing;
+          return `<td>${escapeHtml(filled)}</td>`;
         }).join("");
       });
+    }
+
+    async function loadCandidateFillMap(reportDate){
+      const out = new Map();
+      try{
+        const jsonText = await fetchText(jsonPathFor(reportDate));
+        const payload = JSON.parse(jsonText.replace(/\bNaN\b/g, "null"));
+        const topCodes = new Set((payload.topN || []).map(r => String(r.ts_code || "")));
+        const full = Array.isArray(payload.full) ? payload.full : [];
+        full
+          .filter(r => r && r.ts_code && !topCodes.has(String(r.ts_code)))
+          .sort((a, b) => {
+            const pa = Number(a.Probability);
+            const pb = Number(b.Probability);
+            if(Number.isFinite(pa) && Number.isFinite(pb) && pb !== pa) return pb - pa;
+            const sa = Number(a.StrengthScore);
+            const sb = Number(b.StrengthScore);
+            if(Number.isFinite(sa) && Number.isFinite(sb)) return sb - sa;
+            return 0;
+          })
+          .forEach((r, i) => {
+            r.__candidate_rank = i + 11;
+            out.set(String(r.ts_code), r);
+          });
+      }catch(e){
+        console.warn("candidate fill json unavailable", e);
+      }
+      return out;
+    }
+
+    function valueForCandidateHeader(record, header, fallback){
+      const map = {
+        "排名": "__candidate_rank",
+        "代码": "ts_code",
+        "股票": "name",
+        "最终分": "final_score_v2",
+        "原始分": "final_score_base",
+        "涨停概率": "Probability",
+        "强度分": "strength_plus_score",
+        "行业版块": "board",
+        "题材加成": "ThemeBoost",
+        "分时质量": "intraday_quality_score",
+        "软风险": "intraday_soft_risk_score",
+        "硬风险": "intraday_hard_risk_flag",
+        "尾盘风险": "late_withdraw_score",
+        "回封分": "reseal_score",
+        "炸板数": "open_board_count",
+        "竞价强度": "auction_strength_score",
+        "风险级别": "risk_level",
+        "风险标签": "risk_label"
+      };
+      if(header === "intraday_coverage"){
+        return Number(record.intraday_available || 0) > 0 ? "是" : "否";
+      }
+      const key = map[header];
+      if(!key) return fallback || "";
+      const value = record[key];
+      if(value === undefined || value === null || Number.isNaN(value)) return fallback || "";
+      if(["最终分", "原始分", "强度分", "题材加成", "分时质量", "软风险", "尾盘风险", "回封分", "竞价强度"].includes(header)){
+        return formatScore(value, 4);
+      }
+      if(header === "涨停概率") return formatScore(value, 6);
+      if(["排名", "硬风险", "炸板数"].includes(header)) return formatCount(value);
+      return String(value);
+    }
+
+    function formatScore(value, digits){
+      const n = Number(value);
+      if(!Number.isFinite(n)) return "";
+      return n.toFixed(digits).replace(/0+$/, "").replace(/\.$/, "");
+    }
+
+    function formatCount(value){
+      const n = Number(value);
+      if(!Number.isFinite(n)) return "";
+      return Number.isInteger(n) ? String(n) : formatScore(n, 4);
     }
 
     function escapeHtml(value){
