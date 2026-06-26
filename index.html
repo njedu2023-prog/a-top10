@@ -9,131 +9,174 @@
 
   <style>
     :root{
-      --bg:#f5f5f7;
+      --bg:#f5f7f4;
       --fg:#1d1d1f;
       --muted:#6e6e73;
-      --line:#d2d2d7;
-      --card:#ffffff;
-      --soft:#fbfbfd;
-      --accent:#0071e3;
-      --accent-soft:#f5f9ff;
-      --danger:#b91c1c;
-      --shadow:0 18px 50px rgba(0,0,0,.06);
+      --line:#d8ddd4;
+      --card:rgba(255,255,255,.88);
+      --soft:#f8fbf6;
+      --accent:#34c759;
+      --accent-dark:#178a3b;
+      --accent-soft:#ecf8ee;
+      --danger:#b42318;
+      --shadow:0 20px 55px rgba(29,29,31,.08);
+      --hairline:rgba(29,29,31,.10);
     }
     *{box-sizing:border-box;}
     body{
       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
       margin:0;
-      background:var(--bg);
       color:var(--fg);
+      background:linear-gradient(180deg,#f7fff4 0,#f5f7f4 330px,#f5f5f7 100%);
+      -webkit-font-smoothing:antialiased;
+      text-rendering:optimizeLegibility;
     }
     .wrap{
-      width:min(100%, 1600px);
+      width:min(100%,1480px);
       margin:0 auto;
-      padding:28px clamp(14px, 2.6vw, 42px) 72px;
+      padding:24px clamp(14px,2.8vw,44px) 76px;
     }
     header{
       display:flex;
       align-items:flex-start;
       justify-content:space-between;
-      gap:16px;
-      margin-bottom:16px;
+      gap:18px;
+      margin-bottom:18px;
+      padding:22px 24px;
+      border:1px solid var(--hairline);
+      border-radius:8px;
+      background:rgba(255,255,255,.72);
+      box-shadow:var(--shadow);
+      backdrop-filter:saturate(180%) blur(18px);
     }
     h1{
-      font-size:24px;
-      font-weight:650;
-      line-height:1.25;
+      font-size:clamp(24px,3.2vw,44px);
+      font-weight:700;
+      line-height:1.08;
       margin:0;
       letter-spacing:0;
     }
     .sub{
       color:var(--muted);
       font-size:13px;
-      margin-top:8px;
+      margin-top:12px;
       line-height:1.5;
     }
-    .nav{
-      display:flex;
-      gap:8px;
-      align-items:center;
-      flex-shrink:0;
-    }
+    .nav{display:flex;gap:8px;align-items:center;flex-shrink:0;}
     button{
       width:40px;
       height:40px;
-      border:1px solid var(--line);
-      background:var(--card);
+      border:1px solid var(--hairline);
+      background:rgba(255,255,255,.78);
       color:var(--fg);
-      border-radius:8px;
+      border-radius:50%;
       cursor:pointer;
       font-size:18px;
       font-weight:650;
       line-height:1;
-      box-shadow:0 1px 2px rgba(15,23,42,.04);
+      box-shadow:0 8px 20px rgba(29,29,31,.06);
+      transition:background .18s ease,border-color .18s ease,color .18s ease,transform .18s ease;
     }
     button:hover{
-      border-color:#b9c7da;
+      border-color:rgba(52,199,89,.45);
       background:var(--accent-soft);
-      color:var(--accent);
+      color:var(--accent-dark);
+      transform:translateY(-1px);
+    }
+    .topbar{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin:14px 0 8px;
+      gap:12px;
+      flex-wrap:wrap;
+      padding:12px 14px;
+      border:1px solid var(--hairline);
+      border-radius:8px;
+      background:rgba(255,255,255,.62);
+      backdrop-filter:saturate(180%) blur(16px);
+    }
+    .datebox{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px;}
+    input[type="date"]{
+      border:1px solid var(--line);
+      border-radius:8px;
+      padding:8px 10px;
+      font-size:14px;
+      background:rgba(255,255,255,.92);
+      color:var(--fg);
+      outline:none;
+    }
+    input[type="date"]:focus{border-color:rgba(52,199,89,.68);box-shadow:0 0 0 3px rgba(52,199,89,.14);}
+    .badge{
+      display:inline-block;
+      border:1px solid rgba(52,199,89,.32);
+      background:var(--accent-soft);
+      border-radius:999px;
+      padding:4px 10px;
+      font-size:12px;
+      color:var(--accent-dark);
+      margin-right:8px;
+      font-weight:650;
     }
     .card{
-      border:1px solid rgba(0,0,0,.08);
+      border:1px solid var(--hairline);
       background:var(--card);
-      border-radius:18px;
-      padding:22px;
-      margin-top:16px;
+      border-radius:8px;
+      padding:24px;
+      margin-top:18px;
       box-shadow:var(--shadow);
       overflow:hidden;
+      backdrop-filter:saturate(180%) blur(16px);
     }
-    .card h2{
-      margin:0 0 12px;
-      font-size:17px;
-      line-height:1.35;
-    }
-    .md{
-      line-height:1.65;
-      overflow-x:auto;
-    }
-    .md h1,.md h2,.md h3{
-      margin:24px 0 14px;
-      line-height:1.35;
-      letter-spacing:0;
-    }
-    .md h1{font-size:22px;}
-    .md h2{font-size:18px;}
+    .card h2{margin:0 0 12px;font-size:17px;line-height:1.35;}
+    .hint{color:var(--muted);font-size:13px;line-height:1.5;}
+    .err{color:var(--danger);font-size:13px;white-space:pre-wrap;}
+    .md{line-height:1.65;overflow-x:auto;color:#1d1d1f;}
+    .md h1,.md h2,.md h3{margin:24px 0 14px;line-height:1.35;letter-spacing:0;}
+    .md h1{font-size:24px;}
+    .md h2{font-size:20px;}
     .md h3{font-size:16px;}
+    .md p{color:#424245;max-width:980px;}
+    .md blockquote{border-left:3px solid var(--line);margin:10px 0;padding:0 12px;color:var(--muted);}
     .md table{
-      border-collapse:collapse;
+      border-collapse:separate;
+      border-spacing:0;
       width:max-content;
       min-width:100%;
-      margin:8px 0 20px;
-      background:var(--card);
+      margin:10px 0 22px;
+      background:#fff;
       table-layout:auto;
-      border-radius:12px;
+      border:1px solid var(--line);
+      border-radius:8px;
       overflow:hidden;
     }
     .md thead th{
       position:sticky;
       top:0;
       z-index:1;
-      background:#f5f5f7;
+      background:linear-gradient(180deg,#f4fbf2 0,#edf7ec 100%);
       color:#1d1d1f;
-      font-weight:650;
+      font-weight:700;
     }
     .md th,.md td{
-      border:1px solid var(--line);
-      padding:9px 11px;
+      border:0;
+      border-right:1px solid var(--line);
+      border-bottom:1px solid var(--line);
+      padding:10px 12px;
       font-size:13px;
       white-space:nowrap;
       text-align:left;
       vertical-align:middle;
     }
+    .md th:last-child,.md td:last-child{border-right:0;}
+    .md tbody tr:last-child td{border-bottom:0;}
     .md tbody tr:nth-child(even) td{background:var(--soft);}
+    .md tbody tr:hover td{background:#eef9ee;}
     .md-section{
-      border:1px solid rgba(0,0,0,.08);
-      border-radius:16px;
-      margin:18px 0;
-      background:#fff;
+      border:1px solid var(--hairline);
+      border-radius:8px;
+      margin:20px 0;
+      background:rgba(255,255,255,.9);
       overflow:hidden;
     }
     .md-section-title{
@@ -145,14 +188,9 @@
       padding:0 14px 0 18px;
       cursor:pointer;
       user-select:none;
-      background:#fff;
+      background:rgba(255,255,255,.92);
     }
-    .md-section-title h2{
-      margin:0;
-      font-size:18px;
-      font-weight:650;
-      color:#1d1d1f;
-    }
+    .md-section-title h2{margin:0;font-size:18px;font-weight:650;color:#1d1d1f;}
     .md-section-toggle{
       display:inline-flex;
       align-items:center;
@@ -161,7 +199,7 @@
       height:34px;
       border:0;
       border-radius:50%;
-      background:#f5f5f7;
+      background:var(--accent-soft);
       color:#1d1d1f;
       box-shadow:none;
       font-size:22px;
@@ -169,75 +207,17 @@
       line-height:1;
       flex:0 0 auto;
     }
-    .md-section-title:hover .md-section-toggle{
-      background:#e8e8ed;
-      color:var(--accent);
-    }
-    .md-section-body{
-      padding:0 18px 18px;
-      overflow-x:auto;
-    }
-    .md-section.is-collapsed .md-section-body{
-      display:none;
-    }
-    .md blockquote{
-      border-left:3px solid var(--line);
-      margin:10px 0;
-      padding:0 12px;
-      color:var(--muted);
-    }
-    .hint{
-      color:var(--muted);
-      font-size:13px;
-      line-height:1.5;
-    }
-    .err{
-      color:var(--danger);
-      font-size:13px;
-      white-space:pre-wrap;
-    }
-    .topbar{
-      display:flex;
-      justify-content:space-between;
-      align-items:center;
-      margin:14px 0 6px;
-      gap:12px;
-      flex-wrap:wrap;
-    }
-    .datebox{
-      display:flex;
-      align-items:center;
-      gap:8px;
-      color:var(--muted);
-      font-size:14px;
-    }
-    input[type="date"]{
-      border:1px solid var(--line);
-      border-radius:8px;
-      padding:8px 10px;
-      font-size:14px;
-      background:var(--card);
-      color:var(--fg);
-    }
-    .badge{
-      display:inline-block;
-      border:1px solid rgba(0,113,227,.22);
-      background:var(--accent-soft);
-      border-radius:999px;
-      padding:4px 10px;
-      font-size:12px;
-      color:#0066cc;
-      margin-right:8px;
-    }
-    @media (max-width: 640px){
-      .wrap{padding:18px 10px 48px;}
-      header{align-items:flex-start;}
-      h1{font-size:18px;}
-      .card{padding:12px;}
+    .md-section-title:hover .md-section-toggle{background:#dcf4df;color:var(--accent-dark);}
+    .md-section-body{padding:0 18px 18px;overflow-x:auto;}
+    .md-section.is-collapsed .md-section-body{display:none;}
+    @media (max-width:640px){
+      .wrap{padding:14px 10px 48px;}
+      header{align-items:flex-start;padding:18px 14px;}
+      .card{padding:14px;}
       .topbar{align-items:flex-start;}
-      .datebox{width:100%; justify-content:space-between;}
+      .datebox{width:100%;justify-content:space-between;}
       input[type="date"]{max-width:170px;}
-      .md th,.md td{padding:8px 9px; font-size:13px;}
+      .md th,.md td{padding:8px 9px;font-size:13px;}
       .md-section-title{padding-left:12px;}
       .md-section-title h2{font-size:16px;}
       .md-section-body{padding:0 12px 14px;}
@@ -253,141 +233,109 @@
       const d = String(date.getDate()).padStart(2,'0');
       return `${y}${m}${d}`;
     }
-
     function yyyy_mm_dd(date){
       const y = date.getFullYear();
       const m = String(date.getMonth()+1).padStart(2,'0');
       const d = String(date.getDate()).padStart(2,'0');
       return `${y}-${m}-${d}`;
     }
-
-    function toDateInputValue(date){
-      const y = date.getFullYear();
-      const m = String(date.getMonth()+1).padStart(2,'0');
-      const d = String(date.getDate()).padStart(2,'0');
-      return `${y}-${m}-${d}`;
-    }
+    function toDateInputValue(date){return yyyy_mm_dd(date);}
     function fromDateInputValue(v){
       const [y,m,d] = v.split('-').map(x=>parseInt(x,10));
-      return new Date(y, m-1, d);
+      return new Date(y,m-1,d);
     }
-
     function getQueryDate(){
       const p = new URLSearchParams(location.search);
       const d = p.get('d');
-      if(d && /^\d{8}$/.test(d)){
-        const y = parseInt(d.slice(0,4),10);
-        const m = parseInt(d.slice(4,6),10);
-        const dd = parseInt(d.slice(6,8),10);
-        return new Date(y, m-1, dd);
-      }
+      if(d && /^\d{8}$/.test(d)) return new Date(parseInt(d.slice(0,4),10),parseInt(d.slice(4,6),10)-1,parseInt(d.slice(6,8),10));
       return new Date();
     }
-
     function setQueryDate(date){
-      const d = yyyymmdd(date);
       const url = new URL(location.href);
-      url.searchParams.set('d', d);
+      url.searchParams.set('d',yyyymmdd(date));
       location.href = url.toString();
     }
-
     function cacheBust(url){
-      const u = new URL(url, location.href);
-      u.searchParams.set("v", String(Date.now()));
+      const u = new URL(url,location.href);
+      u.searchParams.set('v',String(Date.now()));
       return u.toString();
     }
-
-    function mdPathFor(date){
-      return `outputs/predict_top10_${yyyymmdd(date)}.md`;
-    }
-
-    function jsonPathFor(date){
-      return `outputs/predict_top10_${yyyymmdd(date)}.json`;
-    }
-
+    function mdPathFor(date){return `outputs/predict_top10_${yyyymmdd(date)}.md`;}
+    function jsonPathFor(date){return `outputs/predict_top10_${yyyymmdd(date)}.json`;}
     async function fetchText(path){
-      const res = await fetch(cacheBust(path), { cache: "no-store" });
+      const res = await fetch(cacheBust(path),{cache:'no-store'});
       if(!res.ok) throw new Error(`${res.status} -> ${path}`);
       return await res.text();
     }
-
     async function findNearestExistingReportDate(startDate){
-      for(let i=0; i<=LOOKBACK_DAYS; i++){
+      for(let i=0;i<=LOOKBACK_DAYS;i++){
         const d = new Date(startDate);
-        d.setDate(d.getDate() - i);
-        const path = mdPathFor(d);
-        const res = await fetch(cacheBust(path), { method: "GET", cache: "no-store" });
+        d.setDate(d.getDate()-i);
+        const res = await fetch(cacheBust(mdPathFor(d)),{method:'GET',cache:'no-store'});
         if(res.ok) return d;
       }
       return null;
     }
-
     function parseKeyValueText(text){
       const out = {};
-      (text || "").split(/\r?\n/).forEach(line=>{
+      (text || '').split(/\r?\n/).forEach(line=>{
         const s = line.trim();
-        if(!s) return;
-        const idx = s.indexOf("=");
-        if(idx <= 0) return;
-        const k = s.slice(0, idx).trim();
-        const v = s.slice(idx+1).trim();
-        out[k] = v;
+        const idx = s.indexOf('=');
+        if(idx > 0) out[s.slice(0,idx).trim()] = s.slice(idx+1).trim();
       });
       return out;
     }
-
     async function loadRunStamp(){
-      const box = document.getElementById("run_stamp");
-      if(!box) return;
-
-      const path = "outputs/learning/_last_run.txt";
+      const box = document.getElementById('run_stamp');
       try{
-        const txt = await fetchText(path);
-        const kv = parseKeyValueText(txt);
-
-        const td = kv.trade_date || "";
-        const rid = kv.run_id || "";
-        const sha = kv.commit_sha || "";
-        const utc = kv.utc || kv.generated_at_utc || "";
-
+        const kv = parseKeyValueText(await fetchText('outputs/learning/_last_run.txt'));
         const parts = [];
-        if(td) parts.push(`trade_date=${td}`);
-        if(rid) parts.push(`run_id=${rid}`);
-        if(sha) parts.push(`sha=${sha.slice(0,8)}`);
-        if(utc) parts.push(`utc=${utc}`);
-
-        box.textContent = parts.length ? parts.join("  ·  ") : "未读取到 run stamp";
+        if(kv.trade_date) parts.push(`trade_date=${kv.trade_date}`);
+        if(kv.run_id) parts.push(`run_id=${kv.run_id}`);
+        if(kv.commit_sha) parts.push(`sha=${kv.commit_sha.slice(0,8)}`);
+        if(kv.utc || kv.generated_at_utc) parts.push(`utc=${kv.utc || kv.generated_at_utc}`);
+        box.textContent = parts.length ? parts.join('  ·  ') : '未读取到 run stamp';
       }catch(e){
-        box.textContent = "未能读取 run stamp（_last_run.txt）";
+        box.textContent = '未能读取 run stamp（_last_run.txt）';
       }
     }
-
+    function removeProfessionalNotes(root){
+      Array.from(root.querySelectorAll('p')).forEach(p=>{
+        const text = (p.textContent || '').replace(/\s+/g,' ').trim();
+        if(text.includes('统计口径：只统计') || text.includes('排序有效性口径：') || text.includes('排序有效性：')) p.remove();
+      });
+    }
+    function stripMdTitle(md){
+      const lines = md.split(/\r?\n/);
+      if(lines.length && lines[0].trim().startsWith('#')){
+        lines.shift();
+        while(lines.length && lines[0].trim() === '') lines.shift();
+      }
+      return lines.join('\n');
+    }
     async function loadDailyReport(targetDate){
       const titleEl = document.getElementById('title');
       const reportEl = document.getElementById('report');
       const errEl = document.getElementById('report_err');
       const picker = document.getElementById('date_picker');
       const navHint = document.getElementById('nav_hint');
-
-      errEl.textContent = "";
+      errEl.textContent = '';
       reportEl.innerHTML = `<div class="hint">正在定位可用日报（最多回退 ${LOOKBACK_DAYS} 天）...</div>`;
 
       const useDate = await findNearestExistingReportDate(targetDate);
       if(!useDate){
-        titleEl.textContent = `A-Share TOP10`;
-        reportEl.innerHTML = "";
-        errEl.textContent =
-          `在 ${yyyymmdd(targetDate)} 往前 ${LOOKBACK_DAYS} 天内，都没有找到 outputs/predict_top10_YYYYMMDD.md。\n` +
-          `请确认日报文件已提交到仓库 outputs/ 目录，并能通过 Pages 访问。`;
+        titleEl.textContent = 'A-Share TOP10';
+        reportEl.innerHTML = '';
+        errEl.textContent = `在 ${yyyymmdd(targetDate)} 往前 ${LOOKBACK_DAYS} 天内没有找到日报。`;
         return;
       }
 
       picker.value = toDateInputValue(useDate);
       const targetStr = yyyymmdd(targetDate);
       const useStr = yyyymmdd(useDate);
-      navHint.textContent = (useStr !== targetStr)
-        ? `提示：你选择的 ${targetStr} 无日报，已自动回退到最近可用日报 ${useStr}（历史冻结版）`
-        : `提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告（历史冻结版）`;
+      navHint.textContent = useStr !== targetStr
+        ? `提示：你选择的 ${targetStr} 无日报，已自动回退到最近可用日报 ${useStr}`
+        : '提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告';
 
       const niceDate = yyyy_mm_dd(useDate);
       titleEl.textContent = `A-Share TOP10 - ${niceDate}`;
@@ -395,269 +343,177 @@
 
       const path = mdPathFor(useDate);
       reportEl.innerHTML = `<div class="hint">正在加载：${path}</div>`;
-
       try{
         const md = await fetchText(path);
-        let md2 = md;
-        const lines = md2.split(/\r?\n/);
-        if (lines.length > 0 && lines[0].trim().startsWith('#')) {
-          lines.shift();
-          while (lines.length > 0 && lines[0].trim() === '') lines.shift();
-          md2 = lines.join('\n');
-        }
-
-        reportEl.innerHTML = marked.parse(md2);
-        await alignCandidateTableToTop10(reportEl, useDate);
+        reportEl.innerHTML = marked.parse(stripMdTitle(md));
+        removeProfessionalNotes(reportEl);
+        await alignCandidateTableToTop10(reportEl,useDate);
         setupCollapsibleReportSections(reportEl);
       }catch(e){
-        reportEl.innerHTML = "";
+        reportEl.innerHTML = '';
         errEl.textContent = `读取日报失败：${e.message}`;
       }
     }
-
     function setupCollapsibleReportSections(root){
-      const targets = ["分时增强数据覆盖率", "候选池补充表"];
-      const headings = Array.from(root.querySelectorAll("h2")).filter(h2 => {
-        const text = (h2.textContent || "").trim();
-        return targets.some(target => text.includes(target));
-      });
-
-      headings.forEach(h2 => {
-        const section = document.createElement("section");
-        section.className = "md-section is-collapsed";
-
-        const title = document.createElement("div");
-        title.className = "md-section-title";
-        title.setAttribute("role", "button");
-        title.setAttribute("tabindex", "0");
-        title.setAttribute("aria-expanded", "false");
-
-        const toggle = document.createElement("button");
-        toggle.className = "md-section-toggle";
-        toggle.type = "button";
-        toggle.textContent = "+";
-        toggle.setAttribute("aria-label", "展开");
-
-        const body = document.createElement("div");
-        body.className = "md-section-body";
-
-        h2.parentNode.insertBefore(section, h2);
+      const targets = ['分时增强数据覆盖率','候选池补充表'];
+      const headings = Array.from(root.querySelectorAll('h2')).filter(h2=>targets.some(target=>(h2.textContent || '').includes(target)));
+      headings.forEach(h2=>{
+        const section = document.createElement('section');
+        section.className = 'md-section is-collapsed';
+        const title = document.createElement('div');
+        title.className = 'md-section-title';
+        title.setAttribute('role','button');
+        title.setAttribute('tabindex','0');
+        title.setAttribute('aria-expanded','false');
+        const toggle = document.createElement('button');
+        toggle.className = 'md-section-toggle';
+        toggle.type = 'button';
+        toggle.textContent = '+';
+        toggle.setAttribute('aria-label','展开');
+        const body = document.createElement('div');
+        body.className = 'md-section-body';
+        h2.parentNode.insertBefore(section,h2);
         section.appendChild(title);
         title.appendChild(h2);
         title.appendChild(toggle);
         section.appendChild(body);
-
         let node = section.nextSibling;
         while(node){
           const next = node.nextSibling;
-          if(node.nodeType === 1 && node.tagName === "H2") break;
+          if(node.nodeType === 1 && node.tagName === 'H2') break;
           body.appendChild(node);
           node = next;
         }
-
-        const setOpen = open => {
-          section.classList.toggle("is-collapsed", !open);
-          title.setAttribute("aria-expanded", open ? "true" : "false");
-          toggle.textContent = open ? "-" : "+";
-          toggle.setAttribute("aria-label", open ? "折叠" : "展开");
+        const setOpen = open=>{
+          section.classList.toggle('is-collapsed',!open);
+          title.setAttribute('aria-expanded',open ? 'true' : 'false');
+          toggle.textContent = open ? '-' : '+';
+          toggle.setAttribute('aria-label',open ? '折叠' : '展开');
         };
-        const toggleOpen = () => setOpen(section.classList.contains("is-collapsed"));
-
-        title.addEventListener("click", toggleOpen);
-        title.addEventListener("keydown", event => {
-          if(event.key === "Enter" || event.key === " "){
-            event.preventDefault();
-            toggleOpen();
-          }
+        const toggleOpen = ()=>setOpen(section.classList.contains('is-collapsed'));
+        title.addEventListener('click',toggleOpen);
+        title.addEventListener('keydown',event=>{
+          if(event.key === 'Enter' || event.key === ' '){event.preventDefault();toggleOpen();}
         });
       });
     }
-
-    async function alignCandidateTableToTop10(root, reportDate){
-      const sections = Array.from(root.querySelectorAll("h2")).map(h2 => {
+    async function alignCandidateTableToTop10(root,reportDate){
+      const sections = Array.from(root.querySelectorAll('h2')).map(h2=>{
         let table = null;
         let node = h2.nextElementSibling;
-        while(node && node.tagName !== "H2"){
-          if(node.tagName === "TABLE"){
-            table = node;
-            break;
-          }
+        while(node && node.tagName !== 'H2'){
+          if(node.tagName === 'TABLE'){table = node;break;}
           node = node.nextElementSibling;
         }
-        return { h2, title: (h2.textContent || "").trim(), table };
+        return {h2,title:(h2.textContent || '').trim(),table};
       });
-
-      const top = sections.find(item => item.title.includes("涨停 Top10") && item.table);
-      const candidate = sections.find(item => item.title.includes("候选池补充表") && item.table);
+      const top = sections.find(item=>item.title.includes('涨停 Top10') && item.table);
+      const candidate = sections.find(item=>item.title.includes('候选池补充表') && item.table);
       if(!top || !candidate) return;
-
-      const topHeaders = Array.from(top.table.querySelectorAll("thead th")).map(th => th.textContent.trim());
-      const candidateHeaders = Array.from(candidate.table.querySelectorAll("thead th")).map(th => th.textContent.trim());
+      const topHeaders = Array.from(top.table.querySelectorAll('thead th')).map(th=>th.textContent.trim());
+      const candidateHeaders = Array.from(candidate.table.querySelectorAll('thead th')).map(th=>th.textContent.trim());
       if(!topHeaders.length) return;
-
-      const oldIndex = new Map(candidateHeaders.map((h, i) => [h, i]));
-      const rows = Array.from(candidate.table.querySelectorAll("tbody tr"));
-      const theadRow = candidate.table.querySelector("thead tr");
+      const oldIndex = new Map(candidateHeaders.map((h,i)=>[h,i]));
+      const rows = Array.from(candidate.table.querySelectorAll('tbody tr'));
+      const theadRow = candidate.table.querySelector('thead tr');
       if(!theadRow) return;
-
       const fillMap = await loadCandidateFillMap(reportDate);
-      theadRow.innerHTML = topHeaders.map(h => `<th>${escapeHtml(h)}</th>`).join("");
-      rows.forEach(row => {
+      theadRow.innerHTML = topHeaders.map(h=>`<th>${escapeHtml(h)}</th>`).join('');
+      rows.forEach(row=>{
         const cells = Array.from(row.children);
-        const codeIdx = oldIndex.get("代码");
-        const code = codeIdx !== undefined && cells[codeIdx] ? cells[codeIdx].textContent.trim() : "";
+        const codeIdx = oldIndex.get('代码');
+        const code = codeIdx !== undefined && cells[codeIdx] ? cells[codeIdx].textContent.trim() : '';
         const record = fillMap.get(code) || null;
-        row.innerHTML = topHeaders.map(h => {
+        row.innerHTML = topHeaders.map(h=>{
           const idx = oldIndex.get(h);
-          const existing = idx !== undefined && cells[idx] ? cells[idx].innerHTML : "";
-          const filled = record ? valueForCandidateHeader(record, h, existing) : existing;
+          const existing = idx !== undefined && cells[idx] ? cells[idx].innerHTML : '';
+          const filled = record ? valueForCandidateHeader(record,h,existing) : existing;
           return `<td>${escapeHtml(filled)}</td>`;
-        }).join("");
+        }).join('');
       });
     }
-
     async function loadCandidateFillMap(reportDate){
       const out = new Map();
       try{
-        const jsonText = await fetchText(jsonPathFor(reportDate));
-        const payload = JSON.parse(jsonText.replace(/\bNaN\b/g, "null"));
-        const topCodes = new Set((payload.topN || []).map(r => String(r.ts_code || "")));
+        const payload = JSON.parse((await fetchText(jsonPathFor(reportDate))).replace(/\bNaN\b/g,'null'));
+        const topCodes = new Set((payload.topN || []).map(r=>String(r.ts_code || '')));
         const full = Array.isArray(payload.full) ? payload.full : [];
-        full
-          .filter(r => r && r.ts_code && !topCodes.has(String(r.ts_code)))
-          .sort((a, b) => {
-            const pa = Number(a.Probability);
-            const pb = Number(b.Probability);
-            if(Number.isFinite(pa) && Number.isFinite(pb) && pb !== pa) return pb - pa;
-            const sa = Number(a.StrengthScore);
-            const sb = Number(b.StrengthScore);
-            if(Number.isFinite(sa) && Number.isFinite(sb)) return sb - sa;
-            return 0;
-          })
-          .forEach((r, i) => {
-            r.__candidate_rank = i + 11;
-            out.set(String(r.ts_code), r);
-          });
-      }catch(e){
-        console.warn("candidate fill json unavailable", e);
-      }
+        full.filter(r=>r && r.ts_code && !topCodes.has(String(r.ts_code))).sort((a,b)=>{
+          const pa = Number(a.Probability), pb = Number(b.Probability);
+          if(Number.isFinite(pa) && Number.isFinite(pb) && pb !== pa) return pb - pa;
+          const sa = Number(a.StrengthScore), sb = Number(b.StrengthScore);
+          if(Number.isFinite(sa) && Number.isFinite(sb)) return sb - sa;
+          return 0;
+        }).forEach((r,i)=>{r.__candidate_rank = i + 11; out.set(String(r.ts_code),r);});
+      }catch(e){console.warn('candidate fill json unavailable',e);}
       return out;
     }
-
-    function valueForCandidateHeader(record, header, fallback){
+    function valueForCandidateHeader(record,header,fallback){
       const map = {
-        "排名": "__candidate_rank",
-        "代码": "ts_code",
-        "股票": "name",
-        "最终分": "final_score_v2",
-        "原始分": "final_score_base",
-        "涨停概率": "Probability",
-        "强度分": "strength_plus_score",
-        "行业版块": "board",
-        "题材加成": "ThemeBoost",
-        "分时质量": "intraday_quality_score",
-        "软风险": "intraday_soft_risk_score",
-        "硬风险": "intraday_hard_risk_flag",
-        "尾盘风险": "late_withdraw_score",
-        "回封分": "reseal_score",
-        "炸板数": "open_board_count",
-        "竞价强度": "auction_strength_score",
-        "风险级别": "risk_level",
-        "风险标签": "risk_label"
+        '排名':'__candidate_rank','代码':'ts_code','股票':'name','最终分':'final_score_v2','原始分':'final_score_base','涨停概率':'Probability','强度分':'strength_plus_score','行业版块':'board','题材加成':'ThemeBoost','分时质量':'intraday_quality_score','软风险':'intraday_soft_risk_score','硬风险':'intraday_hard_risk_flag','尾盘风险':'late_withdraw_score','回封分':'reseal_score','炸板数':'open_board_count','竞价强度':'auction_strength_score','风险级别':'risk_level','风险标签':'risk_label'
       };
-      if(header === "intraday_coverage"){
-        return Number(record.intraday_available || 0) > 0 ? "是" : "否";
-      }
+      if(header === 'intraday_coverage') return Number(record.intraday_available || 0) > 0 ? '是' : '否';
       const key = map[header];
-      if(!key) return fallback || "";
+      if(!key) return fallback || '';
       const value = record[key];
-      if(value === undefined || value === null || Number.isNaN(value)) return fallback || "";
-      if(["最终分", "原始分", "强度分", "题材加成", "分时质量", "软风险", "尾盘风险", "回封分", "竞价强度"].includes(header)){
-        return formatScore(value, 4);
-      }
-      if(header === "涨停概率") return formatScore(value, 6);
-      if(["排名", "硬风险", "炸板数"].includes(header)) return formatCount(value);
+      if(value === undefined || value === null || Number.isNaN(value)) return fallback || '';
+      if(['最终分','原始分','强度分','题材加成','分时质量','软风险','尾盘风险','回封分','竞价强度'].includes(header)) return formatScore(value,4);
+      if(header === '涨停概率') return formatScore(value,6);
+      if(['排名','硬风险','炸板数'].includes(header)) return formatCount(value);
       return String(value);
     }
-
-    function formatScore(value, digits){
+    function formatScore(value,digits){
       const n = Number(value);
-      if(!Number.isFinite(n)) return "";
-      return n.toFixed(digits).replace(/0+$/, "").replace(/\.$/, "");
+      if(!Number.isFinite(n)) return '';
+      return n.toFixed(digits).replace(/0+$/,'').replace(/\.$/,'');
     }
-
     function formatCount(value){
       const n = Number(value);
-      if(!Number.isFinite(n)) return "";
-      return Number.isInteger(n) ? String(n) : formatScore(n, 4);
+      if(!Number.isFinite(n)) return '';
+      return Number.isInteger(n) ? String(n) : formatScore(n,4);
     }
-
     function escapeHtml(value){
-      return String(value).replace(/[&<>"']/g, ch => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        "\"": "&quot;",
-        "'": "&#39;"
-      }[ch]));
+      return String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     }
-
     async function loadLearningStatus(){
-      const mdPath = `outputs/learning/step7_report_latest.md`;
+      const mdPath = 'outputs/learning/step7_report_latest.md';
       const box = document.getElementById('learning');
       const err = document.getElementById('learning_err');
-
-      err.textContent = "";
+      err.textContent = '';
       box.innerHTML = `<div class="hint">正在加载：${mdPath}</div>`;
-
       try{
-        const md = await fetchText(mdPath);
-        box.innerHTML = marked.parse(md);
+        box.innerHTML = marked.parse(await fetchText(mdPath));
+        removeProfessionalNotes(box);
       }catch(e){
-        box.innerHTML = "";
+        box.innerHTML = '';
         err.textContent = `未能读取学习状态：${e.message}\n请确认 ${mdPath} 在仓库存在且 Pages 可访问。`;
       }
     }
-
-    async function jumpByDaysSkippingMissing(currentDate, delta){
-      for(let i=1; i<=LOOKBACK_DAYS; i++){
+    async function jumpByDaysSkippingMissing(currentDate,delta){
+      for(let i=1;i<=LOOKBACK_DAYS;i++){
         const d = new Date(currentDate);
-        d.setDate(d.getDate() + delta * i);
-        const path = mdPathFor(d);
-        const res = await fetch(cacheBust(path), { method: "GET", cache: "no-store" });
+        d.setDate(d.getDate()+delta*i);
+        const res = await fetch(cacheBust(mdPathFor(d)),{method:'GET',cache:'no-store'});
         if(res.ok) return d;
       }
       return null;
     }
-
     function bindNav(initialDate){
       const picker = document.getElementById('date_picker');
-
-      document.getElementById('btn_prev').onclick = async () => {
-        const base = fromDateInputValue(picker.value);
-        const next = await jumpByDaysSkippingMissing(base, -1);
-        if(next) setQueryDate(next);
-        else alert(`向前 ${LOOKBACK_DAYS} 天内没有找到更早的日报文件`);
+      document.getElementById('btn_prev').onclick = async()=>{
+        const next = await jumpByDaysSkippingMissing(fromDateInputValue(picker.value),-1);
+        if(next) setQueryDate(next); else alert(`向前 ${LOOKBACK_DAYS} 天内没有找到更早的日报文件`);
       };
-
-      document.getElementById('btn_next').onclick = async () => {
-        const base = fromDateInputValue(picker.value);
-        const next = await jumpByDaysSkippingMissing(base, +1);
-        if(next) setQueryDate(next);
-        else alert(`向后 ${LOOKBACK_DAYS} 天内没有找到更新的日报文件`);
+      document.getElementById('btn_next').onclick = async()=>{
+        const next = await jumpByDaysSkippingMissing(fromDateInputValue(picker.value),+1);
+        if(next) setQueryDate(next); else alert(`向后 ${LOOKBACK_DAYS} 天内没有找到更新的日报文件`);
       };
-
       picker.value = toDateInputValue(initialDate);
-      picker.onchange = () => {
-        const d = fromDateInputValue(picker.value);
-        setQueryDate(d);
-      };
+      picker.onchange = ()=>setQueryDate(fromDateInputValue(picker.value));
     }
-
-    window.onload = async () => {
+    window.onload = async()=>{
       const date = getQueryDate();
       bindNav(date);
-
       await loadRunStamp();
       await loadDailyReport(date);
       await loadLearningStatus();
@@ -686,7 +542,7 @@
         <span>选择日期：</span>
         <input id="date_picker" type="date" />
       </div>
-      <div id="nav_hint" class="hint">提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告（历史冻结版）</div>
+      <div id="nav_hint" class="hint">提示：URL 参数 d=YYYYMMDD 可直接跳转某日报告</div>
     </div>
 
     <div class="card">
