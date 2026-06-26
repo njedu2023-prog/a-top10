@@ -6,10 +6,10 @@
   "auction_rows": 5511,
   "matched_count": 80,
   "matched_rate": 0.9195402298850575,
-  "topn_matched_count": 10,
-  "topn_matched_rate": 1.0,
+  "topn_matched_count": 8,
+  "topn_matched_rate": 0.8,
   "missing_count": 7,
-  "missing_top10_count": 0,
+  "missing_top10_count": 2,
   "missing_reason_counts": {
     "missing_stock": 7
   },
