@@ -8,7 +8,10 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from a_top10.config import is_a_share_trading_day, load_settings, prev_a_share_trading_day
-from a_top10.io.report_postprocess import ensure_candidate_pool_report_columns
+from a_top10.io.report_postprocess import (
+    ensure_candidate_pool_report_columns,
+    ensure_professional_performance_sections,
+)
 from a_top10.io.writers import write_outputs
 from a_top10.steps.step0_input_layer import step0_build_universe
 from a_top10.steps.step1_emotion_gate import step1_emotion_gate
@@ -294,6 +297,7 @@ def run_pipeline(
                 learn=train_summary or {"updated": False, "run_mode": mode},
             )
             ensure_candidate_pool_report_columns(out_dir, td)
+            ensure_professional_performance_sections(out_dir, td)
 
 
 if __name__ == "__main__":
