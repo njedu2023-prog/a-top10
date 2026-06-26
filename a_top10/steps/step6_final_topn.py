@@ -353,9 +353,11 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         return {"topN": empty, "topn": empty, "full": empty, "meta": {"filtered_all": True}, "warnings": warnings}
 
     # ---------- dedup ----------
+    # 业务口径：最终排名必须以次交易日继续涨停概率为第一排序轴。
+    # final_score_v2 只作为同概率时的辅助排序和风控解释分，不再决定第一名。
     if cfg.dedup_by_ts_code and "ts_code" in out2.columns:
         out2 = out2.sort_values(
-            ["final_score_v2", "prob_final", "StrengthScore", "ts_code"],
+            ["prob_final", "StrengthScore", "final_score_v2", "ts_code"],
             ascending=[False, False, False, True],
             kind="mergesort",
         ).drop_duplicates(subset=["ts_code"], keep="first").copy()
@@ -371,7 +373,7 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
 
     # ---------- full ranking ----------
     full_sorted = out2.sort_values(
-        ["final_score_v2", "prob_final", "StrengthScore", "_tiebreak_hash"],
+        ["prob_final", "StrengthScore", "final_score_v2", "_tiebreak_hash"],
         ascending=[False, False, False, True],
         kind="mergesort",
     ).reset_index(drop=True)
@@ -487,6 +489,8 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "v2_semantics": {
             "main_probability_field": "prob_final",
             "compat_probability_field": "Probability",
+            "primary_rank_field": "Probability",
+            "ranking_policy": "Probability desc, StrengthScore desc, final_score_v2 desc",
             "main_score_field": "final_score",
             "upgraded_score_field": "final_score_v2",
         },
