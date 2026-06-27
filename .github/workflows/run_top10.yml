@@ -267,7 +267,7 @@ jobs:
             echo "[WARN] outputs/debug_intraday_${td}.json missing"
           fi
 
-      - name: Export Top1-3 JoinQuant trading CSV from final Top10 ranking
+      - name: Export Top1-3 TopEVR JoinQuant CSV from final Top10 ranking
         run: |
           set -euo pipefail
 
@@ -312,15 +312,17 @@ jobs:
               return code
 
           top3 = df.head(3).copy()
-          weight = round(1.0 / len(top3), 6) if len(top3) else 0.0
+          weight = 1.0 / len(top3) if len(top3) else 0.0
+          trade_date = top3["trade_date"] if "trade_date" in top3.columns else td
+          target_trade_date = top3["verify_date"] if "verify_date" in top3.columns else ""
           jq = pd.DataFrame({
-              "security": top3["ts_code"].map(to_joinquant_code) if "ts_code" in top3.columns else "",
-              "action": "buy",
-              "target_percent": weight,
-              "rank": top3["rank"].astype(int) if "rank" in top3.columns else range(1, len(top3) + 1),
-              "name": top3["name"] if "name" in top3.columns else "",
-              "trade_date": top3["trade_date"] if "trade_date" in top3.columns else td,
-              "verify_date": top3["verify_date"] if "verify_date" in top3.columns else "",
+              "trade_date": trade_date,
+              "target_trade_date": target_trade_date,
+              "jq_code": top3["ts_code"].map(to_joinquant_code) if "ts_code" in top3.columns else "",
+              "target_weight": weight,
+              "risk_budget": 1.0,
+              "regime": "RISK_ON",
+              "reason": "TopEVR_EV>3pct_Risk<1pct",
           })
           outdir = Path("outputs")
           outdir.mkdir(parents=True, exist_ok=True)
