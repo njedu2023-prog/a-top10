@@ -1,4 +1,4 @@
-﻿security,action,target_percent,rank,name,trade_date,verify_date
-603928.XSHG,buy,0.333333,1,兴业股份,20260626,20260629
-603956.XSHG,buy,0.333333,2,威派格,20260626,20260629
-603155.XSHG,buy,0.333333,3,新亚强,20260626,20260629
+trade_date,target_trade_date,jq_code,target_weight,risk_budget,regime,reason
+20260626,20260629,603928.XSHG,0.3333333333333333,1.0,RISK_ON,TopEVR_EV>3pct_Risk<1pct
+20260626,20260629,603956.XSHG,0.3333333333333333,1.0,RISK_ON,TopEVR_EV>3pct_Risk<1pct
+20260626,20260629,603155.XSHG,0.3333333333333333,1.0,RISK_ON,TopEVR_EV>3pct_Risk<1pct
