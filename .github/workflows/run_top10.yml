@@ -267,7 +267,7 @@ jobs:
             echo "[WARN] outputs/debug_intraday_${td}.json missing"
           fi
 
-      - name: Export Top1-3 CSV from final Top10 ranking
+      - name: Export Top1-3 JoinQuant trading CSV from final Top10 ranking
         run: |
           set -euo pipefail
 
@@ -294,13 +294,40 @@ jobs:
               if rank.notna().any():
                   df = df.assign(__rank_sort=rank).sort_values("__rank_sort", kind="mergesort").drop(columns=["__rank_sort"])
 
+          def to_joinquant_code(value):
+              code = str(value).strip().upper()
+              if code.endswith(".SH"):
+                  return code[:-3] + ".XSHG"
+              if code.endswith(".SZ"):
+                  return code[:-3] + ".XSHE"
+              if code.endswith(".BJ"):
+                  return code[:-3] + ".XBEI"
+              code6 = code.split(".")[0]
+              if code6.startswith(("600", "601", "603", "605", "688", "689")):
+                  return code6 + ".XSHG"
+              if code6.startswith(("000", "001", "002", "003", "300", "301")):
+                  return code6 + ".XSHE"
+              if code6.startswith(("430", "800", "830", "831", "832", "833", "834", "835", "836", "837", "838", "839", "870", "871", "872", "873", "920")):
+                  return code6 + ".XBEI"
+              return code
+
           top3 = df.head(3).copy()
+          weight = round(1.0 / len(top3), 6) if len(top3) else 0.0
+          jq = pd.DataFrame({
+              "security": top3["ts_code"].map(to_joinquant_code) if "ts_code" in top3.columns else "",
+              "action": "buy",
+              "target_percent": weight,
+              "rank": top3["rank"].astype(int) if "rank" in top3.columns else range(1, len(top3) + 1),
+              "name": top3["name"] if "name" in top3.columns else "",
+              "trade_date": top3["trade_date"] if "trade_date" in top3.columns else td,
+              "verify_date": top3["verify_date"] if "verify_date" in top3.columns else "",
+          })
           outdir = Path("outputs")
           outdir.mkdir(parents=True, exist_ok=True)
-          top3.to_csv(outdir / "top101-3.csv", index=False, encoding="utf-8-sig")
-          top3.to_csv(outdir / f"top101-3_{td}.csv", index=False, encoding="utf-8-sig")
-          print(f"[WRITE] outputs/top101-3.csv rows={len(top3)}")
-          print(f"[WRITE] outputs/top101-3_{td}.csv rows={len(top3)}")
+          jq.to_csv(outdir / "top101-3.csv", index=False, encoding="utf-8-sig")
+          jq.to_csv(outdir / f"top101-3_{td}.csv", index=False, encoding="utf-8-sig")
+          print(f"[WRITE] outputs/top101-3.csv rows={len(jq)}")
+          print(f"[WRITE] outputs/top101-3_{td}.csv rows={len(jq)}")
           PY
         env:
           TOP10_TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
