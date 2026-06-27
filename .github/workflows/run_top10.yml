@@ -267,6 +267,44 @@ jobs:
             echo "[WARN] outputs/debug_intraday_${td}.json missing"
           fi
 
+      - name: Export Top1-3 CSV from final Top10 ranking
+        run: |
+          set -euo pipefail
+
+          td="${{ steps.resolve_date.outputs.trade_date }}"
+          src="outputs/learning/pred_top10_latest.csv"
+          if [ ! -s "$src" ]; then
+            echo "ERROR: final Top10 CSV missing/empty: $src"
+            exit 31
+          fi
+
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import pandas as pd
+
+          td = os.environ["TOP10_TRADE_DATE"]
+          src = Path("outputs/learning/pred_top10_latest.csv")
+          df = pd.read_csv(src)
+
+          # The source CSV is already the final Top10 ranking. Use rank only to
+          # preserve the established order if a writer changes row order later.
+          if "rank" in df.columns:
+              rank = pd.to_numeric(df["rank"], errors="coerce")
+              if rank.notna().any():
+                  df = df.assign(__rank_sort=rank).sort_values("__rank_sort", kind="mergesort").drop(columns=["__rank_sort"])
+
+          top3 = df.head(3).copy()
+          outdir = Path("outputs")
+          outdir.mkdir(parents=True, exist_ok=True)
+          top3.to_csv(outdir / "top101-3.csv", index=False, encoding="utf-8-sig")
+          top3.to_csv(outdir / f"top101-3_{td}.csv", index=False, encoding="utf-8-sig")
+          print(f"[WRITE] outputs/top101-3.csv rows={len(top3)}")
+          print(f"[WRITE] outputs/top101-3_{td}.csv rows={len(top3)}")
+          PY
+        env:
+          TOP10_TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
+
       - name: Validate intraday refine artifacts
         run: |
           set -euo pipefail
