@@ -267,6 +267,13 @@ jobs:
             echo "[WARN] outputs/debug_intraday_${td}.json missing"
           fi
 
+      - name: Apply limit stage overlay
+        env:
+          TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
+        run: |
+          set -euo pipefail
+          python tools/apply_limit_stage_overlay.py
+
       - name: Export Top1-3 TopEVR JoinQuant CSV from final Top10 ranking
         run: |
           set -euo pipefail
