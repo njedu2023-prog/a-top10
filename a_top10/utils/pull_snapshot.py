@@ -51,6 +51,8 @@ def pull_snapshot(trade_date: str):
         "daily.csv",
         "daily_basic.csv",
         "limit_list_d.csv",
+        "limit_stage.csv",
+        "limit_step.csv",
         "hot_boards.csv",
         "top_list.csv",
     ]
