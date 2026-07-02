@@ -321,11 +321,37 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         pd.to_numeric(out2["intraday_soft_risk_penalty"], errors="coerce").fillna(0.0)
         + pd.to_numeric(out2["intraday_hard_risk_penalty"], errors="coerce").fillna(0.0)
     ).astype("float64")
+    limit_times_num = pd.to_numeric(out2.get("limit_times", pd.Series([pd.NA] * len(out2), index=out2.index)), errors="coerce")
+    stage_quality = pd.to_numeric(
+        out2.get("stage_quality_weight", pd.Series([pd.NA] * len(out2), index=out2.index)),
+        errors="coerce",
+    )
+    stage_risk = pd.to_numeric(
+        out2.get("stage_risk_weight", pd.Series([pd.NA] * len(out2), index=out2.index)),
+        errors="coerce",
+    )
+    if stage_quality.notna().sum() == 0 and limit_times_num.notna().any():
+        stage_quality = limit_times_num.map({1: 0.78, 2: 0.92, 3: 1.10, 4: 1.10, 5: 1.00, 6: 0.88}).fillna(
+            limit_times_num.map(lambda x: 0.72 if pd.notna(x) and float(x) >= 7 else 1.0)
+        )
+    if stage_risk.notna().sum() == 0 and limit_times_num.notna().any():
+        stage_risk = limit_times_num.map({1: 0.035, 2: 0.015, 3: 0.0, 4: 0.005, 5: 0.045, 6: 0.095}).fillna(
+            limit_times_num.map(lambda x: 0.160 if pd.notna(x) and float(x) >= 7 else 0.0)
+        )
+    stage_quality = stage_quality.fillna(1.0).clip(0.60, 1.20)
+    stage_risk = stage_risk.fillna(0.0).clip(0.0, 0.25)
+    out2["stage_quality_weight"] = stage_quality.astype("float64")
+    out2["stage_risk_weight"] = stage_risk.astype("float64")
+    out2["stage_bonus"] = ((stage_quality - 1.0) * 0.10).clip(-0.030, 0.015).astype("float64")
+    out2["stage_risk_penalty"] = (stage_risk * 0.055).clip(0.0, 0.018).astype("float64")
+    out2["stage_adjustment"] = (out2["stage_bonus"] - out2["stage_risk_penalty"]).astype("float64")
     out2["final_score_v2"] = (
         out2["raw_final_score"]
         + out2["intraday_bonus"]
+        + out2["stage_bonus"]
         - out2["intraday_soft_risk_penalty"]
         - out2["intraday_hard_risk_penalty"]
+        - out2["stage_risk_penalty"]
     ).clip(0.0, 1.0)
     out2["risk_label"] = out2.apply(build_risk_tags, axis=1)
     out2["risk_tags"] = out2["risk_label"]
@@ -353,11 +379,10 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         return {"topN": empty, "topn": empty, "full": empty, "meta": {"filtered_all": True}, "warnings": warnings}
 
     # ---------- dedup ----------
-    # 业务口径：最终排名必须以次交易日继续涨停概率为第一排序轴。
-    # final_score_v2 只作为同概率时的辅助排序和风控解释分，不再决定第一名。
+    # 业务口径：涨停概率为第一排序轴；final_score_v2 融合分时、风险、晋阶质量作为第二排序轴。
     if cfg.dedup_by_ts_code and "ts_code" in out2.columns:
         out2 = out2.sort_values(
-            ["prob_final", "StrengthScore", "final_score_v2", "ts_code"],
+            ["prob_final", "final_score_v2", "StrengthScore", "ts_code"],
             ascending=[False, False, False, True],
             kind="mergesort",
         ).drop_duplicates(subset=["ts_code"], keep="first").copy()
@@ -373,7 +398,7 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
 
     # ---------- full ranking ----------
     full_sorted = out2.sort_values(
-        ["prob_final", "StrengthScore", "final_score_v2", "_tiebreak_hash"],
+        ["prob_final", "final_score_v2", "StrengthScore", "_tiebreak_hash"],
         ascending=[False, False, False, True],
         kind="mergesort",
     ).reset_index(drop=True)
@@ -385,6 +410,15 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "rank",
         "ts_code",
         "name",
+        "晋阶",
+        "limit_times",
+        "advance_stage",
+        "stage_quality_weight",
+        "stage_risk_weight",
+        "stage_prior",
+        "stage_bonus",
+        "stage_risk_penalty",
+        "stage_adjustment",
         "board",
         "StrengthScore",
         "ThemeBoost",
