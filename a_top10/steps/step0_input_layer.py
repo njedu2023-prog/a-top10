@@ -509,6 +509,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     stock_basic_raw = _read_csv_if_exists(snap / "stock_basic.csv")
     stk_auction_raw = _read_csv_if_exists(snap / "stk_auction.csv")
     intraday_features_raw = _read_csv_if_exists(snap / "intraday_features.csv")
+    limit_stage_raw = _read_csv_if_exists(snap / "limit_stage.csv")
 
     # optional table for market metrics fallback (NOT required)
     stk_limit_raw = _read_csv_if_exists(snap / "stk_limit.csv")
@@ -525,6 +526,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     stk_limit, dbg_stk_limit_code = _normalize_table_ts_code(stk_limit_raw)
     stk_auction, dbg_stk_auction_code = _normalize_table_ts_code(stk_auction_raw)
     intraday_features, dbg_intraday_features_code = _normalize_table_ts_code(intraday_features_raw)
+    limit_stage, dbg_limit_stage_code = _normalize_table_ts_code(limit_stage_raw)
 
     # hot_boards: keep as-is (it is industry-centric table); still record basic shape
     hot_boards = hot_boards_raw.copy() if isinstance(hot_boards_raw, pd.DataFrame) else pd.DataFrame()
@@ -655,6 +657,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
             "stk_limit": int(len(stk_limit)) if isinstance(stk_limit, pd.DataFrame) else 0,
             "stk_auction": int(len(stk_auction)) if isinstance(stk_auction, pd.DataFrame) else 0,
             "intraday_features": int(len(intraday_features)) if isinstance(intraday_features, pd.DataFrame) else 0,
+            "limit_stage": int(len(limit_stage)) if isinstance(limit_stage, pd.DataFrame) else 0,
             "universe": int(len(universe)) if isinstance(universe, pd.DataFrame) else 0,
         },
 
@@ -676,6 +679,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
             "stk_limit": dbg_stk_limit_code,
             "stk_auction": dbg_stk_auction_code,
             "intraday_features": dbg_intraday_features_code,
+            "limit_stage": dbg_limit_stage_code,
         },
         "industry_apply": dbg_industry_apply,
 
@@ -745,6 +749,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         "auction_df": stk_auction,
         "intraday_features": intraday_features,
         "intraday_df": intraday_features,
+        "limit_stage": limit_stage,
 
         # compatibility keys
         "boards": hot_boards,
