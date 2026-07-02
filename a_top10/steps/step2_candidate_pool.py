@@ -303,13 +303,71 @@ def _merge_stock_basic(base_df: pd.DataFrame, stock_basic: pd.DataFrame) -> tupl
     return out, dbg
 
 
+def _merge_limit_stage(base_df: pd.DataFrame, limit_stage: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    dbg: Dict[str, Any] = {
+        "ok": False,
+        "reason": "",
+        "limit_stage_rows": int(len(limit_stage)) if isinstance(limit_stage, pd.DataFrame) else 0,
+        "matched_rows": 0,
+        "stage_nonblank_rows": 0,
+    }
+    if base_df is None or base_df.empty:
+        dbg["reason"] = "base empty"
+        return base_df, dbg
+    if limit_stage is None or limit_stage.empty or "ts_code" not in limit_stage.columns:
+        dbg["reason"] = "limit_stage missing"
+        return base_df, dbg
+
+    st = _normalize_code_column(limit_stage.copy())
+    keep = [
+        "ts_code",
+        "limit_times",
+        "advance_stage",
+        "晋阶",
+        "stage_quality_weight",
+        "stage_risk_weight",
+        "stage_prior",
+        "stage_source",
+        "up_stat",
+    ]
+    keep = [c for c in keep if c in st.columns]
+    if len(keep) <= 1:
+        dbg["reason"] = "limit_stage has no stage columns"
+        return base_df, dbg
+    st = st[keep].drop_duplicates(subset=["ts_code"], keep="first")
+    rename = {c: f"{c}_stage" for c in keep if c != "ts_code"}
+    st = st.rename(columns=rename)
+
+    out = base_df.merge(st, on="ts_code", how="left")
+    for col in rename:
+        stage_col = f"{col}_stage"
+        if col not in out.columns:
+            out[col] = pd.NA
+        if stage_col in out.columns:
+            base_blank = out[col].isna() | out[col].astype(str).str.strip().eq("")
+            out.loc[base_blank, col] = out.loc[base_blank, stage_col]
+            out = out.drop(columns=[stage_col], errors="ignore")
+
+    if "晋阶" not in out.columns:
+        out["晋阶"] = out.get("advance_stage", "")
+    else:
+        blank = out["晋阶"].isna() | out["晋阶"].astype(str).str.strip().eq("")
+        if "advance_stage" in out.columns:
+            out.loc[blank, "晋阶"] = out.loc[blank, "advance_stage"]
+
+    dbg["ok"] = True
+    dbg["matched_rows"] = int(out.get("limit_times", pd.Series(index=out.index, dtype=object)).notna().sum())
+    dbg["stage_nonblank_rows"] = int(out.get("晋阶", pd.Series(index=out.index, dtype=object)).astype(str).str.strip().ne("").sum())
+    return out, dbg
+
+
 def _finalize_schema(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
     out = _ensure_name_col(out)
     out = _ensure_industry_board_cols(out)
 
-    front = [c for c in ["ts_code", "name", "industry", "board"] if c in out.columns]
+    front = [c for c in ["ts_code", "name", "industry", "board", "晋阶", "limit_times", "advance_stage"] if c in out.columns]
     rest = [c for c in out.columns if c not in front]
     out = out[front + rest].copy()
 
@@ -384,6 +442,13 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
     candidates_df = _finalize_schema(base_df)
     candidates_df, filter_stats = _filter_bad_names(candidates_df)
     debug["filters"] = filter_stats
+
+    limit_stage = ctx.get("limit_stage")
+    candidates_df, stage_dbg = _merge_limit_stage(
+        candidates_df,
+        limit_stage if isinstance(limit_stage, pd.DataFrame) else pd.DataFrame(),
+    )
+    debug["limit_stage_merge"] = stage_dbg
 
     candidates_df = _finalize_schema(candidates_df)
 
