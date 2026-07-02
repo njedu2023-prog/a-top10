@@ -62,6 +62,17 @@ V3_PRED_BASE_COLS = [
     "rank",
     "ts_code",
     "name",
+    "晋阶",
+    "limit_times",
+    "advance_stage",
+    "stage_quality_weight",
+    "stage_risk_weight",
+    "stage_prior",
+    "stage_source",
+    "stage_bonus",
+    "stage_risk_penalty",
+    "stage_adjustment",
+    "up_stat",
     "Probability",
     "_prob_src",
     "StrengthScore",
@@ -116,6 +127,17 @@ DECISION_SOURCE_BASE_COLS = [
     "rank",
     "ts_code",
     "name",
+    "晋阶",
+    "limit_times",
+    "advance_stage",
+    "stage_quality_weight",
+    "stage_risk_weight",
+    "stage_prior",
+    "stage_source",
+    "stage_bonus",
+    "stage_risk_penalty",
+    "stage_adjustment",
+    "up_stat",
     "prob",
     "StrengthScore",
     "ThemeBoost",
@@ -146,6 +168,17 @@ FEATURE_HISTORY_COLS = [
     "trade_date",
     "ts_code",
     "name",
+    "晋阶",
+    "limit_times",
+    "advance_stage",
+    "stage_quality_weight",
+    "stage_risk_weight",
+    "stage_prior",
+    "stage_source",
+    "stage_bonus",
+    "stage_risk_penalty",
+    "stage_adjustment",
+    "up_stat",
     "Probability",
     "_prob_src",
     "StrengthScore",
@@ -713,6 +746,11 @@ def _canonicalize_prediction_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     out["ts_code"] = src[code_col] if code_col else ""
     out["name"] = src[name_col] if name_col else ""
     out["board"] = src[board_col] if board_col else ""
+    out["晋阶"] = src["晋阶"] if "晋阶" in src.columns else (src["advance_stage"] if "advance_stage" in src.columns else "")
+    out["limit_times"] = src["limit_times"] if "limit_times" in src.columns else ""
+    out["advance_stage"] = src["advance_stage"] if "advance_stage" in src.columns else out["晋阶"]
+    for col in ["stage_quality_weight", "stage_risk_weight", "stage_prior", "stage_source", "stage_bonus", "stage_risk_penalty", "stage_adjustment", "up_stat"]:
+        out[col] = src[col] if col in src.columns else ""
 
     out["Probability"] = src["Probability"] if "Probability" in src.columns else (
         src["prob_final"] if "prob_final" in src.columns else (src["prob_ml"] if "prob_ml" in src.columns else "")
@@ -735,6 +773,7 @@ def _canonicalize_prediction_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     out["close"] = _extract_numeric(src, CLOSE_COL_CANDIDATES)
     for col in [
         "Probability", "StrengthScore", "ThemeBoost", "prob_lr", "prob_lgbm", "prob_rule",
+        "limit_times", "stage_quality_weight", "stage_risk_weight", "stage_prior", "stage_bonus", "stage_risk_penalty", "stage_adjustment",
         "final_score_v2", "final_score_base", "raw_final_score", "final_score", "strength_plus_score",
         "intraday_available", "intraday_quality_score", "intraday_soft_risk_score",
         "intraday_hard_risk_flag", "intraday_risk_score", "late_withdraw_score", "reseal_score",
@@ -760,6 +799,11 @@ def _canonicalize_decision_source_frame(df: Optional[pd.DataFrame]) -> pd.DataFr
     out["ts_code"] = src[code_col] if code_col else ""
     out["name"] = src[name_col] if name_col else ""
     out["board"] = src[board_col] if board_col else ""
+    out["晋阶"] = src["晋阶"] if "晋阶" in src.columns else (src["advance_stage"] if "advance_stage" in src.columns else "")
+    out["limit_times"] = src["limit_times"] if "limit_times" in src.columns else ""
+    out["advance_stage"] = src["advance_stage"] if "advance_stage" in src.columns else out["晋阶"]
+    for col in ["stage_quality_weight", "stage_risk_weight", "stage_prior", "stage_source", "stage_bonus", "stage_risk_penalty", "stage_adjustment", "up_stat"]:
+        out[col] = src[col] if col in src.columns else ""
     prob_series = src["Probability"] if "Probability" in src.columns else (
         src["prob_final"] if "prob_final" in src.columns else (src["prob_ml"] if "prob_ml" in src.columns else "")
     )
@@ -795,6 +839,7 @@ def _canonicalize_decision_source_frame(df: Optional[pd.DataFrame]) -> pd.DataFr
         out[col] = src[col] if col in src.columns else ""
     for col in [
         "final_score", "raw_final_score", "final_score_v2", "intraday_available",
+        "limit_times", "stage_quality_weight", "stage_risk_weight", "stage_prior", "stage_bonus", "stage_risk_penalty", "stage_adjustment",
         "intraday_quality_score", "intraday_soft_risk_score", "intraday_hard_risk_flag",
         "intraday_risk_score", "late_withdraw_score", "reseal_score", "open_board_count",
         "auction_strength_score", "intraday_confidence_score",
@@ -864,6 +909,11 @@ def _canonicalize_feature_history_batch(
     out["trade_date"] = trade_date
     out["ts_code"] = src[code_col] if code_col else ""
     out["name"] = src[name_col] if name_col else ""
+    out["晋阶"] = src["晋阶"] if "晋阶" in src.columns else (src["advance_stage"] if "advance_stage" in src.columns else "")
+    out["limit_times"] = src["limit_times"] if "limit_times" in src.columns else ""
+    out["advance_stage"] = src["advance_stage"] if "advance_stage" in src.columns else out["晋阶"]
+    for col in ["stage_quality_weight", "stage_risk_weight", "stage_prior", "stage_source", "stage_bonus", "stage_risk_penalty", "stage_adjustment", "up_stat"]:
+        out[col] = src[col] if col in src.columns else ""
     out["Probability"] = src["Probability"] if "Probability" in src.columns else (
         src["prob_final"] if "prob_final" in src.columns else (src["prob_ml"] if "prob_ml" in src.columns else "")
     )
@@ -1046,6 +1096,9 @@ def _rename_human(df: pd.DataFrame) -> pd.DataFrame:
         "rank": "排名",
         "ts_code": "代码",
         "name": "股票",
+        "晋阶": "晋阶",
+        "advance_stage": "晋阶",
+        "limit_times": "连板数",
         "Probability": "涨停概率",
         "_prob_src": "概率来源",
         "StrengthScore": "强度得分",
@@ -1420,7 +1473,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         md_lines.append(f"⚠️ Gate 未通过，Top10 为空。{reason}\n")
     else:
         md_lines.append(_df_to_md_table(topn_v3, cols=[
-            "rank", "ts_code", "name", "final_score_v2", "final_score_base", "Probability",
+            "rank", "ts_code", "name", "晋阶", "final_score_v2", "final_score_base", "Probability",
             "strength_plus_score", "board", "ThemeBoost", "intraday_quality_score", "intraday_soft_risk_score",
             "intraday_hard_risk_flag", "late_withdraw_score", "reseal_score", "open_board_count",
             "auction_strength_score", "intraday_coverage", "risk_level", "risk_label",
@@ -1432,7 +1485,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         md_lines.append("（无 Top10 之外的候选样本）\n")
     else:
         md_lines.append(_df_to_md_table(candidate_pool_df, cols=[
-            "rank", "ts_code", "name", "final_score_v2", "Probability", "intraday_quality_score",
+            "rank", "ts_code", "name", "晋阶", "final_score_v2", "Probability", "intraday_quality_score",
             "intraday_risk_score", "risk_level", "risk_label", "intraday_coverage",
         ]))
         md_lines.append("")
