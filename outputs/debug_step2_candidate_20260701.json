@@ -95,6 +95,13 @@
   ],
   "debug_file": "/home/runner/work/a-top10/a-top10/outputs/debug_step2_candidate_20260701.json",
   "out_csv": "/home/runner/work/a-top10/a-top10/outputs/step2_candidates_20260701.csv",
+  "limit_stage_merge": {
+    "ok": false,
+    "reason": "limit_stage missing",
+    "limit_stage_rows": 0,
+    "matched_rows": 0,
+    "stage_nonblank_rows": 0
+  },
   "intraday_merge": {
     "intraday_file_rows": 80,
     "auction_file_rows": 5507,
