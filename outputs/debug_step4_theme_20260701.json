@@ -15,7 +15,7 @@
   "source_rows": {
     "candidate": 153,
     "hot_boards": 10,
-    "stock_basic": 5532,
+    "stock_basic": 5534,
     "top_list": 125,
     "moneyflow_hsgt": 0
   },
@@ -28,27 +28,27 @@
     "size": 10,
     "top5": [
       {
-        "industry": "化工原料",
+        "industry": "化学制品",
         "theme_heat": 1.0,
         "board_rank": 1
       },
       {
-        "industry": "元器件",
+        "industry": "化学制药",
         "theme_heat": 0.7946272018253463,
         "board_rank": 2
       },
       {
-        "industry": "化学制药",
+        "industry": "IT服务Ⅱ",
         "theme_heat": 0.6230854212758787,
         "board_rank": 3
       },
       {
-        "industry": "软件服务",
+        "industry": "一般零售",
         "theme_heat": 0.479801681970459,
         "board_rank": 4
       },
       {
-        "industry": "专用机械",
+        "industry": "养殖业",
         "theme_heat": 0.36012104274902346,
         "board_rank": 5
       }
@@ -59,9 +59,9 @@
     "candidate_code_col": "ts_code",
     "theme_main_before_ratio": 1.0,
     "theme_main_after_ratio": 1.0,
-    "matched_industry_count": 67,
+    "matched_industry_count": 58,
     "matched_industry_exact": 0,
-    "matched_industry_norm": 67,
+    "matched_industry_norm": 58,
     "matched_industry_fuzzy": 0,
     "lhb_hits": 33,
     "north_hits": 0,
@@ -69,13 +69,13 @@
   },
   "diagnosis": "theme boost applied",
   "quality_distribution": {
-    "C": 86,
-    "A": 67
+    "C": 95,
+    "A": 58
   },
   "missing_rate": {
     "theme_main": 0.0,
-    "theme_heat": 0.5620915032679739,
-    "board_rank": 0.5620915032679739,
+    "theme_heat": 0.6209150326797386,
+    "board_rank": 0.6209150326797386,
     "lhb_net_buy": 0.7843137254901961,
     "ThemeBoost": 0.0
   }

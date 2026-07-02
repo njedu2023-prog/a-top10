@@ -17,7 +17,7 @@
 ## Missing rate
 - close: 0.0000
 - pct_chg: 0.0000
-- amount: 0.0000
+- amount: 1.0000
 - turnover_rate: 0.0000
 - seal_amount: 0.0000
 - open_times: 0.0000
@@ -54,7 +54,10 @@
 - A: 153
 
 ## Duplicate contract columns after closeout
-- none
+- amount_x
+- total_mv_x
+- amount_y
+- total_mv_y
 
 ```json
 {
@@ -73,7 +76,7 @@
   "missing_rate": {
     "close": 0.0,
     "pct_chg": 0.0,
-    "amount": 0.0,
+    "amount": 1.0,
     "turnover_rate": 0.0,
     "seal_amount": 0.0,
     "open_times": 0.0,
@@ -109,6 +112,11 @@
   "quality_distribution": {
     "A": 153
   },
-  "duplicate_contract_cols_after_closeout": []
+  "duplicate_contract_cols_after_closeout": [
+    "amount_x",
+    "total_mv_x",
+    "amount_y",
+    "total_mv_y"
+  ]
 }
 ```
