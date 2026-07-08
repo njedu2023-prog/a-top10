@@ -1,18 +1,18 @@
 # Step3 Debug Report
 
-- trade_date: `20260707`
-- rows: 33
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260707`
+- trade_date: `20260708`
+- rows: 48
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260708`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5517
-- daily_basic.csv: 5595
-- top_list.csv: 90
+- daily.csv: 5518
+- daily_basic.csv: 5596
+- top_list.csv: 93
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 33
+- limit_list_d.csv: 48
 - limit_break_d.csv: 0
-- stk_limit.csv: 7679
+- stk_limit.csv: 7686
 
 ## Missing rate
 - close: 0.0000
@@ -46,12 +46,12 @@
 ## Nonzero rate
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
-- open_times: 0.4545
-- intraday_available: 1.0000
-- auction_available: 1.0000
+- open_times: 0.4583
+- intraday_available: 0.6042
+- auction_available: 0.9792
 
 ## Strength quality distribution
-- A: 33
+- A: 48
 
 ## Duplicate contract columns after closeout
 - amount_x
@@ -61,17 +61,17 @@
 
 ```json
 {
-  "trade_date": "20260707",
+  "trade_date": "20260708",
   "step": "step3_strength_score_v3_closeout",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260707",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260708",
   "files": {
-    "daily.csv": 5517,
-    "daily_basic.csv": 5595,
-    "top_list.csv": 90,
+    "daily.csv": 5518,
+    "daily_basic.csv": 5596,
+    "top_list.csv": 93,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 33,
+    "limit_list_d.csv": 48,
     "limit_break_d.csv": 0,
-    "stk_limit.csv": 7679
+    "stk_limit.csv": 7686
   },
   "missing_rate": {
     "close": 0.0,
@@ -105,12 +105,12 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
-    "open_times": 0.45454545454545453,
-    "intraday_available": 1.0,
-    "auction_available": 1.0
+    "open_times": 0.4583333333333333,
+    "intraday_available": 0.6041666666666666,
+    "auction_available": 0.9791666666666666
   },
   "quality_distribution": {
-    "A": 33
+    "A": 48
   },
   "duplicate_contract_cols_after_closeout": [
     "amount_x",
