@@ -1,5 +1,5 @@
 {
-  "trade_date": "20260709",
+  "trade_date": "20260710",
   "intraday_features_in_ml": [
     "limitup_quality_score",
     "intraday_quality_score",
@@ -24,6 +24,6 @@
     "auction_available_ratio": 1.0
   },
   "prob_source_counts": {
-    "fallback_rule": 74
+    "fallback_rule": 91
   }
 }

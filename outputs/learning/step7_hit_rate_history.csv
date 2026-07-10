@@ -107,4 +107,5 @@
 20260706,20260707,10,0,0.0,src=feature_history_v3
 20260707,20260708,10,2,0.2,src=feature_history_v3
 20260708,20260709,10,1,0.1,src=feature_history_v3
-20260709,,0,,,pending_or_no_mature_rows
+20260709,20260710,10,1,0.1,src=feature_history_v3
+20260710,,0,,,pending_or_no_mature_rows
