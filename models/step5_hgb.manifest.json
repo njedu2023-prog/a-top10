@@ -1,0 +1,33 @@
+{
+  "contract_schema_version": 1,
+  "feature_schema_version": "step5_core_features_v1",
+  "features": [
+    "StrengthScore",
+    "ThemeBoost",
+    "seal_amount",
+    "open_times",
+    "turnover_rate"
+  ],
+  "model_kind": "hist_gradient_boosting",
+  "probability_is_calibrated": true,
+  "created_at_utc": "2026-07-11T11:44:16Z",
+  "calibration": {
+    "method": "sigmoid",
+    "split": "trailing_trade_dates",
+    "unique_trade_dates": 108,
+    "validation": {
+      "holdout_start": "20260625",
+      "holdout_days": 11,
+      "holdout_rows": 968,
+      "brier": 0.11349662240975589,
+      "constant_base_rate_brier": 0.11654476790913645,
+      "p_at_1": 0.7272727272727273,
+      "positive_rate": 0.1322314049586777
+    },
+    "reason": "ok",
+    "calibration_start": "20260609",
+    "train_rows": 5807,
+    "calibration_rows": 2110,
+    "calibration_days": 22
+  }
+}

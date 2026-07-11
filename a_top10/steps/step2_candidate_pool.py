@@ -205,9 +205,8 @@ def _filter_close_limit_up(df: pd.DataFrame, enabled: bool = True) -> tuple[pd.D
     if lt_col:
         lt = _safe_series(out, lt_col).str.upper()
         lt_mask = lt.isin(["U", "UP", "1", "ZT", "涨停", "UP_LIMIT", "LIMIT_UP"])
-        if lt_mask.any():
-            mask &= lt_mask
-            method.append(f"{lt_col}=limit_up")
+        mask &= lt_mask
+        method.append(f"{lt_col}=limit_up")
 
     status_col = _first_existing_col(out, ["limit_status", "status", "封板状态", "状态"])
     if status_col:
@@ -223,13 +222,14 @@ def _filter_close_limit_up(df: pd.DataFrame, enabled: bool = True) -> tuple[pd.D
         close = pd.to_numeric(out[close_col], errors="coerce")
         up_limit = pd.to_numeric(out[up_col], errors="coerce")
         price_mask = close.notna() & up_limit.notna() & (close >= up_limit * 0.999)
-        if price_mask.any():
-            mask &= price_mask
-            method.append("close>=up_limit")
+        mask &= price_mask
+        method.append("close>=up_limit")
 
     if not method:
-        stats["method"] = "trusted_limit_list_d"
-        return out, stats
+        raise RuntimeError(
+            "candidate pool cannot prove close limit-up status: "
+            "missing limit_type and close/up_limit evidence"
+        )
 
     out = out.loc[mask].copy()
     stats["method"] = "+".join(method)
@@ -441,7 +441,7 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
 
     candidates_df = _finalize_schema(base_df)
     candidates_df, filter_stats = _filter_bad_names(candidates_df)
-    debug["filters"] = filter_stats
+    debug["filters"].update(filter_stats)
 
     limit_stage = ctx.get("limit_stage")
     candidates_df, stage_dbg = _merge_limit_stage(

@@ -11,6 +11,11 @@ Step5 : ML Probability — Top10 V3
     - prob_lgbm
     - prob_rule
     - Probability
+    - rank_score
+    - probability_is_calibrated
+    - probability_semantics
+    - model_contract_status
+    - model_contract_reason
     - _prob_src
 - 其中：
     - Probability = 最终主排序概率轴
@@ -28,6 +33,8 @@ Step5 : ML Probability — Top10 V3
 V3 原则：
 - Step5 内部计算允许对缺失特征做数值兜底，但不得污染上游契约字段
 - 若 ML 模型不可用，则必须显式回退到 prob_rule，并写明 _prob_src
+- prob_rule 仅是未校准排序分；兼容列 Probability 不代表已校准概率
+- 模型推理前必须通过有序特征契约，拒绝原因和推理错误必须可审计
 - 若 Probability 无法得到，则样本不应被当作正常概率样本消费
 - Step5 不再越权写 feature_history.csv；正式样本落库由 writers.py / Step7 负责
 """
@@ -54,6 +61,10 @@ except Exception:
     joblib = None
 
 from sklearn.linear_model import LogisticRegression
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.base import clone
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.model_selection import PredefinedSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -67,12 +78,15 @@ except Exception:
 # Config
 # =========================================================
 
-FEATURES = [
+CORE_FEATURES = [
     "StrengthScore",
     "ThemeBoost",
     "seal_amount",
     "open_times",
     "turnover_rate",
+]
+
+FEATURES = CORE_FEATURES + [
     "limitup_quality_score",
     "intraday_quality_score",
     "intraday_soft_risk_score",
@@ -90,6 +104,16 @@ FEATURES = [
     "intraday_available",
     "auction_available",
 ]
+
+# Existing bare estimators remain supported through sklearn metadata. New
+# artifacts may additionally carry this manifest, either as an estimator
+# attribute or as {"model": estimator, "manifest": {...}}.
+MODEL_CONTRACT_SCHEMA_VERSION = 1
+MODEL_FEATURE_SCHEMA_VERSION = "step5_features_v1"
+CORE_FEATURE_SCHEMA_VERSION = "step5_core_features_v1"
+MODEL_MANIFEST_ATTR = "step5_model_manifest_"
+FEATURE_CONTRACT = tuple(FEATURES)
+CORE_FEATURE_CONTRACT = tuple(CORE_FEATURES)
 
 VALID_RUN_MODES = {"replay", "train", "auto_daily"}
 
@@ -160,7 +184,7 @@ def _clip01(s: pd.Series | np.ndarray | float) -> pd.Series:
 
 def _utc_now_iso() -> str:
     try:
-        return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        return pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
         return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -453,7 +477,312 @@ def _ensure_inference_input(df: pd.DataFrame) -> pd.DataFrame:
 class Step5ModelPaths:
     base: Path
     lr_path: Path
+    hgb_path: Path
     lgbm_path: Path
+
+
+@dataclass(frozen=True)
+class ModelArtifactError:
+    status: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ModelContractCheck:
+    status: str
+    reason: str
+    expected_feature_count: int
+    actual_feature_count: Optional[int]
+    expected_features: Tuple[str, ...]
+    actual_features: Tuple[str, ...]
+    manifest_schema_version: Optional[str]
+    feature_schema_version: Optional[str]
+    probability_is_calibrated: bool
+
+    @property
+    def is_valid(self) -> bool:
+        return self.status == "valid"
+
+
+@dataclass
+class ModelPredictionResult:
+    values: pd.Series
+    contract: ModelContractCheck
+    prediction_status: str
+    prediction_error: str = ""
+
+
+def _empty_model_contract(
+    status: str,
+    reason: str,
+    expected_features: Sequence[str] = FEATURE_CONTRACT,
+) -> ModelContractCheck:
+    expected = tuple(str(x) for x in expected_features)
+    return ModelContractCheck(
+        status=status,
+        reason=reason,
+        expected_feature_count=len(expected),
+        actual_feature_count=None,
+        expected_features=expected,
+        actual_features=(),
+        manifest_schema_version=None,
+        feature_schema_version=None,
+        probability_is_calibrated=False,
+    )
+
+
+def _model_manifest(model: Any) -> Dict[str, Any]:
+    if isinstance(model, dict):
+        raw = model.get("manifest", model.get("model_manifest", {}))
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    for attr in [MODEL_MANIFEST_ATTR, "model_manifest_", "manifest_"]:
+        raw = getattr(model, attr, None)
+        if isinstance(raw, dict):
+            return dict(raw)
+    return {}
+
+
+def _unwrap_model(model: Any) -> Any:
+    if isinstance(model, dict) and "model" in model:
+        return model.get("model")
+    return model
+
+
+def _manifest_value(manifest: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in manifest:
+            return manifest.get(key)
+    return None
+
+
+def _normalize_feature_contract(raw: Any) -> Tuple[str, ...]:
+    if raw is None or isinstance(raw, (str, bytes)):
+        return ()
+    try:
+        return tuple(str(x) for x in list(raw))
+    except Exception:
+        return ()
+
+
+def _feature_schema_version(features: Sequence[str]) -> str:
+    contract = tuple(str(x) for x in features)
+    if contract == CORE_FEATURE_CONTRACT:
+        return CORE_FEATURE_SCHEMA_VERSION
+    return MODEL_FEATURE_SCHEMA_VERSION
+
+
+def _model_feature_contract(model: Any) -> Tuple[str, ...]:
+    """Use only a versioned supported manifest to select a reduced contract."""
+    manifest_features = _normalize_feature_contract(
+        _manifest_value(_model_manifest(model), "features", "feature_names", "feature_names_in")
+    )
+    if manifest_features in {CORE_FEATURE_CONTRACT, FEATURE_CONTRACT}:
+        return manifest_features
+    # Bare legacy models are intentionally checked against the full V3
+    # contract, so an old anonymous five-column artifact cannot be guessed.
+    return FEATURE_CONTRACT
+
+
+def _feature_mismatch_reason(expected: Sequence[str], actual: Sequence[str]) -> str:
+    expected_list = [str(x) for x in expected]
+    actual_list = [str(x) for x in actual]
+    missing = [x for x in expected_list if x not in actual_list]
+    unexpected = [x for x in actual_list if x not in expected_list]
+    order_mismatch = not missing and not unexpected and expected_list != actual_list
+    return (
+        f"expected_features={expected_list}; actual_features={actual_list}; "
+        f"missing_features={missing}; unexpected_features={unexpected}; "
+        f"order_mismatch={str(order_mismatch).lower()}"
+    )
+
+
+def _validate_model_contract(
+    model: Any,
+    expected_features: Sequence[str] = FEATURE_CONTRACT,
+) -> ModelContractCheck:
+    expected = tuple(str(x) for x in expected_features)
+    if isinstance(model, ModelArtifactError):
+        return _empty_model_contract(model.status, model.reason, expected)
+
+    estimator = _unwrap_model(model)
+    manifest = _model_manifest(model)
+
+    if estimator is None:
+        return _empty_model_contract("model_missing", "model artifact is missing", expected)
+
+    manifest_schema_raw = _manifest_value(manifest, "contract_schema_version", "schema_version")
+    manifest_schema = str(manifest_schema_raw) if manifest_schema_raw is not None else None
+    feature_schema_raw = _manifest_value(manifest, "feature_schema_version", "features_schema_version")
+    feature_schema = str(feature_schema_raw) if feature_schema_raw is not None else None
+    calibrated = bool(manifest.get("probability_is_calibrated", False))
+
+    if manifest_schema is not None and manifest_schema != str(MODEL_CONTRACT_SCHEMA_VERSION):
+        return ModelContractCheck(
+            status="manifest_schema_unsupported",
+            reason=(
+                f"expected_contract_schema_version={MODEL_CONTRACT_SCHEMA_VERSION}; "
+                f"actual_contract_schema_version={manifest_schema}"
+            ),
+            expected_feature_count=len(expected),
+            actual_feature_count=None,
+            expected_features=expected,
+            actual_features=(),
+            manifest_schema_version=manifest_schema,
+            feature_schema_version=feature_schema,
+            probability_is_calibrated=False,
+        )
+
+    expected_feature_schema = _feature_schema_version(expected)
+    if feature_schema is not None and feature_schema != expected_feature_schema:
+        return ModelContractCheck(
+            status="feature_schema_mismatch",
+            reason=(
+                f"expected_feature_schema_version={expected_feature_schema}; "
+                f"actual_feature_schema_version={feature_schema}"
+            ),
+            expected_feature_count=len(expected),
+            actual_feature_count=None,
+            expected_features=expected,
+            actual_features=(),
+            manifest_schema_version=manifest_schema,
+            feature_schema_version=feature_schema,
+            probability_is_calibrated=False,
+        )
+
+    manifest_features = _normalize_feature_contract(
+        _manifest_value(manifest, "features", "feature_names", "feature_names_in")
+    )
+    if manifest_features and manifest_features != expected:
+        return ModelContractCheck(
+            status="manifest_feature_mismatch",
+            reason=_feature_mismatch_reason(expected, manifest_features),
+            expected_feature_count=len(expected),
+            actual_feature_count=len(manifest_features),
+            expected_features=expected,
+            actual_features=manifest_features,
+            manifest_schema_version=manifest_schema,
+            feature_schema_version=feature_schema,
+            probability_is_calibrated=False,
+        )
+
+    actual_count: Optional[int] = None
+    raw_count = getattr(estimator, "n_features_in_", None)
+    if raw_count is not None:
+        try:
+            actual_count = int(raw_count)
+        except (TypeError, ValueError):
+            return ModelContractCheck(
+                status="invalid_feature_count_metadata",
+                reason=f"n_features_in_ is not an integer: {raw_count!r}",
+                expected_feature_count=len(expected),
+                actual_feature_count=None,
+                expected_features=expected,
+                actual_features=(),
+                manifest_schema_version=manifest_schema,
+                feature_schema_version=feature_schema,
+                probability_is_calibrated=False,
+            )
+
+    actual_features = _normalize_feature_contract(getattr(estimator, "feature_names_in_", None))
+    if actual_count is None and actual_features:
+        actual_count = len(actual_features)
+
+    if actual_count is not None and actual_count != len(expected):
+        return ModelContractCheck(
+            status="feature_count_mismatch",
+            reason=f"expected_feature_count={len(expected)}; actual_feature_count={actual_count}",
+            expected_feature_count=len(expected),
+            actual_feature_count=actual_count,
+            expected_features=expected,
+            actual_features=actual_features,
+            manifest_schema_version=manifest_schema,
+            feature_schema_version=feature_schema,
+            probability_is_calibrated=False,
+        )
+
+    if actual_features and actual_features != expected:
+        return ModelContractCheck(
+            status="feature_names_mismatch",
+            reason=_feature_mismatch_reason(expected, actual_features),
+            expected_feature_count=len(expected),
+            actual_feature_count=actual_count,
+            expected_features=expected,
+            actual_features=actual_features,
+            manifest_schema_version=manifest_schema,
+            feature_schema_version=feature_schema,
+            probability_is_calibrated=False,
+        )
+
+    if actual_count is None and not actual_features and not manifest_features:
+        return ModelContractCheck(
+            status="feature_metadata_missing",
+            reason="model has no n_features_in_, feature_names_in_, or manifest feature contract",
+            expected_feature_count=len(expected),
+            actual_feature_count=None,
+            expected_features=expected,
+            actual_features=(),
+            manifest_schema_version=manifest_schema,
+            feature_schema_version=feature_schema,
+            probability_is_calibrated=False,
+        )
+
+    return ModelContractCheck(
+        status="valid",
+        reason="ordered feature contract validated",
+        expected_feature_count=len(expected),
+        actual_feature_count=actual_count if actual_count is not None else len(manifest_features),
+        expected_features=expected,
+        actual_features=actual_features or manifest_features,
+        manifest_schema_version=manifest_schema,
+        feature_schema_version=feature_schema,
+        probability_is_calibrated=calibrated,
+    )
+
+
+def _build_model_manifest(
+    model_kind: str,
+    *,
+    features: Sequence[str] = FEATURE_CONTRACT,
+    probability_is_calibrated: bool = False,
+    calibration: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    contract = tuple(str(x) for x in features)
+    manifest = {
+        "contract_schema_version": MODEL_CONTRACT_SCHEMA_VERSION,
+        "feature_schema_version": _feature_schema_version(contract),
+        "features": list(contract),
+        "model_kind": str(model_kind),
+        "probability_is_calibrated": bool(probability_is_calibrated),
+        "created_at_utc": _utc_now_iso(),
+    }
+    if calibration:
+        manifest["calibration"] = dict(calibration)
+    return manifest
+
+
+def _attach_model_manifest(
+    model: Any,
+    model_kind: str,
+    *,
+    features: Sequence[str] = FEATURE_CONTRACT,
+    probability_is_calibrated: bool = False,
+    calibration: Optional[Dict[str, Any]] = None,
+) -> Any:
+    try:
+        setattr(
+            model,
+            MODEL_MANIFEST_ATTR,
+            _build_model_manifest(
+                model_kind,
+                features=features,
+                probability_is_calibrated=probability_is_calibrated,
+                calibration=calibration,
+            ),
+        )
+    except Exception:
+        pass
+    return model
 
 
 def _get_model_paths(s=None) -> Step5ModelPaths:
@@ -474,17 +803,26 @@ def _get_model_paths(s=None) -> Step5ModelPaths:
     return Step5ModelPaths(
         base=base,
         lr_path=base / "step5_lr.joblib",
+        hgb_path=base / "step5_hgb.joblib",
         lgbm_path=base / "step5_lgbm.joblib",
     )
 
 
 def _load_joblib(path: Path):
-    if joblib is None or not path.exists():
+    if not path.exists():
         return None
+    if joblib is None:
+        return ModelArtifactError(
+            status="joblib_unavailable",
+            reason=f"cannot load model artifact {path}: joblib is unavailable",
+        )
     try:
         return joblib.load(path)
-    except Exception:
-        return None
+    except Exception as exc:
+        return ModelArtifactError(
+            status="model_load_error",
+            reason=f"cannot load model artifact {path}: {type(exc).__name__}: {exc}",
+        )
 
 
 def _save_joblib(obj: Any, path: Path) -> None:
@@ -492,12 +830,23 @@ def _save_joblib(obj: Any, path: Path) -> None:
         return
     try:
         joblib.dump(obj, path)
+        manifest = _model_manifest(obj)
+        if manifest:
+            manifest_path = path.with_suffix(".manifest.json")
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
     except Exception:
         pass
 
 
 def load_lr(s=None):
     return _load_joblib(_get_model_paths(s).lr_path)
+
+
+def load_hgb(s=None):
+    return _load_joblib(_get_model_paths(s).hgb_path)
 
 
 def load_lgbm(s=None):
@@ -522,18 +871,54 @@ def _load_feature_history(s) -> pd.DataFrame:
             return pd.DataFrame()
 
 
-def _sample_feature_coverage(df: pd.DataFrame) -> float:
+def _sample_feature_coverage(
+    df: pd.DataFrame,
+    feature_names: Sequence[str] = FEATURE_CONTRACT,
+) -> float:
     if df is None or df.empty:
         return 0.0
 
     coverages = []
-    for c in FEATURES:
+    for c in feature_names:
         if c not in df.columns:
             coverages.append(0.0)
             continue
         s = pd.to_numeric(df[c], errors="coerce")
         coverages.append(float(s.notna().mean()))
     return float(np.mean(coverages)) if coverages else 0.0
+
+
+def _select_training_feature_contract(
+    df: pd.DataFrame,
+    min_feature_coverage: float,
+) -> Tuple[Tuple[str, ...], Dict[str, float | str]]:
+    core_coverage = _sample_feature_coverage(df, CORE_FEATURE_CONTRACT)
+    enhanced_coverage = _sample_feature_coverage(df, FEATURE_CONTRACT)
+    intraday_rate = float(
+        pd.to_numeric(
+            df.get("intraday_available", pd.Series(0.0, index=df.index)),
+            errors="coerce",
+        ).fillna(0).gt(0).mean()
+    ) if len(df) else 0.0
+    auction_rate = float(
+        pd.to_numeric(
+            df.get("auction_available", pd.Series(0.0, index=df.index)),
+            errors="coerce",
+        ).fillna(0).gt(0).mean()
+    ) if len(df) else 0.0
+    use_enhanced = (
+        enhanced_coverage >= float(min_feature_coverage)
+        and intraday_rate >= 0.60
+        and auction_rate >= 0.60
+    )
+    contract = FEATURE_CONTRACT if use_enhanced else CORE_FEATURE_CONTRACT
+    return contract, {
+        "feature_mode": "enhanced" if use_enhanced else "core",
+        "core_feature_coverage": core_coverage,
+        "enhanced_feature_coverage": enhanced_coverage,
+        "intraday_available_rate": intraday_rate,
+        "auction_available_rate": auction_rate,
+    }
 
 
 def _resolve_eligible_trade_dates(explicit: Optional[Sequence[str]] = None) -> Optional[set[str]]:
@@ -567,12 +952,14 @@ def _build_X_y_from_feature_history(
 
     required = {"trade_date", "ts_code", "y_limit_hit", "is_sample_mature"}
     if hist.empty or not required.issubset(set(hist.columns)):
-        return np.zeros((0, len(FEATURES))), np.zeros((0,)), {
+        return np.zeros((0, len(CORE_FEATURES))), np.zeros((0,)), {
             "mature_samples": 0,
             "positive_samples": 0,
             "feature_coverage": 0.0,
             "reason": "feature_history_missing_or_unlabeled",
             "eligible_trade_dates_count": 0,
+            "features": list(CORE_FEATURE_CONTRACT),
+            "sample_trade_dates": [],
         }
 
     eligible_set = _resolve_eligible_trade_dates(eligible_trade_dates)
@@ -585,8 +972,15 @@ def _build_X_y_from_feature_history(
     if lookback > 0:
         dates = dates[-lookback:]
 
+    selected_hist = hist[hist["trade_date"].isin(dates)].copy()
+    feature_names, selection_meta = _select_training_feature_contract(
+        selected_hist,
+        min_feature_coverage=_get_training_policy(s).min_feature_coverage,
+    )
+
     rows = []
     y = []
+    sample_trade_dates: List[str] = []
     coverage_list = []
 
     for d in dates:
@@ -606,22 +1000,26 @@ def _build_X_y_from_feature_history(
         if df_day.empty:
             continue
 
-        coverage_list.append(_sample_feature_coverage(df_day))
+        coverage_list.append(_sample_feature_coverage(df_day, feature_names))
 
         feat = _ensure_inference_input(df_day)
         yy = pd.to_numeric(df_day["y_limit_hit"], errors="coerce").fillna(0.0).astype(int)
 
         for i in range(len(df_day)):
-            rows.append(feat[FEATURES].iloc[i].astype(float).values)
+            rows.append(feat[list(feature_names)].iloc[i].astype(float).values)
             y.append(int(yy.iloc[i]))
+            sample_trade_dates.append(str(d))
 
     if not rows:
-        return np.zeros((0, len(FEATURES))), np.zeros((0,)), {
+        return np.zeros((0, len(feature_names))), np.zeros((0,)), {
             "mature_samples": 0,
             "positive_samples": 0,
             "feature_coverage": 0.0,
             "reason": "no_mature_labeled_rows",
             "eligible_trade_dates_count": len(eligible_set) if eligible_set is not None else 0,
+            "features": list(feature_names),
+            "sample_trade_dates": [],
+            **selection_meta,
         }
 
     X = np.asarray(rows, dtype=float)
@@ -632,6 +1030,9 @@ def _build_X_y_from_feature_history(
         "feature_coverage": float(np.mean(coverage_list)) if coverage_list else 0.0,
         "reason": "ok",
         "eligible_trade_dates_count": len(eligible_set) if eligible_set is not None else 0,
+        "features": list(feature_names),
+        "sample_trade_dates": sample_trade_dates,
+        **selection_meta,
     }
     return X, yy, meta
 
@@ -673,6 +1074,112 @@ def _training_gate_summary(
     return summary
 
 
+def _fit_time_calibrated_model(
+    estimator: Any,
+    X: pd.DataFrame,
+    y: np.ndarray,
+    sample_trade_dates: Sequence[str],
+) -> Tuple[Optional[Any], Dict[str, Any]]:
+    """Fit on earlier dates and calibrate on a trailing, non-overlapping window."""
+    dates = np.asarray([str(x) for x in sample_trade_dates], dtype=object)
+    unique_dates = sorted(set(dates.tolist()))
+    meta: Dict[str, Any] = {
+        "method": "sigmoid",
+        "split": "trailing_trade_dates",
+        "unique_trade_dates": len(unique_dates),
+    }
+    if len(dates) != len(y) or len(unique_dates) < 12:
+        meta["reason"] = "insufficient_trade_dates_for_calibration"
+        return None, meta
+
+    # First run an untouched trailing validation. This is the promotion gate;
+    # those labels are not used by the candidate model or its calibrator.
+    holdout_days = max(3, int(np.ceil(len(unique_dates) * 0.10)))
+    holdout_days = min(holdout_days, len(unique_dates) - 8)
+    holdout_start = unique_dates[-holdout_days]
+    fit_mask = dates < holdout_start
+    holdout_mask = ~fit_mask
+    fit_dates = sorted(set(dates[fit_mask].tolist()))
+    validation_calibration_days = max(4, int(np.ceil(len(fit_dates) * 0.20)))
+    validation_calibration_days = min(validation_calibration_days, len(fit_dates) - 3)
+    validation_calibration_start = fit_dates[-validation_calibration_days]
+    validation_test_fold = np.where(
+        dates[fit_mask] >= validation_calibration_start,
+        0,
+        -1,
+    )
+    validation_train_y = y[fit_mask][validation_test_fold < 0]
+    validation_calibration_y = y[fit_mask][validation_test_fold == 0]
+    holdout_y = y[holdout_mask]
+    if (
+        len(np.unique(validation_train_y)) < 2
+        or len(np.unique(validation_calibration_y)) < 2
+        or len(np.unique(holdout_y)) < 2
+    ):
+        meta["reason"] = "validation_split_single_class"
+        return None, meta
+
+    candidate = CalibratedClassifierCV(
+        estimator=clone(estimator),
+        method="sigmoid",
+        cv=PredefinedSplit(test_fold=validation_test_fold),
+        ensemble=True,
+    )
+    candidate.fit(X.loc[fit_mask], y[fit_mask])
+    holdout_prob = np.asarray(candidate.predict_proba(X.loc[holdout_mask]))[:, 1]
+    holdout_brier = float(np.mean((holdout_prob - holdout_y) ** 2))
+    baseline_prob = float(np.mean(validation_train_y))
+    baseline_brier = float(np.mean((baseline_prob - holdout_y) ** 2))
+    p_at_1_hits: List[int] = []
+    holdout_dates = dates[holdout_mask]
+    for day in sorted(set(holdout_dates.tolist())):
+        day_pos = np.flatnonzero(holdout_dates == day)
+        if len(day_pos):
+            p_at_1_hits.append(int(holdout_y[day_pos[int(np.argmax(holdout_prob[day_pos]))]]))
+    holdout_p_at_1 = float(np.mean(p_at_1_hits)) if p_at_1_hits else 0.0
+    meta["validation"] = {
+        "holdout_start": holdout_start,
+        "holdout_days": int(holdout_days),
+        "holdout_rows": int(holdout_mask.sum()),
+        "brier": holdout_brier,
+        "constant_base_rate_brier": baseline_brier,
+        "p_at_1": holdout_p_at_1,
+        "positive_rate": float(np.mean(holdout_y)),
+    }
+    if holdout_brier > min(0.30, baseline_brier * 1.20):
+        meta["reason"] = "validation_brier_gate_failed"
+        return None, meta
+
+    calibration_days = max(5, int(np.ceil(len(unique_dates) * 0.20)))
+    calibration_days = min(calibration_days, len(unique_dates) - 3)
+    calibration_start = unique_dates[-calibration_days]
+    is_calibration = dates >= calibration_start
+    train_y = y[~is_calibration]
+    calibration_y = y[is_calibration]
+    if len(np.unique(train_y)) < 2 or len(np.unique(calibration_y)) < 2:
+        meta["reason"] = "calibration_split_single_class"
+        return None, meta
+
+    test_fold = np.where(is_calibration, 0, -1)
+    calibrated = CalibratedClassifierCV(
+        estimator=clone(estimator),
+        method="sigmoid",
+        cv=PredefinedSplit(test_fold=test_fold),
+        ensemble=True,
+    )
+    calibrated.fit(X, y)
+    meta.update(
+        {
+            "reason": "ok",
+            "calibration_start": calibration_start,
+            "train_rows": int((~is_calibration).sum()),
+            "calibration_rows": int(is_calibration.sum()),
+            "calibration_days": int(calibration_days),
+        }
+    )
+    return calibrated, meta
+
+
 def train_step5_lr(
     s,
     lookback: int = 120,
@@ -698,6 +1205,17 @@ def train_step5_lr(
     )
     summary["data_reason"] = meta.get("reason", "")
     summary["eligible_trade_dates_count"] = int(meta.get("eligible_trade_dates_count", 0))
+    for key in [
+        "feature_mode",
+        "core_feature_coverage",
+        "enhanced_feature_coverage",
+        "intraday_available_rate",
+        "auction_available_rate",
+    ]:
+        summary[key] = meta.get(key)
+    feature_names = tuple(meta.get("features") or CORE_FEATURE_CONTRACT)
+    summary["features"] = list(feature_names)
+    summary["feature_schema_version"] = _feature_schema_version(feature_names)
 
     if not summary.get("ok"):
         return summary
@@ -712,7 +1230,24 @@ def train_step5_lr(
             ("lr", LogisticRegression(max_iter=300, class_weight="balanced")),
         ]
     )
-    model.fit(X, y)
+    train_X = pd.DataFrame(X, columns=feature_names)
+    model, calibration_meta = _fit_time_calibrated_model(
+        model,
+        train_X,
+        y,
+        meta.get("sample_trade_dates") or [],
+    )
+    summary["calibration"] = calibration_meta
+    if model is None:
+        summary.update({"ok": False, "trained": False, "updated": False, "reason": calibration_meta.get("reason")})
+        return summary
+    _attach_model_manifest(
+        model,
+        "logistic",
+        features=feature_names,
+        probability_is_calibrated=True,
+        calibration=calibration_meta,
+    )
     summary["trained"] = True
 
     level = str(summary.get("level", ""))
@@ -730,6 +1265,91 @@ def train_step5_lr(
     _save_joblib(model, paths.lr_path)
     summary["updated"] = True
     summary["path"] = str(paths.lr_path)
+    summary["reason"] = "formal_model_updated"
+    return summary
+
+
+def train_step5_hgb(
+    s,
+    lookback: int = 150,
+    theme_file_name: str = "step4_theme.csv",
+    eligible_trade_dates: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Train the production nonlinear core model without optional native libs."""
+    policy = _get_training_policy(s)
+    X, y, meta = _build_X_y_from_feature_history(
+        s,
+        lookback=lookback,
+        eligible_trade_dates=eligible_trade_dates,
+    )
+    summary = _training_gate_summary(
+        n_samples=int(meta.get("mature_samples", 0)),
+        pos_samples=int(meta.get("positive_samples", 0)),
+        feature_coverage=float(meta.get("feature_coverage", 0.0)),
+        policy=policy,
+    )
+    summary["data_reason"] = meta.get("reason", "")
+    summary["eligible_trade_dates_count"] = int(meta.get("eligible_trade_dates_count", 0))
+    for key in [
+        "feature_mode",
+        "core_feature_coverage",
+        "enhanced_feature_coverage",
+        "intraday_available_rate",
+        "auction_available_rate",
+    ]:
+        summary[key] = meta.get(key)
+    feature_names = tuple(meta.get("features") or CORE_FEATURE_CONTRACT)
+    summary["features"] = list(feature_names)
+    summary["feature_schema_version"] = _feature_schema_version(feature_names)
+
+    if not summary.get("ok"):
+        return summary
+    if len(np.unique(y)) < 2:
+        summary.update({"ok": False, "trained": False, "updated": False, "reason": "single_class_labels"})
+        return summary
+
+    estimator = HistGradientBoostingClassifier(
+        max_iter=250,
+        learning_rate=0.05,
+        max_leaf_nodes=31,
+        min_samples_leaf=20,
+        l2_regularization=0.10,
+        random_state=42,
+    )
+    train_X = pd.DataFrame(X, columns=feature_names)
+    model, calibration_meta = _fit_time_calibrated_model(
+        estimator,
+        train_X,
+        y,
+        meta.get("sample_trade_dates") or [],
+    )
+    summary["calibration"] = calibration_meta
+    if model is None:
+        summary.update({"ok": False, "trained": False, "updated": False, "reason": calibration_meta.get("reason")})
+        return summary
+
+    _attach_model_manifest(
+        model,
+        "hist_gradient_boosting",
+        features=feature_names,
+        probability_is_calibrated=True,
+        calibration=calibration_meta,
+    )
+    summary["trained"] = True
+
+    if str(summary.get("level", "")) == "level1":
+        summary["updated"] = False
+        summary["reason"] = "level1_trial_training_no_formal_update"
+        return summary
+    if not summary.get("formal_update_allowed", False):
+        summary["updated"] = False
+        summary["reason"] = "model_update_not_allowed_by_run_mode"
+        return summary
+
+    paths = _get_model_paths(s=s)
+    _save_joblib(model, paths.hgb_path)
+    summary["updated"] = True
+    summary["path"] = str(paths.hgb_path)
     summary["reason"] = "formal_model_updated"
     return summary
 
@@ -764,6 +1384,17 @@ def train_step5_lgbm(
     )
     summary["data_reason"] = meta.get("reason", "")
     summary["eligible_trade_dates_count"] = int(meta.get("eligible_trade_dates_count", 0))
+    for key in [
+        "feature_mode",
+        "core_feature_coverage",
+        "enhanced_feature_coverage",
+        "intraday_available_rate",
+        "auction_available_rate",
+    ]:
+        summary[key] = meta.get(key)
+    feature_names = tuple(meta.get("features") or CORE_FEATURE_CONTRACT)
+    summary["features"] = list(feature_names)
+    summary["feature_schema_version"] = _feature_schema_version(feature_names)
 
     if not summary.get("ok"):
         return summary
@@ -780,7 +1411,24 @@ def train_step5_lgbm(
         colsample_bytree=0.85,
         random_state=42,
     )
-    model.fit(X, y)
+    train_X = pd.DataFrame(X, columns=feature_names)
+    model, calibration_meta = _fit_time_calibrated_model(
+        model,
+        train_X,
+        y,
+        meta.get("sample_trade_dates") or [],
+    )
+    summary["calibration"] = calibration_meta
+    if model is None:
+        summary.update({"ok": False, "trained": False, "updated": False, "reason": calibration_meta.get("reason")})
+        return summary
+    _attach_model_manifest(
+        model,
+        "lightgbm",
+        features=feature_names,
+        probability_is_calibrated=True,
+        calibration=calibration_meta,
+    )
     summary["trained"] = True
 
     level = str(summary.get("level", ""))
@@ -809,12 +1457,14 @@ def train_step5_models(
     eligible_trade_dates: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     res_lr = train_step5_lr(s, lookback=lookback, theme_file_name=theme_file_name, eligible_trade_dates=eligible_trade_dates)
+    res_hgb = train_step5_hgb(s, lookback=lookback, theme_file_name=theme_file_name, eligible_trade_dates=eligible_trade_dates)
     res_lgbm = train_step5_lgbm(s, lookback=lookback, theme_file_name=theme_file_name, eligible_trade_dates=eligible_trade_dates)
     return {
-        "ok": bool(res_lr.get("ok")) or bool(res_lgbm.get("ok")),
-        "updated": bool(res_lr.get("updated")) or bool(res_lgbm.get("updated")),
+        "ok": bool(res_lr.get("ok")) or bool(res_hgb.get("ok")) or bool(res_lgbm.get("ok")),
+        "updated": bool(res_lr.get("updated")) or bool(res_hgb.get("updated")) or bool(res_lgbm.get("updated")),
         "run_mode": _resolve_run_mode(),
         "lr": res_lr,
+        "hgb": res_hgb,
         "lgbm": res_lgbm,
     }
 
@@ -859,34 +1509,106 @@ def _calc_prob_rule(df: pd.DataFrame) -> pd.Series:
     return _clip01(rule)
 
 
-def _predict_with_model(model: Any, X: np.ndarray, index: pd.Index) -> pd.Series:
-    if model is None:
-        return pd.Series([np.nan] * len(index), index=index, dtype="float64")
+def _predict_with_model(
+    model: Any,
+    X: pd.DataFrame | np.ndarray,
+    index: pd.Index,
+    feature_names: Sequence[str] = FEATURE_CONTRACT,
+) -> ModelPredictionResult:
+    contract = _validate_model_contract(model, expected_features=feature_names)
+    empty = pd.Series([np.nan] * len(index), index=index, dtype="float64")
+    if not contract.is_valid:
+        return ModelPredictionResult(
+            values=empty,
+            contract=contract,
+            prediction_status="rejected",
+        )
+
+    estimator = _unwrap_model(model)
+    expected = tuple(str(x) for x in feature_names)
     try:
-        if hasattr(model, "predict_proba"):
-            proba = model.predict_proba(X)[:, 1]
+        if isinstance(X, pd.DataFrame):
+            missing = [c for c in expected if c not in X.columns]
+            if missing:
+                raise ValueError(f"inference input missing ordered features: {missing}")
+            model_input: pd.DataFrame | np.ndarray = X.loc[:, list(expected)]
         else:
-            proba = model.predict(X)
-        return _clip01(pd.Series(proba, index=index, dtype="float64"))
-    except Exception:
-        return pd.Series([np.nan] * len(index), index=index, dtype="float64")
+            model_input = np.asarray(X, dtype=float)
+            if model_input.ndim != 2 or model_input.shape[1] != len(expected):
+                shape = tuple(model_input.shape)
+                raise ValueError(
+                    f"inference input shape mismatch: expected_columns={len(expected)}; actual_shape={shape}"
+                )
+
+        if hasattr(estimator, "predict_proba"):
+            raw = np.asarray(estimator.predict_proba(model_input))
+            if raw.ndim != 2 or raw.shape[1] < 2:
+                raise ValueError(f"predict_proba must return at least two columns; actual_shape={raw.shape}")
+            predicted = raw[:, 1]
+        elif hasattr(estimator, "predict"):
+            predicted = np.asarray(estimator.predict(model_input))
+        else:
+            raise TypeError("model exposes neither predict_proba nor predict")
+
+        predicted = np.asarray(predicted, dtype=float).reshape(-1)
+        if len(predicted) != len(index):
+            raise ValueError(
+                f"prediction row count mismatch: expected_rows={len(index)}; actual_rows={len(predicted)}"
+            )
+        values = _clip01(pd.Series(predicted, index=index, dtype="float64"))
+        status = "ok" if values.notna().all() else "ok_with_missing_values"
+        return ModelPredictionResult(values=values, contract=contract, prediction_status=status)
+    except Exception as exc:
+        return ModelPredictionResult(
+            values=empty,
+            contract=contract,
+            prediction_status="error",
+            prediction_error=f"{type(exc).__name__}: {exc}",
+        )
 
 
-def _calc_prob_ml(df: pd.DataFrame, s=None) -> Tuple[pd.Series, pd.Series]:
+def _calc_prob_ml(
+    df: pd.DataFrame,
+    s=None,
+) -> Tuple[pd.Series, pd.Series, pd.Series, Dict[str, ModelPredictionResult]]:
     feat = _ensure_inference_input(df)
-    X = feat[FEATURES].astype(float).values
 
     lr_model = load_lr(s)
+    hgb_model = load_hgb(s)
     lgbm_model = load_lgbm(s)
 
-    prob_lr = _predict_with_model(lr_model, X, df.index)
-    prob_lgbm = _predict_with_model(lgbm_model, X, df.index)
-    return prob_lr, prob_lgbm
+    lr_features = _model_feature_contract(lr_model)
+    hgb_features = _model_feature_contract(hgb_model)
+    lgbm_features = _model_feature_contract(lgbm_model)
+    lr_result = _predict_with_model(
+        lr_model,
+        feat.loc[:, list(lr_features)].astype(float),
+        df.index,
+        feature_names=lr_features,
+    )
+    hgb_result = _predict_with_model(
+        hgb_model,
+        feat.loc[:, list(hgb_features)].astype(float),
+        df.index,
+        feature_names=hgb_features,
+    )
+    lgbm_result = _predict_with_model(
+        lgbm_model,
+        feat.loc[:, list(lgbm_features)].astype(float),
+        df.index,
+        feature_names=lgbm_features,
+    )
+    return lr_result.values, hgb_result.values, lgbm_result.values, {
+        "lr": lr_result,
+        "hgb": hgb_result,
+        "lgbm": lgbm_result,
+    }
 
 
 def _fuse_probabilities(
     prob_rule: pd.Series,
     prob_lr: pd.Series,
+    prob_hgb: pd.Series,
     prob_lgbm: pd.Series,
     s=None,
 ) -> Tuple[pd.Series, pd.Series]:
@@ -904,19 +1626,23 @@ def _fuse_probabilities(
     if model_pref == "logistic":
         ml_main = prob_lr
         ml_name = "lr"
+    elif model_pref in {"hgb", "hist_gradient_boosting"}:
+        ml_main = prob_hgb
+        ml_name = "hgb"
     elif model_pref == "lightgbm":
         ml_main = prob_lgbm
         ml_name = "lgbm"
     else:
+        hgb_ok = prob_hgb.notna()
         lgbm_ok = prob_lgbm.notna()
         lr_ok = prob_lr.notna()
-        ml_main = prob_lgbm.where(lgbm_ok, prob_lr)
+        ml_main = prob_hgb.where(hgb_ok, prob_lgbm.where(lgbm_ok, prob_lr))
         ml_name = None
 
     Probability = pd.Series([np.nan] * len(prob_rule), index=prob_rule.index, dtype="float64")
     src = pd.Series(["unresolved"] * len(prob_rule), index=prob_rule.index, dtype="object")
 
-    if model_pref in {"logistic", "lightgbm"}:
+    if model_pref in {"logistic", "hgb", "hist_gradient_boosting", "lightgbm"}:
         ml_ok = ml_main.notna()
 
         if fusion_mode == "weighted":
@@ -932,35 +1658,128 @@ def _fuse_probabilities(
                 src[:] = np.where(ml_ok, ml_name, "ml_missing")
 
     else:
+        hgb_ok = prob_hgb.notna()
         lgbm_ok = prob_lgbm.notna()
         lr_ok = prob_lr.notna()
 
         if fusion_mode == "weighted":
-            ml_any = prob_lgbm.where(lgbm_ok, prob_lr)
+            ml_any = prob_hgb.where(hgb_ok, prob_lgbm.where(lgbm_ok, prob_lr))
             Probability[:] = w_rule * prob_rule.fillna(0.0) + w_ml * ml_any.fillna(prob_rule.fillna(0.0))
             src[:] = np.where(
-                lgbm_ok,
-                "blend:lgbm+rule",
-                np.where(lr_ok, "blend:lr+rule", "fallback_rule"),
+                hgb_ok,
+                "blend:hgb+rule",
+                np.where(lgbm_ok, "blend:lgbm+rule", np.where(lr_ok, "blend:lr+rule", "fallback_rule")),
             )
         else:
             if fallback_to_rule:
                 Probability[:] = np.where(
-                    lgbm_ok,
-                    prob_lgbm,
-                    np.where(lr_ok, prob_lr, prob_rule),
+                    hgb_ok,
+                    prob_hgb,
+                    np.where(lgbm_ok, prob_lgbm, np.where(lr_ok, prob_lr, prob_rule)),
                 )
                 src[:] = np.where(
-                    lgbm_ok,
-                    "lgbm",
-                    np.where(lr_ok, "lr", "fallback_rule"),
+                    hgb_ok,
+                    "hgb",
+                    np.where(lgbm_ok, "lgbm", np.where(lr_ok, "lr", "fallback_rule")),
                 )
             else:
-                Probability[:] = np.where(lgbm_ok, prob_lgbm, prob_lr)
-                src[:] = np.where(lgbm_ok, "lgbm", np.where(lr_ok, "lr", "ml_missing"))
+                Probability[:] = np.where(hgb_ok, prob_hgb, np.where(lgbm_ok, prob_lgbm, prob_lr))
+                src[:] = np.where(hgb_ok, "hgb", np.where(lgbm_ok, "lgbm", np.where(lr_ok, "lr", "ml_missing")))
 
     Probability = _clip01(Probability.fillna(prob_rule.fillna(0.0)))
     return Probability.astype("float64"), src.astype("object")
+
+
+def _not_run_model_result(index: pd.Index, status: str, reason: str) -> ModelPredictionResult:
+    return ModelPredictionResult(
+        values=pd.Series([np.nan] * len(index), index=index, dtype="float64"),
+        contract=_empty_model_contract(status, reason),
+        prediction_status="not_run",
+    )
+
+
+def _model_result_reason(result: ModelPredictionResult) -> str:
+    parts = [f"contract={result.contract.status}", result.contract.reason]
+    parts.append(f"prediction={result.prediction_status}")
+    if result.prediction_error:
+        parts.append(f"error={result.prediction_error}")
+    return "; ".join(x for x in parts if x)
+
+
+def _model_audit_summary(results: Dict[str, ModelPredictionResult]) -> str:
+    return " | ".join(
+        f"{name}[{_model_result_reason(result)}]"
+        for name, result in results.items()
+    )
+
+
+def _source_model_name(source: str) -> Optional[str]:
+    source = str(source).lower()
+    if "hgb" in source:
+        return "hgb"
+    if "lgbm" in source:
+        return "lgbm"
+    if "lr" in source:
+        return "lr"
+    return None
+
+
+def _add_probability_audit_columns(
+    out: pd.DataFrame,
+    probability: pd.Series,
+    sources: pd.Series,
+    model_results: Dict[str, ModelPredictionResult],
+) -> pd.DataFrame:
+    out = out.copy()
+
+    for name in ["lr", "hgb", "lgbm"]:
+        result = model_results[name]
+        out[f"{name}_model_contract_status"] = result.contract.status
+        out[f"{name}_model_contract_reason"] = result.contract.reason
+        out[f"{name}_model_prediction_status"] = result.prediction_status
+        out[f"{name}_model_prediction_error"] = result.prediction_error
+
+    fallback_reason = f"rule fallback is an uncalibrated rank score; {_model_audit_summary(model_results)}"
+    statuses: List[str] = []
+    reasons: List[str] = []
+    calibrated_flags: List[bool] = []
+    semantics: List[str] = []
+    schema_versions: List[str] = []
+
+    for source in sources.astype(str):
+        model_name = _source_model_name(source)
+        result = model_results.get(model_name) if model_name else None
+
+        if result is None:
+            statuses.append("fallback_uncalibrated" if source == "fallback_rule" else "no_valid_model_output")
+            reasons.append(fallback_reason)
+            calibrated = False
+            schema_versions.append("")
+        else:
+            statuses.append(result.contract.status)
+            reason = _model_result_reason(result)
+            if source.startswith("blend:"):
+                reason = f"{reason}; rule blend is uncalibrated"
+            reasons.append(reason)
+            calibrated = bool(
+                source in {"lr", "hgb", "lgbm"}
+                and result.contract.is_valid
+                and result.prediction_status == "ok"
+                and result.contract.probability_is_calibrated
+            )
+            schema_versions.append(str(result.contract.feature_schema_version or ""))
+
+        calibrated_flags.append(calibrated)
+        semantics.append("calibrated_probability" if calibrated else "rank_score_uncalibrated")
+
+    out["rank_score"] = pd.to_numeric(probability, errors="coerce").astype("float64")
+    out["probability_is_calibrated"] = pd.Series(calibrated_flags, index=out.index, dtype="bool")
+    out["p_limit_up_calibrated"] = out["rank_score"].where(out["probability_is_calibrated"], np.nan)
+    out["probability_semantics"] = pd.Series(semantics, index=out.index, dtype="object")
+    out["model_contract_status"] = pd.Series(statuses, index=out.index, dtype="object")
+    out["model_contract_reason"] = pd.Series(reasons, index=out.index, dtype="object")
+    out["model_schema_version"] = pd.Series(schema_versions, index=out.index, dtype="object")
+    return out
 
 
 # =========================================================
@@ -971,8 +1790,29 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
     raw_input = _ensure_df(theme_df)
     if raw_input.empty:
         out = pd.DataFrame()
-        for c in ["prob_lr", "prob_lgbm", "prob_rule", "Probability", "_prob_src"]:
-            out[c] = pd.Series(dtype="float64" if c != "_prob_src" else "object")
+        for c in ["prob_lr", "prob_hgb", "prob_lgbm", "prob_rule", "Probability", "rank_score", "p_limit_up_calibrated"]:
+            out[c] = pd.Series(dtype="float64")
+        out["probability_is_calibrated"] = pd.Series(dtype="bool")
+        for c in [
+            "probability_semantics",
+            "model_contract_status",
+            "model_contract_reason",
+            "model_schema_version",
+            "lr_model_contract_status",
+            "lr_model_contract_reason",
+            "lr_model_prediction_status",
+            "lr_model_prediction_error",
+            "hgb_model_contract_status",
+            "hgb_model_contract_reason",
+            "hgb_model_prediction_status",
+            "hgb_model_prediction_error",
+            "lgbm_model_contract_status",
+            "lgbm_model_contract_reason",
+            "lgbm_model_prediction_status",
+            "lgbm_model_prediction_error",
+            "_prob_src",
+        ]:
+            out[c] = pd.Series(dtype="object")
         return out
 
     trade_date = _guess_trade_date(raw_input)
@@ -991,22 +1831,36 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         out["prob_rule"] = pd.Series([np.nan] * len(out), index=out.index, dtype="float64")
 
     if enable_ml:
-        prob_lr, prob_lgbm = _calc_prob_ml(out, s=s)
+        prob_lr, prob_hgb, prob_lgbm, model_results = _calc_prob_ml(out, s=s)
         out["prob_lr"] = prob_lr
+        out["prob_hgb"] = prob_hgb
         out["prob_lgbm"] = prob_lgbm
     else:
         out["prob_lr"] = pd.Series([np.nan] * len(out), index=out.index, dtype="float64")
+        out["prob_hgb"] = pd.Series([np.nan] * len(out), index=out.index, dtype="float64")
         out["prob_lgbm"] = pd.Series([np.nan] * len(out), index=out.index, dtype="float64")
+        model_results = {
+            "lr": _not_run_model_result(out.index, "ml_disabled", "ML inference is disabled by configuration"),
+            "hgb": _not_run_model_result(out.index, "ml_disabled", "ML inference is disabled by configuration"),
+            "lgbm": _not_run_model_result(out.index, "ml_disabled", "ML inference is disabled by configuration"),
+        }
 
     Probability, _prob_src = _fuse_probabilities(
         prob_rule=pd.to_numeric(out["prob_rule"], errors="coerce"),
         prob_lr=pd.to_numeric(out["prob_lr"], errors="coerce"),
+        prob_hgb=pd.to_numeric(out["prob_hgb"], errors="coerce"),
         prob_lgbm=pd.to_numeric(out["prob_lgbm"], errors="coerce"),
         s=s,
     )
 
     out["Probability"] = Probability.astype("float64")
     out["_prob_src"] = _prob_src.astype("object")
+    out = _add_probability_audit_columns(
+        out,
+        probability=out["Probability"],
+        sources=out["_prob_src"],
+        model_results=model_results,
+    )
     out["run_mode"] = _resolve_run_mode()
     out["run_time_utc"] = _utc_now_iso()
 
@@ -1022,6 +1876,21 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
                 "auction_available_ratio": float(pd.to_numeric(out.get("auction_available"), errors="coerce").fillna(0).gt(0).mean()) if len(out) else 0.0,
             },
             "prob_source_counts": out["_prob_src"].value_counts(dropna=False).to_dict() if "_prob_src" in out.columns else {},
+            "probability_semantics_counts": out["probability_semantics"].value_counts(dropna=False).to_dict(),
+            "model_contracts": {
+                name: {
+                    "status": result.contract.status,
+                    "reason": result.contract.reason,
+                    "expected_feature_count": result.contract.expected_feature_count,
+                    "actual_feature_count": result.contract.actual_feature_count,
+                    "manifest_schema_version": result.contract.manifest_schema_version,
+                    "feature_schema_version": result.contract.feature_schema_version,
+                    "probability_is_calibrated": result.contract.probability_is_calibrated,
+                    "prediction_status": result.prediction_status,
+                    "prediction_error": result.prediction_error,
+                }
+                for name, result in model_results.items()
+            },
         }
         debug_path.write_text(json.dumps(debug, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
@@ -1029,7 +1898,7 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
 
     clip_min = float(cfg.get("clip_min", 0.0))
     clip_max = float(cfg.get("clip_max", 1.0))
-    for c in ["prob_lr", "prob_lgbm", "prob_rule", "Probability"]:
+    for c in ["prob_lr", "prob_hgb", "prob_lgbm", "prob_rule", "Probability", "rank_score", "p_limit_up_calibrated"]:
         out[c] = pd.to_numeric(out[c], errors="coerce").clip(clip_min, clip_max)
 
     sort_cols = ["Probability"]
@@ -1048,9 +1917,29 @@ def run_step5(theme_df: pd.DataFrame, s=None) -> pd.DataFrame:
         "open_times",
         "turnover_rate",
         "prob_lr",
+        "prob_hgb",
         "prob_lgbm",
         "prob_rule",
         "Probability",
+        "p_limit_up_calibrated",
+        "rank_score",
+        "probability_is_calibrated",
+        "probability_semantics",
+        "model_contract_status",
+        "model_contract_reason",
+        "model_schema_version",
+        "lr_model_contract_status",
+        "lr_model_contract_reason",
+        "lr_model_prediction_status",
+        "lr_model_prediction_error",
+        "hgb_model_contract_status",
+        "hgb_model_contract_reason",
+        "hgb_model_prediction_status",
+        "hgb_model_prediction_error",
+        "lgbm_model_contract_status",
+        "lgbm_model_contract_reason",
+        "lgbm_model_prediction_status",
+        "lgbm_model_prediction_error",
         "_prob_src",
         "run_mode",
         "run_time_utc",

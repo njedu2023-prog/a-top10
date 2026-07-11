@@ -508,6 +508,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     top_list_raw = _read_csv_if_exists(snap / "top_list.csv")
     stock_basic_raw = _read_csv_if_exists(snap / "stock_basic.csv")
     stk_auction_raw = _read_csv_if_exists(snap / "stk_auction.csv")
+    auction_features_raw = _read_csv_if_exists(snap / "auction_features.csv")
     intraday_features_raw = _read_csv_if_exists(snap / "intraday_features.csv")
     limit_stage_raw = _read_csv_if_exists(snap / "limit_stage.csv")
 
@@ -524,7 +525,14 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
     daily_basic, dbg_daily_basic = _normalize_industry_table(daily_basic_raw, "daily_basic")
 
     stk_limit, dbg_stk_limit_code = _normalize_table_ts_code(stk_limit_raw)
-    stk_auction, dbg_stk_auction_code = _normalize_table_ts_code(stk_auction_raw)
+    raw_stk_auction, dbg_stk_auction_code = _normalize_table_ts_code(stk_auction_raw)
+    auction_features, dbg_auction_features_code = _normalize_table_ts_code(auction_features_raw)
+    if isinstance(auction_features, pd.DataFrame) and not auction_features.empty:
+        stk_auction = auction_features
+        auction_source = "auction_features.csv"
+    else:
+        stk_auction = raw_stk_auction
+        auction_source = "stk_auction.csv" if isinstance(raw_stk_auction, pd.DataFrame) and not raw_stk_auction.empty else ""
     intraday_features, dbg_intraday_features_code = _normalize_table_ts_code(intraday_features_raw)
     limit_stage, dbg_limit_stage_code = _normalize_table_ts_code(limit_stage_raw)
 
@@ -656,6 +664,8 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
             "stock_basic": int(len(stock_basic)) if isinstance(stock_basic, pd.DataFrame) else 0,
             "stk_limit": int(len(stk_limit)) if isinstance(stk_limit, pd.DataFrame) else 0,
             "stk_auction": int(len(stk_auction)) if isinstance(stk_auction, pd.DataFrame) else 0,
+            "raw_stk_auction": int(len(raw_stk_auction)) if isinstance(raw_stk_auction, pd.DataFrame) else 0,
+            "auction_features": int(len(auction_features)) if isinstance(auction_features, pd.DataFrame) else 0,
             "intraday_features": int(len(intraday_features)) if isinstance(intraday_features, pd.DataFrame) else 0,
             "limit_stage": int(len(limit_stage)) if isinstance(limit_stage, pd.DataFrame) else 0,
             "universe": int(len(universe)) if isinstance(universe, pd.DataFrame) else 0,
@@ -678,6 +688,7 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
             "daily_basic": dbg_daily_basic,
             "stk_limit": dbg_stk_limit_code,
             "stk_auction": dbg_stk_auction_code,
+            "auction_features": dbg_auction_features_code,
             "intraday_features": dbg_intraday_features_code,
             "limit_stage": dbg_limit_stage_code,
         },
@@ -696,14 +707,20 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         except Exception:
             snapshot_file_status = {}
     intraday_file_exists = bool((snap / "intraday_features.csv").exists())
-    auction_file_exists = bool((snap / "stk_auction.csv").exists())
+    raw_auction_file_exists = bool((snap / "stk_auction.csv").exists())
+    auction_features_file_exists = bool((snap / "auction_features.csv").exists())
+    auction_file_exists = bool(raw_auction_file_exists or auction_features_file_exists)
     required_columns_missing = []
     if intraday_file_exists and isinstance(intraday_features_raw, pd.DataFrame) and not intraday_features_raw.empty and (
         not isinstance(intraday_features, pd.DataFrame) or intraday_features.empty
     ):
         required_columns_missing.append("intraday_features.ts_code")
-    if auction_file_exists and isinstance(stk_auction_raw, pd.DataFrame) and not stk_auction_raw.empty and (
-        not isinstance(stk_auction, pd.DataFrame) or stk_auction.empty
+    if auction_features_file_exists and isinstance(auction_features_raw, pd.DataFrame) and not auction_features_raw.empty and (
+        not isinstance(auction_features, pd.DataFrame) or auction_features.empty
+    ):
+        required_columns_missing.append("auction_features.ts_code")
+    if raw_auction_file_exists and isinstance(stk_auction_raw, pd.DataFrame) and not stk_auction_raw.empty and (
+        not isinstance(raw_stk_auction, pd.DataFrame) or raw_stk_auction.empty
     ):
         required_columns_missing.append("stk_auction.ts_code")
     intraday_input_debug: Dict[str, Any] = {
@@ -711,8 +728,15 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         "intraday_rows": int(len(intraday_features)) if isinstance(intraday_features, pd.DataFrame) else 0,
         "intraday_columns": list(intraday_features.columns) if isinstance(intraday_features, pd.DataFrame) else [],
         "auction_file_exists": auction_file_exists,
+        "auction_features_file_exists": auction_features_file_exists,
+        "raw_auction_file_exists": raw_auction_file_exists,
+        "auction_source": auction_source,
         "auction_rows": int(len(stk_auction)) if isinstance(stk_auction, pd.DataFrame) else 0,
         "auction_columns": list(stk_auction.columns) if isinstance(stk_auction, pd.DataFrame) else [],
+        "auction_features_rows": int(len(auction_features)) if isinstance(auction_features, pd.DataFrame) else 0,
+        "auction_features_columns": list(auction_features.columns) if isinstance(auction_features, pd.DataFrame) else [],
+        "raw_stk_auction_rows": int(len(raw_stk_auction)) if isinstance(raw_stk_auction, pd.DataFrame) else 0,
+        "raw_stk_auction_columns": list(raw_stk_auction.columns) if isinstance(raw_stk_auction, pd.DataFrame) else [],
         "required_columns_missing": required_columns_missing,
         "snapshot_file_status": snapshot_file_status,
         "stk_auction_rows": int(len(stk_auction)) if isinstance(stk_auction, pd.DataFrame) else 0,
@@ -727,8 +751,8 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
 
     if bool(getattr(intraday_cfg, "require_intraday_features", False)) and intraday_input_debug["intraday_features_rows"] <= 0:
         raise RuntimeError("intraday_features.csv required by config but missing/empty")
-    if bool(getattr(intraday_cfg, "require_stk_auction", False)) and intraday_input_debug["stk_auction_rows"] <= 0:
-        raise RuntimeError("stk_auction.csv required by config but missing/empty")
+    if bool(getattr(intraday_cfg, "require_stk_auction", False)) and intraday_input_debug["auction_rows"] <= 0:
+        raise RuntimeError("auction_features.csv or stk_auction.csv required by config but missing/empty")
 
     # 9) ctx
     ctx: Dict[str, Any] = {
@@ -747,6 +771,9 @@ def step0_build_universe(s: Settings, trade_date: str) -> Dict[str, Any]:
         "stk_limit": stk_limit,  # ✅ optional, safe to expose for later use/debug
         "stk_auction": stk_auction,
         "auction_df": stk_auction,
+        "auction_features": auction_features,
+        "raw_stk_auction": raw_stk_auction,
+        "auction_source": auction_source,
         "intraday_features": intraday_features,
         "intraday_df": intraday_features,
         "limit_stage": limit_stage,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -58,6 +59,52 @@ def _force_outputs_dir(settings: Any) -> Path:
         setattr(settings, "outputs_dir", str(out_dir))
 
     return out_dir
+
+
+def _load_previous_regime_state(out_dir: Path) -> Dict[str, Any]:
+    """Load the last completed market-regime state for true EWMA smoothing."""
+    path = out_dir / "learning" / "regime_state_latest.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_regime_state(out_dir: Path, trade_date: str, gate: Dict[str, Any]) -> None:
+    regime = gate.get("regime") if isinstance(gate, dict) else None
+    if not isinstance(regime, dict):
+        return
+    path = out_dir / "learning" / "regime_state_latest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "trade_date": str(trade_date),
+        "prev_smooth": regime.get("smooth"),
+        "state": regime.get("state"),
+        "score": regime.get("score"),
+        "weight": regime.get("weight"),
+        "inputs": regime.get("inputs", {}),
+    }
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _attach_regime_features(df: pd.DataFrame, regime: Any) -> pd.DataFrame:
+    """Attach same-day close-known market state as auditable model features."""
+    out = df.copy()
+    r = regime if isinstance(regime, dict) else {}
+    inputs = r.get("inputs") if isinstance(r.get("inputs"), dict) else {}
+    out["regime_score"] = r.get("score", 0.0)
+    out["regime_smooth"] = r.get("smooth", r.get("score", 0.0))
+    out["regime_weight"] = r.get("weight", 1.0)
+    out["regime_state"] = r.get("state", "unknown")
+    out["regime_E1"] = inputs.get("E1", 0)
+    out["regime_E2"] = inputs.get("E2", 0.0)
+    out["regime_E3"] = inputs.get("E3", 0)
+    return out
 
 
 def _resolve_run_mode(run_mode: str) -> str:
@@ -215,9 +262,20 @@ def run_pipeline(
     ctx["run_mode"] = mode
     ctx["entry_train_allowed"] = bool(entry_train_allowed)
 
+    previous_regime = _load_previous_regime_state(out_dir)
+    previous_trade_date = str(previous_regime.get("trade_date") or "")
+    if previous_trade_date and previous_trade_date < td:
+        ctx["regime"] = {"prev_smooth": previous_regime.get("prev_smooth")}
+        ctx["prev_emotion_smooth"] = previous_regime.get("prev_smooth")
+
     # Step1
     gate = _require_gate_dict(step1_emotion_gate(settings, ctx))
     gate["run_mode"] = mode
+    ctx["gate"] = gate
+    ctx["regime"] = gate.get("regime", {})
+    ctx["EmotionScore"] = gate.get("EmotionScore")
+    ctx["EmotionSmooth"] = gate.get("EmotionSmooth")
+    ctx["EmotionWeight"] = gate.get("EmotionWeight")
 
     # 默认空输出容器
     topn_result: Dict[str, Optional[pd.DataFrame]] = {
@@ -247,6 +305,8 @@ def run_pipeline(
         theme_df = ctx.get("theme_df")
         if not isinstance(theme_df, pd.DataFrame):
             raise RuntimeError("V2 contract violated: run_step4 must write DataFrame ctx['theme_df']")
+        theme_df = _attach_regime_features(theme_df, ctx.get("regime"))
+        ctx["theme_df"] = theme_df
 
         # Step5
         prob_df = _require_dataframe(run_step5(theme_df, s=settings), "run_step5")
@@ -298,6 +358,7 @@ def run_pipeline(
             )
             ensure_candidate_pool_report_columns(out_dir, td)
             ensure_professional_performance_sections(out_dir, td)
+            _write_regime_state(out_dir, td, gate)
 
 
 if __name__ == "__main__":

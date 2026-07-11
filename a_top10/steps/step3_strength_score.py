@@ -119,13 +119,24 @@ def _clip01(s: pd.Series) -> pd.Series:
     return s.clip(0.0, 1.0)
 
 
-def _robust_rank01(s: pd.Series, ascending: bool = False) -> pd.Series:
+def _robust_rank01(s: pd.Series, *, higher_is_better: bool = True) -> pd.Series:
+    """Return a 0..1 cross-sectional score with explicit direction semantics.
+
+    ``Series.rank(pct=True, ascending=False)`` assigns the largest observation
+    the *smallest* percentile.  The old helper exposed that pandas argument
+    directly, which silently inverted every high-is-good strength feature and
+    rewarded larger open-board counts.  Keep the scoring contract explicit:
+    the preferred edge of the distribution must be close to 1.0.
+    """
     s = pd.to_numeric(s, errors="coerce").astype("float64")
     s = s.replace([np.inf, -np.inf], np.nan)
     valid = s.notna().sum()
     if valid == 0:
         return pd.Series([0.0] * len(s), index=s.index, dtype="float64")
-    return s.rank(pct=True, method="average", ascending=ascending).fillna(0.0).astype("float64")
+    ranked = s.rank(pct=True, method="average", ascending=True)
+    if not higher_is_better:
+        ranked = 1.0 - ranked + (1.0 / float(valid))
+    return ranked.fillna(0.0).clip(0.0, 1.0).astype("float64")
 
 
 def _log1p_safe(s: pd.Series) -> pd.Series:
@@ -177,7 +188,9 @@ def _coalesce_numeric_columns(df: pd.DataFrame, ordered_cols: Sequence[str]) -> 
     base = pd.Series([np.nan] * len(df), index=df.index, dtype="float64")
     for col in ordered_cols:
         if col in df.columns:
-            base = base.combine_first(pd.to_numeric(df[col], errors="coerce"))
+            values = pd.to_numeric(df[col], errors="coerce").astype("float64")
+            mask = base.isna() & values.notna()
+            base.loc[mask] = values.loc[mask]
     return base.astype("float64")
 
 
@@ -779,17 +792,29 @@ def calc_strength_score(
     open_calc = open_times.fillna(0.0)
     is_limit_calc = _safe_bool_from_flag(is_limit_up_pool)
 
-    f_momo = _robust_rank01(pct_calc, ascending=False)
-    f_amt = _robust_rank01(_log1p_safe(amount_calc), ascending=False)
-    f_turn = _robust_rank01(turnover_calc, ascending=False)
-    f_vr = _robust_rank01(volume_ratio_calc, ascending=False) if volume_ratio.notna().any() else pd.Series([0.0] * len(out), index=out.index)
-    f_seal = _robust_rank01(_log1p_safe(seal_calc), ascending=False) if seal_amount.notna().any() else pd.Series([0.0] * len(out), index=out.index)
-    f_open_penalty = _robust_rank01(open_calc, ascending=True) if open_times.notna().any() else pd.Series([0.0] * len(out), index=out.index)
+    f_momo = _robust_rank01(pct_calc, higher_is_better=True)
+    f_amt = _robust_rank01(_log1p_safe(amount_calc), higher_is_better=True)
+
+    # Turnover is a quality band rather than a monotonic "more is better"
+    # feature.  The fallback probability layer uses the same 18% centre.
+    turnover_quality = pd.Series(
+        np.where(
+            turnover_calc <= 0,
+            0.0,
+            np.exp(-((turnover_calc - 18.0) / 12.0) ** 2),
+        ),
+        index=out.index,
+        dtype="float64",
+    )
+    f_turn = _robust_rank01(turnover_quality, higher_is_better=True)
+    f_vr = _robust_rank01(volume_ratio_calc, higher_is_better=True) if volume_ratio.notna().any() else pd.Series([0.0] * len(out), index=out.index)
+    f_seal = _robust_rank01(_log1p_safe(seal_calc), higher_is_better=True) if seal_amount.notna().any() else pd.Series([0.0] * len(out), index=out.index)
+    f_open_penalty = _robust_rank01(open_calc, higher_is_better=False) if open_times.notna().any() else pd.Series([0.0] * len(out), index=out.index)
 
     denom = circ_mv_calc.replace(0.0, np.nan)
     cap_raw = (lhb_calc + hsgt_calc) / denom
     cap_raw = cap_raw.replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    f_cap = _robust_rank01(cap_raw, ascending=False) if cap_raw.notna().any() else pd.Series([0.0] * len(out), index=out.index)
+    f_cap = _robust_rank01(cap_raw, higher_is_better=True) if cap_raw.notna().any() else pd.Series([0.0] * len(out), index=out.index)
 
     raw01 = (
         0.18 * f_momo

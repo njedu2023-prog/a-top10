@@ -347,15 +347,21 @@ def _ensure_learning_dir(ctx: Dict[str, Any], s: Optional[Settings]) -> Path:
 def _get_weights_value(s: Optional[Settings], key: str, default: Any) -> Any:
     if s is None:
         return default
-    w = getattr(s, "weights", None)
-    if w is None:
-        return default
-    try:
-        if isinstance(w, dict):
-            return w.get(key, default)
-        return getattr(w, key, default)
-    except Exception:
-        return default
+    aliases = {"rank_decay_k": ("rank_decay_k", "sigmoid_k")}
+    names = aliases.get(key, (key,))
+    for block_name in ("weights", "theme"):
+        block = getattr(s, block_name, None)
+        if block is None:
+            continue
+        try:
+            for name in names:
+                if isinstance(block, dict) and name in block:
+                    return block[name]
+                if hasattr(block, name):
+                    return getattr(block, name)
+        except Exception:
+            continue
+    return default
 
 
 def _get_rank_decay_k(s: Optional[Settings]) -> float:
@@ -374,6 +380,10 @@ def _get_topk_industry(s: Optional[Settings]) -> int:
 
 def _get_dragon_bonus(s: Optional[Settings]) -> float:
     try:
+        theme = getattr(s, "theme", None) if s is not None else None
+        if theme is not None and hasattr(theme, "use_dragon_leader_rank"):
+            if not bool(getattr(theme, "use_dragon_leader_rank")):
+                return 0.0
         return float(_get_weights_value(s, "dragon_bonus", DEFAULT_DRAGON_BONUS))
     except Exception:
         return float(DEFAULT_DRAGON_BONUS)

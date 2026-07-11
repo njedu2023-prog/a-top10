@@ -74,10 +74,18 @@ V3_PRED_BASE_COLS = [
     "stage_adjustment",
     "up_stat",
     "Probability",
+    "p_limit_up_calibrated",
+    "rank_score",
+    "probability_is_calibrated",
+    "probability_semantics",
+    "model_contract_status",
+    "model_contract_reason",
+    "model_schema_version",
     "_prob_src",
     "StrengthScore",
     "ThemeBoost",
     "prob_lr",
+    "prob_hgb",
     "prob_lgbm",
     "prob_rule",
     "final_score_v2",
@@ -118,6 +126,13 @@ V3_PRED_BASE_COLS = [
     "turnover_rate",
     "close",
     "board",
+    "regime_score",
+    "regime_smooth",
+    "regime_weight",
+    "regime_state",
+    "regime_E1",
+    "regime_E2",
+    "regime_E3",
 ]
 V3_PRED_META_COLS = ["trade_date", "verify_date", "run_id", "run_attempt", "commit_sha", "generated_at_utc"]
 V3_PRED_COLS = V3_PRED_META_COLS[:2] + V3_PRED_BASE_COLS + V3_PRED_META_COLS[2:]
@@ -139,6 +154,19 @@ DECISION_SOURCE_BASE_COLS = [
     "stage_adjustment",
     "up_stat",
     "prob",
+    "Probability",
+    "p_limit_up_calibrated",
+    "rank_score",
+    "probability_is_calibrated",
+    "probability_semantics",
+    "model_contract_status",
+    "model_contract_reason",
+    "model_schema_version",
+    "_prob_src",
+    "prob_lr",
+    "prob_hgb",
+    "prob_lgbm",
+    "prob_rule",
     "StrengthScore",
     "ThemeBoost",
     "board",
@@ -159,6 +187,13 @@ DECISION_SOURCE_BASE_COLS = [
     "intraday_confidence_score",
     "risk_level",
     "risk_label",
+    "regime_score",
+    "regime_smooth",
+    "regime_weight",
+    "regime_state",
+    "regime_E1",
+    "regime_E2",
+    "regime_E3",
 ]
 DECISION_SOURCE_META_COLS = ["trade_date", "verify_date", "run_id", "run_attempt", "commit_sha", "generated_at_utc"]
 DECISION_SOURCE_COLS = DECISION_SOURCE_META_COLS[:2] + DECISION_SOURCE_BASE_COLS + DECISION_SOURCE_META_COLS[2:]
@@ -166,6 +201,9 @@ DECISION_SOURCE_COLS = DECISION_SOURCE_META_COLS[:2] + DECISION_SOURCE_BASE_COLS
 FEATURE_HISTORY_COLS = [
     "run_time_utc",
     "trade_date",
+    "rank",
+    "prediction_run_id",
+    "run_mode",
     "ts_code",
     "name",
     "晋阶",
@@ -180,6 +218,13 @@ FEATURE_HISTORY_COLS = [
     "stage_adjustment",
     "up_stat",
     "Probability",
+    "p_limit_up_calibrated",
+    "rank_score",
+    "probability_is_calibrated",
+    "probability_semantics",
+    "model_contract_status",
+    "model_contract_reason",
+    "model_schema_version",
     "_prob_src",
     "StrengthScore",
     "ThemeBoost",
@@ -187,6 +232,7 @@ FEATURE_HISTORY_COLS = [
     "open_times",
     "turnover_rate",
     "prob_lr",
+    "prob_hgb",
     "prob_lgbm",
     "prob_rule",
     "raw_final_score",
@@ -210,6 +256,13 @@ FEATURE_HISTORY_COLS = [
     "intraday_confidence_score",
     "intraday_available",
     "auction_available",
+    "regime_score",
+    "regime_smooth",
+    "regime_weight",
+    "regime_state",
+    "regime_E1",
+    "regime_E2",
+    "regime_E3",
     "risk_level",
     "risk_label",
     "risk_tags",
@@ -236,6 +289,23 @@ FEATURE_HISTORY_DROP_COLS = [
     "prob_fusion_mode",
 ]
 FEATURE_HISTORY_PRESERVE_IF_NEW_EMPTY = {
+    "is_sample_mature",
+    "mature_reason",
+    "label_delay_flag",
+    "y_limit_hit",
+    "y_next_ret",
+    "learnable_flag",
+    "reject_reason",
+    "sample_quality_grade",
+    "batch_quality_score",
+    "gate_version",
+    "label_version",
+    "verify_date",
+    "close",
+}
+
+LIVE_RUN_MODES = {"auto_daily", "train"}
+LABEL_UPDATE_COLS = {
     "is_sample_mature",
     "mature_reason",
     "label_delay_flag",
@@ -755,6 +825,16 @@ def _canonicalize_prediction_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     out["Probability"] = src["Probability"] if "Probability" in src.columns else (
         src["prob_final"] if "prob_final" in src.columns else (src["prob_ml"] if "prob_ml" in src.columns else "")
     )
+    for col in [
+        "p_limit_up_calibrated",
+        "rank_score",
+        "probability_is_calibrated",
+        "probability_semantics",
+        "model_contract_status",
+        "model_contract_reason",
+        "model_schema_version",
+    ]:
+        out[col] = src[col] if col in src.columns else ""
     out["_prob_src"] = src["_prob_src"] if "_prob_src" in src.columns else (src["prob_src"] if "prob_src" in src.columns else "")
     out["StrengthScore"] = src["StrengthScore"] if "StrengthScore" in src.columns else (
         src["强度得分"] if "强度得分" in src.columns else ""
@@ -763,6 +843,7 @@ def _canonicalize_prediction_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
         src["题材加成"] if "题材加成" in src.columns else ""
     )
     out["prob_lr"] = src["prob_lr"] if "prob_lr" in src.columns else ""
+    out["prob_hgb"] = src["prob_hgb"] if "prob_hgb" in src.columns else ""
     out["prob_lgbm"] = src["prob_lgbm"] if "prob_lgbm" in src.columns else ""
     out["prob_rule"] = src["prob_rule"] if "prob_rule" in src.columns else ""
     for col in INTRADAY_REPORT_COLS:
@@ -772,7 +853,18 @@ def _canonicalize_prediction_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     out["turnover_rate"] = _extract_numeric(src, TURNOVER_COL_CANDIDATES)
     out["close"] = _extract_numeric(src, CLOSE_COL_CANDIDATES)
     for col in [
-        "Probability", "StrengthScore", "ThemeBoost", "prob_lr", "prob_lgbm", "prob_rule",
+        "regime_score",
+        "regime_smooth",
+        "regime_weight",
+        "regime_state",
+        "regime_E1",
+        "regime_E2",
+        "regime_E3",
+    ]:
+        out[col] = src[col] if col in src.columns else ""
+    for col in [
+        "Probability", "p_limit_up_calibrated", "rank_score", "probability_is_calibrated",
+        "StrengthScore", "ThemeBoost", "prob_lr", "prob_hgb", "prob_lgbm", "prob_rule",
         "limit_times", "stage_quality_weight", "stage_risk_weight", "stage_prior", "stage_bonus", "stage_risk_penalty", "stage_adjustment",
         "final_score_v2", "final_score_base", "raw_final_score", "final_score", "strength_plus_score",
         "intraday_available", "intraday_quality_score", "intraday_soft_risk_score",
@@ -781,6 +873,7 @@ def _canonicalize_prediction_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
         "auction_real_volume_score", "seal_stability_score", "intraday_confidence_score",
         "intraday_bonus", "intraday_soft_risk_penalty", "intraday_hard_risk_penalty",
         "intraday_risk_penalty", "intraday_total_penalty",
+        "regime_score", "regime_smooth", "regime_weight", "regime_E1", "regime_E2", "regime_E3",
     ]:
         out[col] = pd.to_numeric(out[col], errors="coerce")
     out["rank"] = pd.to_numeric(out["rank"], errors="coerce")
@@ -808,6 +901,22 @@ def _canonicalize_decision_source_frame(df: Optional[pd.DataFrame]) -> pd.DataFr
         src["prob_final"] if "prob_final" in src.columns else (src["prob_ml"] if "prob_ml" in src.columns else "")
     )
     out["prob"] = pd.to_numeric(prob_series, errors="coerce")
+    out["Probability"] = out["prob"]
+    for col in [
+        "p_limit_up_calibrated",
+        "rank_score",
+        "probability_is_calibrated",
+        "probability_semantics",
+        "model_contract_status",
+        "model_contract_reason",
+        "model_schema_version",
+        "_prob_src",
+        "prob_lr",
+        "prob_hgb",
+        "prob_lgbm",
+        "prob_rule",
+    ]:
+        out[col] = src[col] if col in src.columns else ""
     out["StrengthScore"] = pd.to_numeric(
         src["StrengthScore"] if "StrengthScore" in src.columns else (src["强度得分"] if "强度得分" in src.columns else ""),
         errors="coerce",
@@ -834,15 +943,25 @@ def _canonicalize_decision_source_frame(df: Optional[pd.DataFrame]) -> pd.DataFr
         "intraday_confidence_score",
         "risk_level",
         "risk_label",
+        "regime_score",
+        "regime_smooth",
+        "regime_weight",
+        "regime_state",
+        "regime_E1",
+        "regime_E2",
+        "regime_E3",
     ]
     for col in passthrough:
         out[col] = src[col] if col in src.columns else ""
     for col in [
+        "prob", "Probability", "p_limit_up_calibrated", "rank_score", "probability_is_calibrated",
+        "prob_lr", "prob_hgb", "prob_lgbm", "prob_rule",
         "final_score", "raw_final_score", "final_score_v2", "intraday_available",
         "limit_times", "stage_quality_weight", "stage_risk_weight", "stage_prior", "stage_bonus", "stage_risk_penalty", "stage_adjustment",
         "intraday_quality_score", "intraday_soft_risk_score", "intraday_hard_risk_flag",
         "intraday_risk_score", "late_withdraw_score", "reseal_score", "open_board_count",
         "auction_strength_score", "intraday_confidence_score",
+        "regime_score", "regime_smooth", "regime_weight", "regime_E1", "regime_E2", "regime_E3",
     ]:
         out[col] = pd.to_numeric(out[col], errors="coerce")
     out["rank"] = pd.to_numeric(out["rank"], errors="coerce")
@@ -897,6 +1016,8 @@ def _canonicalize_feature_history_batch(
     trade_date: str,
     verify_date: str,
     run_time_utc: str,
+    prediction_run_id: str,
+    run_mode: str,
     ctx: Any,
 ) -> pd.DataFrame:
     if df is None or df.empty:
@@ -907,6 +1028,9 @@ def _canonicalize_feature_history_batch(
     name_col = _first_existing_col(src, NAME_COL_CANDIDATES)
     out["run_time_utc"] = run_time_utc
     out["trade_date"] = trade_date
+    out["rank"] = _normalize_rank(src)
+    out["prediction_run_id"] = str(prediction_run_id)
+    out["run_mode"] = str(run_mode)
     out["ts_code"] = src[code_col] if code_col else ""
     out["name"] = src[name_col] if name_col else ""
     out["晋阶"] = src["晋阶"] if "晋阶" in src.columns else (src["advance_stage"] if "advance_stage" in src.columns else "")
@@ -917,6 +1041,16 @@ def _canonicalize_feature_history_batch(
     out["Probability"] = src["Probability"] if "Probability" in src.columns else (
         src["prob_final"] if "prob_final" in src.columns else (src["prob_ml"] if "prob_ml" in src.columns else "")
     )
+    for col in [
+        "p_limit_up_calibrated",
+        "rank_score",
+        "probability_is_calibrated",
+        "probability_semantics",
+        "model_contract_status",
+        "model_contract_reason",
+        "model_schema_version",
+    ]:
+        out[col] = src[col] if col in src.columns else ""
     out["_prob_src"] = src["_prob_src"] if "_prob_src" in src.columns else (src["prob_src"] if "prob_src" in src.columns else "")
     out["StrengthScore"] = src["StrengthScore"] if "StrengthScore" in src.columns else ""
     out["ThemeBoost"] = src["ThemeBoost"] if "ThemeBoost" in src.columns else ""
@@ -924,6 +1058,7 @@ def _canonicalize_feature_history_batch(
     out["open_times"] = _extract_numeric(src, OPEN_TIMES_COL_CANDIDATES)
     out["turnover_rate"] = _extract_numeric(src, TURNOVER_COL_CANDIDATES)
     out["prob_lr"] = src["prob_lr"] if "prob_lr" in src.columns else ""
+    out["prob_hgb"] = src["prob_hgb"] if "prob_hgb" in src.columns else ""
     out["prob_lgbm"] = src["prob_lgbm"] if "prob_lgbm" in src.columns else ""
     out["prob_rule"] = src["prob_rule"] if "prob_rule" in src.columns else ""
     for col in [
@@ -951,6 +1086,13 @@ def _canonicalize_feature_history_batch(
         "risk_level",
         "risk_label",
         "risk_tags",
+        "regime_score",
+        "regime_smooth",
+        "regime_weight",
+        "regime_state",
+        "regime_E1",
+        "regime_E2",
+        "regime_E3",
     ]:
         out[col] = src[col] if col in src.columns else ""
 
@@ -969,8 +1111,9 @@ def _canonicalize_feature_history_batch(
             out["close"] = [close_map.get(_safe_str(v), pd.NA) for v in out["ts_code"]]
 
     for col in [
-        "Probability", "StrengthScore", "ThemeBoost", "seal_amount", "open_times", "turnover_rate",
-        "prob_lr", "prob_lgbm", "prob_rule", "is_sample_mature", "label_delay_flag",
+        "rank", "Probability", "p_limit_up_calibrated", "rank_score", "probability_is_calibrated",
+        "StrengthScore", "ThemeBoost", "seal_amount", "open_times", "turnover_rate",
+        "prob_lr", "prob_hgb", "prob_lgbm", "prob_rule", "is_sample_mature", "label_delay_flag",
         "y_limit_hit", "y_next_ret", "learnable_flag", "batch_quality_score", "close",
         "final_score_base", "raw_final_score", "final_score_v2", "intraday_total_penalty",
         "strength_plus_score", "intraday_quality_score", "intraday_soft_risk_score",
@@ -979,6 +1122,7 @@ def _canonicalize_feature_history_batch(
         "auction_strength_score", "auction_real_volume_score", "seal_stability_score",
         "intraday_confidence_score",
         "intraday_available", "auction_available",
+        "regime_score", "regime_smooth", "regime_weight", "regime_E1", "regime_E2", "regime_E3",
     ]:
         out[col] = pd.to_numeric(out[col], errors="coerce")
 
@@ -1028,10 +1172,16 @@ def _merge_feature_history(existing_df: pd.DataFrame, new_df: pd.DataFrame) -> p
                 existing_map[key] = new_row
                 continue
             merged_row = old_row.copy()
+            protect_live_prediction = (
+                str(old_row.get("run_mode") or "").strip() in LIVE_RUN_MODES
+                and str(new_row.get("run_mode") or "").strip() == "replay"
+            )
             for col in FEATURE_HISTORY_COLS:
                 new_val = new_row.get(col)
                 old_val = old_row.get(col)
-                if col in FEATURE_HISTORY_PRESERVE_IF_NEW_EMPTY and _is_missing(new_val) and not _is_missing(old_val):
+                if protect_live_prediction and col not in LABEL_UPDATE_COLS:
+                    merged_row[col] = old_val
+                elif col in FEATURE_HISTORY_PRESERVE_IF_NEW_EMPTY and _is_missing(new_val) and not _is_missing(old_val):
                     merged_row[col] = old_val
                 elif not _is_missing(new_val):
                     merged_row[col] = new_val
@@ -1100,6 +1250,8 @@ def _rename_human(df: pd.DataFrame) -> pd.DataFrame:
         "advance_stage": "晋阶",
         "limit_times": "连板数",
         "Probability": "涨停概率",
+        "p_limit_up_calibrated": "续板概率",
+        "rank_score": "排序分",
         "_prob_src": "概率来源",
         "StrengthScore": "强度得分",
         "strength_plus_score": "强度分",
@@ -1312,6 +1464,26 @@ def _write_feature_history(learning_dir: Path, batch_df: pd.DataFrame) -> pd.Dat
     return merged_df
 
 
+def _write_prediction_ledger(
+    learning_dir: Path,
+    prediction_df: pd.DataFrame,
+    run_mode: str,
+) -> pd.DataFrame:
+    """Append actual published Top10 rows without replay overwriting live runs."""
+    mode = str(run_mode or "auto_daily").strip().lower()
+    filename = "prediction_ledger_replay.csv" if mode == "replay" else "prediction_ledger.csv"
+    path = learning_dir / filename
+    current = prediction_df.copy()
+    current["run_mode"] = mode
+    existing = _read_csv_guess(path)
+    merged = current if existing.empty else pd.concat([existing, current], ignore_index=True, sort=False)
+    keys = [c for c in ["trade_date", "ts_code", "run_id"] if c in merged.columns]
+    if keys:
+        merged = merged.drop_duplicates(subset=keys, keep="first")
+    _write_csv_overwrite(merged, path)
+    return merged
+
+
 def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     outdir = Path(getattr(getattr(settings, "io", None), "outputs_dir", None) or "outputs")
     _ensure_dir(outdir)
@@ -1392,6 +1564,14 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
     topn_v3 = _canonicalize_prediction_frame(topn_df)
     candidate_pool_df = _standardize_candidate_pool(full_df, topn_df)
+    calibrated_display = bool(
+        not topn_v3.empty
+        and "probability_is_calibrated" in topn_v3.columns
+        and pd.to_numeric(topn_v3["probability_is_calibrated"], errors="coerce").fillna(0).eq(1).all()
+        and pd.to_numeric(topn_v3.get("p_limit_up_calibrated"), errors="coerce").notna().all()
+    )
+    probability_display_col = "p_limit_up_calibrated" if calibrated_display else "rank_score"
+    probability_display_axis = "续板概率" if calibrated_display else "排序分"
     for df_cov in (topn_v3, candidate_pool_df):
         if not df_cov.empty and "intraday_available" in df_cov.columns:
             df_cov["intraday_coverage"] = pd.to_numeric(df_cov["intraday_available"], errors="coerce").fillna(0).map(lambda x: "是" if x > 0 else "否")
@@ -1414,7 +1594,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
 
     if not topn_v3.empty:
         for col in [
-            "Probability", "StrengthScore", "ThemeBoost", "final_score_v2", "final_score_base",
+            "Probability", "p_limit_up_calibrated", "rank_score", "StrengthScore", "ThemeBoost", "final_score_v2", "final_score_base",
             "strength_plus_score", "intraday_quality_score", "intraday_soft_risk_score",
             "intraday_risk_score", "late_withdraw_score", "reseal_score", "auction_strength_score",
         ]:
@@ -1422,7 +1602,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
                 topn_v3[col] = topn_v3[col].map(_format_score if col != "Probability" else _format_probability)
     if not candidate_pool_df.empty:
         for col in [
-            "Probability", "StrengthScore", "ThemeBoost", "final_score_v2", "final_score_base",
+            "Probability", "p_limit_up_calibrated", "rank_score", "StrengthScore", "ThemeBoost", "final_score_v2", "final_score_base",
             "strength_plus_score", "intraday_quality_score", "intraday_soft_risk_score",
             "intraday_risk_score", "late_withdraw_score", "reseal_score", "auction_strength_score",
         ]:
@@ -1467,13 +1647,13 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     md_lines.append(_df_to_md_table(pd.DataFrame(overview_rows)))
     md_lines.append("")
 
-    md_lines.append(f"## {trade_date} 预测：{next_td} 涨停 Top10（按涨停概率降序）\n")
+    md_lines.append(f"## {trade_date} 预测：{next_td} 涨停 Top10（按{probability_display_axis}降序）\n")
     if topn_v3.empty:
         reason = _safe_str(gate.get("reason") if isinstance(gate, dict) else "")
         md_lines.append(f"⚠️ Gate 未通过，Top10 为空。{reason}\n")
     else:
         md_lines.append(_df_to_md_table(topn_v3, cols=[
-            "rank", "ts_code", "name", "晋阶", "final_score_v2", "final_score_base", "Probability",
+            "rank", "ts_code", "name", "晋阶", probability_display_col,
             "strength_plus_score", "board", "ThemeBoost", "intraday_quality_score", "intraday_soft_risk_score",
             "intraday_hard_risk_flag", "late_withdraw_score", "reseal_score", "open_board_count",
             "auction_strength_score", "intraday_coverage", "risk_level", "risk_label",
@@ -1485,7 +1665,7 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         md_lines.append("（无 Top10 之外的候选样本）\n")
     else:
         md_lines.append(_df_to_md_table(candidate_pool_df, cols=[
-            "rank", "ts_code", "name", "晋阶", "final_score_v2", "Probability", "intraday_quality_score",
+            "rank", "ts_code", "name", "晋阶", probability_display_col, "intraday_quality_score",
             "intraday_risk_score", "risk_level", "risk_label", "intraday_coverage",
         ]))
         md_lines.append("")
@@ -1520,6 +1700,8 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
     _write_csv_overwrite(topn_out, learning_dir / f"pred_top10_{trade_date}.csv")
     _write_csv_overwrite(topn_out, learning_dir / "pred_top10_latest.csv")
     _write_csv_once(topn_out, warehouse_dir / f"pred_top10_{trade_date}_{run_meta['run_id']}.csv")
+    run_mode = str(ctx.get("run_mode") if isinstance(ctx, dict) else "auto_daily")
+    _write_prediction_ledger(learning_dir, topn_out, run_mode)
 
     _write_csv_overwrite(full_out, decisio_dir / f"pred_decisio_{trade_date}.csv")
     _write_csv_overwrite(full_out, decisio_dir / "pred_decisio_latest.csv")
@@ -1532,6 +1714,8 @@ def write_outputs(settings, trade_date: str, ctx, gate, topn, learn) -> None:
         trade_date=trade_date,
         verify_date=next_td,
         run_time_utc=run_meta["generated_at_utc"],
+        prediction_run_id=run_meta["run_id"],
+        run_mode=run_mode,
         ctx=ctx,
     )
     merged_history = _write_feature_history(learning_dir, feature_batch)

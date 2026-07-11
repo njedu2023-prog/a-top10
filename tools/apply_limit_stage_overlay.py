@@ -44,27 +44,82 @@ def merge_stage(df: pd.DataFrame, stage: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _numeric_column(df: pd.DataFrame, name: str, default: float = 0.0) -> pd.Series:
+    if name not in df.columns:
+        return pd.Series(default, index=df.index, dtype="float64")
+    return pd.to_numeric(df[name], errors="coerce").astype("float64")
+
+
+def _canonical_probability(df: pd.DataFrame) -> pd.Series:
+    for name in ("prob_final", "Probability", "prob", "probability"):
+        if name in df.columns:
+            probability = pd.to_numeric(df[name], errors="coerce")
+            if probability.notna().any():
+                return probability.fillna(0.0).clip(0.0, 1.0).astype("float64")
+    raise ValueError("stage overlay requires prob_final or a compatible probability field")
+
+
+def _resolve_pre_stage_score(df: pd.DataFrame) -> pd.Series:
+    pre_stage = pd.Series(float("nan"), index=df.index, dtype="float64")
+
+    if "final_score_pre_stage" in df.columns:
+        pre_stage = _numeric_column(df, "final_score_pre_stage", float("nan"))
+
+    if "raw_final_score" in df.columns:
+        reconstructed = (
+            _numeric_column(df, "raw_final_score")
+            + _numeric_column(df, "intraday_bonus")
+            - _numeric_column(df, "intraday_soft_risk_penalty")
+            - _numeric_column(df, "intraday_hard_risk_penalty")
+        )
+        pre_stage = pre_stage.fillna(reconstructed)
+
+    score_col = "final_score_v2" if "final_score_v2" in df.columns else "final_score"
+    current_score = _numeric_column(df, score_col)
+    if "stage_adjustment" in df.columns:
+        current_score = current_score - _numeric_column(df, "stage_adjustment")
+    return pre_stage.fillna(current_score).fillna(0.0).astype("float64")
+
+
 def apply_stage_score(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    score_col = "final_score_v2" if "final_score_v2" in out.columns else "final_score"
-    base = pd.to_numeric(out.get(score_col, 0.0), errors="coerce").fillna(0.0)
-    q = pd.to_numeric(out.get("stage_quality_weight", 1.0), errors="coerce").fillna(1.0)
-    r = pd.to_numeric(out.get("stage_risk_weight", 0.0), errors="coerce").fillna(0.0)
+    source_order = pd.Series(range(len(out)), index=out.index, dtype="int64")
+    pre_stage = _resolve_pre_stage_score(out)
+    q = _numeric_column(out, "stage_quality_weight", 1.0).fillna(1.0)
+    r = _numeric_column(out, "stage_risk_weight", 0.0).fillna(0.0)
     bonus = ((q - 1.0) * 0.10).clip(-0.030, 0.015)
     penalty = (r * 0.055).clip(0.0, 0.018)
+    out["stage_bonus"] = bonus.round(6)
+    out["stage_risk_penalty"] = penalty.round(6)
     out["stage_adjustment"] = (bonus - penalty).round(6)
-    out["final_score_v2"] = (base + out["stage_adjustment"]).round(6)
+    out["final_score_pre_stage"] = pre_stage
+    out["final_score_v2"] = (pre_stage + out["stage_adjustment"]).clip(0.0, 1.0).round(6)
+    out["stage_adjustment_applied"] = True
     out["final_score"] = out["final_score_v2"]
     if "raw_final_score" not in out.columns:
-        out["raw_final_score"] = base
-    prob_col = "prob" if "prob" in out.columns else "Probability"
-    sort_cols = ["final_score_v2"]
-    if prob_col in out.columns:
-        sort_cols.append(prob_col)
-    if "StrengthScore" in out.columns:
-        sort_cols.append("StrengthScore")
-    out = out.sort_values(sort_cols, ascending=[False] * len(sort_cols), na_position="last", kind="mergesort").reset_index(drop=True)
+        out["raw_final_score"] = pre_stage
+
+    probability = _canonical_probability(out)
+    out["prob_final"] = probability
+    out["Probability"] = probability
+    out["prob"] = probability
+
+    out["_rank_probability"] = probability.fillna(float("-inf"))
+    out["_rank_ts_code"] = out.get("ts_code", pd.Series("", index=out.index)).fillna("").astype(str)
+    out["_rank_name"] = out.get("name", pd.Series("", index=out.index)).fillna("").astype(str)
+    out["_rank_board"] = out.get("board", pd.Series("", index=out.index)).fillna("").astype(str)
+    out["_source_order"] = source_order
+    out = out.sort_values(
+        ["_rank_probability", "_rank_ts_code", "_rank_name", "_rank_board", "_source_order"],
+        ascending=[False, True, True, True, True],
+        na_position="last",
+        kind="mergesort",
+    ).reset_index(drop=True)
+    if not out["prob_final"].is_monotonic_decreasing:
+        raise AssertionError("ranking contract violated: prob_final must be descending")
     out["rank"] = range(1, len(out) + 1)
+    out["rank_v2"] = out["rank"]
+    out = out.drop(columns=["_rank_probability", "_rank_ts_code", "_rank_name", "_rank_board", "_source_order"])
     front = ["trade_date", "verify_date", "rank", "ts_code", "name", "晋阶"]
     cols = [c for c in front if c in out.columns] + [c for c in out.columns if c not in front]
     return out[cols]
@@ -106,14 +161,16 @@ def to_joinquant_code(value: object) -> str:
 def write_top3(df: pd.DataFrame, trade_date: str) -> None:
     top3 = df.head(3).copy()
     weight = 1.0 / len(top3) if len(top3) else 0.0
+    regime = top3.get("regime_state", pd.Series("neutral", index=top3.index)).astype(str).str.strip().str.upper()
+    regime = regime.where(regime.isin(["RISK_ON", "RISK_OFF", "NEUTRAL"]), "NEUTRAL")
     jq = pd.DataFrame({
         "trade_date": top3["trade_date"] if "trade_date" in top3.columns else trade_date,
         "target_trade_date": top3["verify_date"] if "verify_date" in top3.columns else "",
         "jq_code": top3["ts_code"].map(to_joinquant_code) if "ts_code" in top3.columns else "",
         "target_weight": weight,
         "risk_budget": 1.0,
-        "regime": "RISK_ON",
-        "reason": "TopEVR_EV>3pct_Risk<1pct_stage_overlay",
+        "regime": regime,
+        "reason": "a_top10_probability_rank_1_3",
     })
     Path("outputs").mkdir(parents=True, exist_ok=True)
     jq.to_csv("outputs/top101-3.csv", index=False, encoding="utf-8-sig")
@@ -131,6 +188,8 @@ def markdown_table(df: pd.DataFrame) -> str:
         "raw_final_score": "原始分",
         "prob": "涨停概率",
         "Probability": "涨停概率",
+        "p_limit_up_calibrated": "续板概率",
+        "rank_score": "排序分",
         "StrengthScore": "强度分",
         "board": "行业版块",
         "ThemeBoost": "题材加成",
@@ -144,7 +203,16 @@ def markdown_table(df: pd.DataFrame) -> str:
         "risk_level": "风险级别",
         "risk_label": "风险标签",
     }
-    cols = [c for c in ["rank", "ts_code", "name", "晋阶", "final_score_v2", "raw_final_score", "prob", "Probability", "StrengthScore", "board", "ThemeBoost", "intraday_quality_score", "intraday_soft_risk_score", "intraday_hard_risk_flag", "late_withdraw_score", "reseal_score", "open_board_count", "auction_strength_score", "risk_level", "risk_label"] if c in show.columns]
+    calibrated = bool(
+        "probability_is_calibrated" in show.columns
+        and pd.to_numeric(show["probability_is_calibrated"], errors="coerce").fillna(0).eq(1).all()
+        and "p_limit_up_calibrated" in show.columns
+        and pd.to_numeric(show["p_limit_up_calibrated"], errors="coerce").notna().all()
+    )
+    display_probability = "p_limit_up_calibrated" if calibrated else (
+        "rank_score" if "rank_score" in show.columns else "Probability"
+    )
+    cols = [c for c in ["rank", "ts_code", "name", "晋阶", "final_score_v2", display_probability, "StrengthScore", "board", "ThemeBoost", "intraday_quality_score", "intraday_soft_risk_score", "intraday_hard_risk_flag", "late_withdraw_score", "reseal_score", "open_board_count", "auction_strength_score", "risk_level", "risk_label"] if c in show.columns]
     show = show[cols].rename(columns=mapping)
     return show.to_markdown(index=False)
 

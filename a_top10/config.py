@@ -2,13 +2,19 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import pandas as pd
 import yaml
+
+try:
+    import exchange_calendars as xcals
+except Exception:  # pragma: no cover - fallback remains for degraded installs
+    xcals = None
 
 from types import SimpleNamespace
 
@@ -71,19 +77,69 @@ for _s, _e in A_SHARE_HOLIDAY_RANGES:
     A_SHARE_HOLIDAYS.update(_date_range(_s, _e))
 
 
+@lru_cache(maxsize=1)
+def _xshg_calendar():
+    if xcals is None:
+        return None
+    try:
+        return xcals.get_calendar("XSHG")
+    except Exception:
+        return None
+
+
+def a_share_calendar_source() -> str:
+    return "exchange_calendars:XSHG" if _xshg_calendar() is not None else "holiday_fallback"
+
+
 def is_a_share_trading_day(trade_date: str) -> bool:
     """A 股交易日判断：周末 + 法定休市日过滤。"""
     try:
         d = _parse_yyyymmdd(trade_date)
     except Exception:
         return False
+    cal = _xshg_calendar()
+    if cal is not None:
+        try:
+            return bool(cal.is_session(pd.Timestamp(d)))
+        except Exception:
+            pass
     if d.weekday() >= 5:
         return False
     return _fmt_yyyymmdd(d) not in A_SHARE_HOLIDAYS
 
 
-def next_a_share_trading_day(trade_date: str, max_scan_days: int = 30) -> str:
-    """返回给定日期之后的下一个 A 股交易日。"""
+def next_a_share_trading_day(
+    trade_date: str,
+    max_scan_days: int = 30,
+    trade_dates: Optional[Iterable[str]] = None,
+) -> str:
+    """
+    返回给定日期之后的下一个 A 股交易日。
+
+    ``trade_dates`` 用于接入数据仓库提供的权威交易日历；未提供时保持
+    原有的周末与休市日兜底逻辑，兼容现有调用方。
+    """
+    td = _fmt_yyyymmdd(_parse_yyyymmdd(trade_date))
+    if trade_dates is not None:
+        normalized: set[str] = set()
+        for value in trade_dates:
+            try:
+                normalized.add(_fmt_yyyymmdd(_parse_yyyymmdd(str(value))))
+            except Exception:
+                continue
+        candidates = sorted(d for d in normalized if d > td)
+        if candidates:
+            return candidates[0]
+        raise RuntimeError(f"Authoritative calendar has no trading day after {trade_date}")
+
+    cal = _xshg_calendar()
+    if cal is not None:
+        try:
+            start = pd.Timestamp(_parse_yyyymmdd(td)) + pd.Timedelta(days=1)
+            return cal.date_to_session(start, direction="next").strftime("%Y%m%d")
+        except Exception:
+            pass
+
     d = _parse_yyyymmdd(trade_date)
     for _ in range(max_scan_days):
         d += timedelta(days=1)
@@ -95,6 +151,13 @@ def next_a_share_trading_day(trade_date: str, max_scan_days: int = 30) -> str:
 
 def prev_a_share_trading_day(trade_date: str, max_scan_days: int = 30) -> str:
     """返回给定日期之前的上一个 A 股交易日。"""
+    cal = _xshg_calendar()
+    if cal is not None:
+        try:
+            start = pd.Timestamp(_parse_yyyymmdd(trade_date)) - pd.Timedelta(days=1)
+            return cal.date_to_session(start, direction="previous").strftime("%Y%m%d")
+        except Exception:
+            pass
     d = _parse_yyyymmdd(trade_date)
     for _ in range(max_scan_days):
         d -= timedelta(days=1)
@@ -223,6 +286,14 @@ class DataRepo:
         返回完整 A 股交易日历兜底表。
         不再把已有快照目录误当成完整交易日历。
         """
+        cal = _xshg_calendar()
+        if cal is not None:
+            try:
+                sessions = cal.sessions_in_range(pd.Timestamp(start), pd.Timestamp(end))
+                return [d.strftime("%Y%m%d") for d in sessions]
+            except Exception:
+                pass
+
         s = _parse_yyyymmdd(start)
         e = _parse_yyyymmdd(end)
         out: list[str] = []
@@ -242,10 +313,13 @@ class DataRepo:
         统一返回上一交易日 / 下一交易日。
         用于 writers、Step7、后续任何需要 verify_date 的模块。
         """
-        return prev_a_share_trading_day(str(trade_date)), next_a_share_trading_day(str(trade_date))
+        return self.prev_trade_date(str(trade_date)), self.next_trade_date(str(trade_date))
 
     def next_trade_date(self, trade_date: str) -> str:
-        return next_a_share_trading_day(str(trade_date))
+        td = _parse_yyyymmdd(str(trade_date))
+        end = _fmt_yyyymmdd(td + timedelta(days=30))
+        calendar = self.list_trade_dates(start=_fmt_yyyymmdd(td), end=end)
+        return next_a_share_trading_day(str(trade_date), trade_dates=calendar)
 
     def prev_trade_date(self, trade_date: str) -> str:
         return prev_a_share_trading_day(str(trade_date))

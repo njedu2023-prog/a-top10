@@ -26,6 +26,7 @@ Step6 : V2 纯终排器
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -108,8 +109,8 @@ def _clip01(s: pd.Series | np.ndarray | float) -> pd.Series:
 
 
 def _stable_hash_text(x: str) -> int:
-    x = str(x or "")
-    return abs(hash(x)) % (10**12)
+    payload = str(x or "").encode("utf-8")
+    return int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "big")
 
 
 def _ensure_dir(p: Path) -> None:
@@ -345,14 +346,16 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
     out2["stage_bonus"] = ((stage_quality - 1.0) * 0.10).clip(-0.030, 0.015).astype("float64")
     out2["stage_risk_penalty"] = (stage_risk * 0.055).clip(0.0, 0.018).astype("float64")
     out2["stage_adjustment"] = (out2["stage_bonus"] - out2["stage_risk_penalty"]).astype("float64")
-    out2["final_score_v2"] = (
+    out2["final_score_pre_stage"] = (
         out2["raw_final_score"]
         + out2["intraday_bonus"]
-        + out2["stage_bonus"]
         - out2["intraday_soft_risk_penalty"]
         - out2["intraday_hard_risk_penalty"]
-        - out2["stage_risk_penalty"]
+    ).astype("float64")
+    out2["final_score_v2"] = (
+        out2["final_score_pre_stage"] + out2["stage_adjustment"]
     ).clip(0.0, 1.0)
+    out2["stage_adjustment_applied"] = True
     out2["risk_label"] = out2.apply(build_risk_tags, axis=1)
     out2["risk_tags"] = out2["risk_label"]
     out2["risk_level"] = out2.apply(build_risk_level, axis=1)
@@ -378,16 +381,8 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         empty = pd.DataFrame()
         return {"topN": empty, "topn": empty, "full": empty, "meta": {"filtered_all": True}, "warnings": warnings}
 
-    # ---------- dedup ----------
-    # 业务口径：涨停概率为第一排序轴；final_score_v2 融合分时、风险、晋阶质量作为第二排序轴。
-    if cfg.dedup_by_ts_code and "ts_code" in out2.columns:
-        out2 = out2.sort_values(
-            ["prob_final", "final_score_v2", "StrengthScore", "ts_code"],
-            ascending=[False, False, False, True],
-            kind="mergesort",
-        ).drop_duplicates(subset=["ts_code"], keep="first").copy()
-
     # ---------- stable tie-break ----------
+    # Python 的内置 hash 会随进程变化；这里使用确定性摘要，确保同概率结果可复现。
     if cfg.stable_hash_tiebreak:
         out2["_tiebreak_hash"] = [
             _stable_hash_text(f"{a}||{b}||{c}")
@@ -395,13 +390,26 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         ]
     else:
         out2["_tiebreak_hash"] = 0
+    out2["_source_order"] = np.arange(len(out2), dtype="int64")
+
+    # ---------- dedup ----------
+    # 规范概率是唯一业务排序轴；其余字段只在概率完全相同时提供确定性 tie-break。
+    if cfg.dedup_by_ts_code and "ts_code" in out2.columns:
+        out2 = out2.sort_values(
+            ["prob_final", "ts_code", "name", "board", "_tiebreak_hash", "_source_order"],
+            ascending=[False, True, True, True, True, True],
+            kind="mergesort",
+        ).drop_duplicates(subset=["ts_code"], keep="first").copy()
 
     # ---------- full ranking ----------
     full_sorted = out2.sort_values(
-        ["prob_final", "final_score_v2", "StrengthScore", "_tiebreak_hash"],
-        ascending=[False, False, False, True],
+        ["prob_final", "ts_code", "name", "board", "_tiebreak_hash", "_source_order"],
+        ascending=[False, True, True, True, True, True],
         kind="mergesort",
     ).reset_index(drop=True)
+
+    if not full_sorted["prob_final"].is_monotonic_decreasing:
+        raise AssertionError("ranking contract violated: prob_final must be descending")
 
     full_sorted["rank"] = np.arange(1, len(full_sorted) + 1)
     full_sorted["rank_v2"] = full_sorted["rank"]
@@ -419,6 +427,7 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "stage_bonus",
         "stage_risk_penalty",
         "stage_adjustment",
+        "stage_adjustment_applied",
         "board",
         "StrengthScore",
         "ThemeBoost",
@@ -428,6 +437,7 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "Probability",
         "raw_final_score",
         "final_score_base",
+        "final_score_pre_stage",
         "intraday_bonus",
         "intraday_soft_risk_penalty",
         "intraday_hard_risk_penalty",
@@ -464,7 +474,8 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "risk_tags",
     ]
     exist = [c for c in prefer_cols if c in full_sorted.columns]
-    others = [c for c in full_sorted.columns if c not in exist and c != "_tiebreak_hash"]
+    internal_cols = {"_tiebreak_hash", "_source_order"}
+    others = [c for c in full_sorted.columns if c not in exist and c not in internal_cols]
     full_sorted = full_sorted[exist + others]
 
     top_df = full_sorted.head(cfg.topn).copy()
@@ -523,10 +534,11 @@ def run_step6_final_topn(df: Any, s=None) -> Dict[str, Any]:
         "v2_semantics": {
             "main_probability_field": "prob_final",
             "compat_probability_field": "Probability",
-            "primary_rank_field": "Probability",
-            "ranking_policy": "Probability desc, StrengthScore desc, final_score_v2 desc",
+            "primary_rank_field": "prob_final",
+            "ranking_policy": "prob_final desc; deterministic identity tie-break only",
             "main_score_field": "final_score",
             "upgraded_score_field": "final_score_v2",
+            "stage_adjustment_policy": "applied_once_in_step6",
         },
     }
 

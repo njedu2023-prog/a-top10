@@ -106,11 +106,22 @@ def _build_candidate_pool(payload: Dict[str, Any]) -> pd.DataFrame:
     if out.empty:
         return out
 
-    out = out.sort_values(
-        by=["Probability", "StrengthScore"],
-        ascending=[False, False],
-        na_position="last",
-    ).reset_index(drop=True)
+    published_rank = pd.to_numeric(out.get("rank"), errors="coerce")
+    if published_rank.notna().any():
+        out = out.assign(_published_rank=published_rank).sort_values(
+            by=["_published_rank", "Probability", "ts_code"],
+            ascending=[True, False, True],
+            na_position="last",
+            kind="mergesort",
+        ).drop(columns=["_published_rank"])
+    else:
+        out = out.sort_values(
+            by=["Probability", "StrengthScore", "ts_code"],
+            ascending=[False, False, True],
+            na_position="last",
+            kind="mergesort",
+        )
+    out = out.reset_index(drop=True)
     out["rank"] = range(11, len(out) + 11)
     if "intraday_available" in out.columns:
         out["intraday_coverage"] = (
@@ -125,6 +136,8 @@ def _format_candidate_pool(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     for col in [
         "Probability",
+        "p_limit_up_calibrated",
+        "rank_score",
         "StrengthScore",
         "ThemeBoost",
         "final_score_v2",
@@ -138,7 +151,9 @@ def _format_candidate_pool(df: pd.DataFrame) -> pd.DataFrame:
         "auction_strength_score",
     ]:
         if col in out.columns:
-            out[col] = out[col].map(_format_probability if col == "Probability" else _format_score)
+            out[col] = out[col].map(
+                _format_probability if col in {"Probability", "p_limit_up_calibrated"} else _format_score
+            )
     return out
 
 
@@ -207,7 +222,14 @@ def ensure_candidate_pool_report_columns(outdir: Path, trade_date: str) -> None:
     if candidate_df.empty:
         body = "（无 Top10 之外的候选样本）"
     else:
-        body = _df_to_md_table(candidate_df, cols=CANDIDATE_REPORT_COLS)
+        calibrated = bool(
+            "probability_is_calibrated" in candidate_df.columns
+            and pd.to_numeric(candidate_df["probability_is_calibrated"], errors="coerce").fillna(0).eq(1).all()
+            and pd.to_numeric(candidate_df.get("p_limit_up_calibrated"), errors="coerce").notna().all()
+        )
+        display_col = "p_limit_up_calibrated" if calibrated else "rank_score"
+        cols = [display_col if c == "Probability" else c for c in CANDIDATE_REPORT_COLS]
+        body = _df_to_md_table(candidate_df, cols=cols)
 
     heading = f"{trade_date} 预测：{verify_date} 候选池补充表"
     updated: List[bool] = [
@@ -232,11 +254,22 @@ def _rank_day(df_day: pd.DataFrame) -> pd.DataFrame:
         day["_rank_order"] = pd.to_numeric(day["rank"], errors="coerce")
     else:
         day["_rank_order"] = pd.NA
-    day = day.sort_values(
-        by=["_rank_prob", "_rank_order"],
-        ascending=[False, True],
-        na_position="last",
-    ).reset_index(drop=True)
+    # Backtests must consume the order that was actually published.  Only
+    # legacy rows without a usable rank may fall back to Probability.
+    if day["_rank_order"].notna().any():
+        day = day.sort_values(
+            by=["_rank_order", "_rank_prob"],
+            ascending=[True, False],
+            na_position="last",
+            kind="mergesort",
+        ).reset_index(drop=True)
+    else:
+        day = day.sort_values(
+            by=["_rank_prob"],
+            ascending=[False],
+            na_position="last",
+            kind="mergesort",
+        ).reset_index(drop=True)
     return day.drop(columns=["_rank_prob", "_rank_order"], errors="ignore")
 
 
@@ -321,18 +354,12 @@ def _build_professional_stats(feature_history: pd.DataFrame) -> Tuple[pd.DataFra
 
 
 def _professional_stats_body(stats_df: pd.DataFrame, effectiveness: Optional[float], meta: Dict[str, Any]) -> str:
-    lines = [
-        f"统计口径：只统计 `verify_date >= {PERFORMANCE_START_VERIFY_DATE}` 的已验证样本；按预测日内 `Probability` 降序重新取 Top1 / Top1-3 / Top1-5 / Top10。",
-        "",
-    ]
+    lines: List[str] = []
     if stats_df.empty:
         lines.append("暂无满足新口径的已验证样本。")
         return "\n".join(lines)
 
     lines.append(_df_to_md_table(stats_df))
-    lines.append("")
-    lines.append("排序有效性口径：`Top1 * 40% + Top1-3 * 30% + Top1-5 * 20% + Top10 * 10%`。")
-    lines.append(f"排序有效性：**{_fmt_pct(effectiveness)}**")
     lines.append("")
     lines.append(f"样本范围：{meta.get('eligible_days', 0)} 个验证日，{meta.get('eligible_rows', 0)} 条候选样本。")
     return "\n".join(lines)
@@ -343,7 +370,7 @@ def ensure_professional_performance_sections(outdir: Path, trade_date: str) -> N
     body = _professional_stats_body(stats_df, effectiveness, meta)
 
     old_daily_heading = "近10日 Top10 绩效"
-    new_daily_heading = f"专业分层回测统计（{PERFORMANCE_START_VERIFY_DATE} 起）"
+    new_daily_heading = "分层回测统计"
     daily_paths = [
         outdir / f"predict_top10_{trade_date}.md",
         outdir / "latest.md",
@@ -357,7 +384,7 @@ def ensure_professional_performance_sections(outdir: Path, trade_date: str) -> N
     learning_updated = _update_markdown_section(
         learning_path,
         "1.1) 近10日 Top10 命中率（done-only）",
-        f"1.1) 专业分层回测统计（{PERFORMANCE_START_VERIFY_DATE} 起）",
+        "1.1) 分层回测统计",
         body,
         "professional learning report postprocess",
     )

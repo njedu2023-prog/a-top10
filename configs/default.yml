@@ -1,4 +1,4 @@
-version: "0.1"
+version: "0.2-core-value"
 timezone: "Asia/Shanghai"
 
 data_repo:
@@ -35,10 +35,16 @@ scores:
 theme:
   sigmoid_k: 0.18
   use_dragon_leader_rank: true
+  topk_industry: 40
+  dragon_bonus: 0.08
+  north_bonus: 0.05
+  fuzzy_max_rows: 300
 
 ml:
-  model: "placeholder"      # placeholder | logistic | lightgbm
-  features_dim: 30
+  model: "auto"             # auto prefers HGB; options: hgb | logistic | lightgbm
+  schema_version: "step5-v4"
+  feature_mode: "core_then_enhanced"
+  probability_contract: "calibrated_model_else_rank_score"
 
   # ===== V2：Step5 概率语义配置 =====
   enable_rule: true
@@ -89,12 +95,6 @@ training:
   # Step7 训练窗口天数
   lookback_days: 150
 
-risk:
-  remove_st: true
-  remove_dragon_net_sell: true
-  remove_high_accel: true
-  remove_next_day_nuke: true
-
 intraday:
   enabled: true
   require_intraday_features: false
@@ -128,6 +128,7 @@ intraday:
     base_strength_weight: 0.80
     intraday_quality_weight: 0.20
 
+  # Diagnostic adjustment only. It must never re-order the published list.
   final_score:
     quality_bonus_weight: 0.025
     confidence_bonus_weight: 0.010
@@ -173,6 +174,9 @@ intraday:
 
 # ===== V2：Step6 纯终排配置 =====
 step6:
+  ranking_axis: "Probability"
+  strict_probability_order: true
+  composite_score_diagnostic_only: true
   score_mode: "add"      # add | geo
 
   # final_score = w_prob * prob_final + w_strength * strength01 + w_theme * theme01

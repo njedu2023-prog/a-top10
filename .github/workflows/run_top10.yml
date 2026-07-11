@@ -30,6 +30,7 @@ jobs:
     env:
       TZ: Asia/Shanghai
       PYTHONUTF8: "1"
+      LOKY_MAX_CPU_COUNT: "2"
 
       # ✅ P1 run meta（给 writers.py / step7 用）
       RUN_ID: ${{ github.run_id }}
@@ -59,6 +60,7 @@ jobs:
 
       OPTIONAL_INTRADAY_FILES: >-
         stk_auction.csv
+        auction_features.csv
         intraday_features.csv
 
       LOOKBACK_DAYS: "20"
@@ -84,6 +86,12 @@ jobs:
           fi
           pip install -U tabulate
           pip install -U lightgbm
+
+      - name: Run engine contract tests
+        run: |
+          set -euo pipefail
+          python -m compileall -q a_top10 tools tests
+          python -m unittest discover -s tests -v
 
       # Resolve trade_date (P0 gate: open_times & seal_amount required)
       - name: Resolve trade_date (manual or auto, with P0 gate)
@@ -246,7 +254,27 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Run Top10 Engine + Step7
+      - name: Refresh calibrated models before ranking
+        env:
+          TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
+        run: |
+          set -euo pipefail
+          python -m a_top10.steps.step7_self_learning
+
+          python - <<'PY'
+          from pathlib import Path
+
+          required = [
+              Path("models/step5_hgb.joblib"),
+              Path("models/step5_hgb.manifest.json"),
+          ]
+          missing = [str(path) for path in required if not path.is_file()]
+          if missing:
+              raise SystemExit(f"calibrated production model missing after refresh: {missing}")
+          print("[PASS] calibrated production model refreshed")
+          PY
+
+      - name: Run Top10 Engine
         env:
           TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
         run: |
@@ -257,8 +285,6 @@ jobs:
           else
             python -m a_top10
           fi
-
-          python -m a_top10.steps.step7_self_learning
 
           td="${{ steps.resolve_date.outputs.trade_date }}"
           if [ -f "outputs/debug_intraday_${td}.json" ]; then
@@ -274,72 +300,62 @@ jobs:
           set -euo pipefail
           python tools/apply_limit_stage_overlay.py
 
-      - name: Export Top1-3 TopEVR JoinQuant CSV from final Top10 ranking
+      - name: Validate published probability ranking
         run: |
           set -euo pipefail
-
-          td="${{ steps.resolve_date.outputs.trade_date }}"
-          src="outputs/learning/pred_top10_latest.csv"
-          if [ ! -s "$src" ]; then
-            echo "ERROR: final Top10 CSV missing/empty: $src"
-            exit 31
-          fi
-
           python - <<'PY'
-          import os
           from pathlib import Path
           import pandas as pd
 
-          td = os.environ["TOP10_TRADE_DATE"]
-          src = Path("outputs/learning/pred_top10_latest.csv")
-          df = pd.read_csv(src)
-
-          # The source CSV is already the final Top10 ranking. Use rank only to
-          # preserve the established order if a writer changes row order later.
-          if "rank" in df.columns:
-              rank = pd.to_numeric(df["rank"], errors="coerce")
-              if rank.notna().any():
-                  df = df.assign(__rank_sort=rank).sort_values("__rank_sort", kind="mergesort").drop(columns=["__rank_sort"])
-
-          def to_joinquant_code(value):
-              code = str(value).strip().upper()
-              if code.endswith(".SH"):
-                  return code[:-3] + ".XSHG"
-              if code.endswith(".SZ"):
-                  return code[:-3] + ".XSHE"
-              if code.endswith(".BJ"):
-                  return code[:-3] + ".XBEI"
-              code6 = code.split(".")[0]
-              if code6.startswith(("600", "601", "603", "605", "688", "689")):
-                  return code6 + ".XSHG"
-              if code6.startswith(("000", "001", "002", "003", "300", "301")):
-                  return code6 + ".XSHE"
-              if code6.startswith(("430", "800", "830", "831", "832", "833", "834", "835", "836", "837", "838", "839", "870", "871", "872", "873", "920")):
-                  return code6 + ".XBEI"
-              return code
-
-          top3 = df.head(3).copy()
-          weight = 1.0 / len(top3) if len(top3) else 0.0
-          trade_date = top3["trade_date"] if "trade_date" in top3.columns else td
-          target_trade_date = top3["verify_date"] if "verify_date" in top3.columns else ""
-          jq = pd.DataFrame({
-              "trade_date": trade_date,
-              "target_trade_date": target_trade_date,
-              "jq_code": top3["ts_code"].map(to_joinquant_code) if "ts_code" in top3.columns else "",
-              "target_weight": weight,
-              "risk_budget": 1.0,
-              "regime": "RISK_ON",
-              "reason": "TopEVR_EV>3pct_Risk<1pct",
-          })
-          outdir = Path("outputs")
-          outdir.mkdir(parents=True, exist_ok=True)
-          jq.to_csv(outdir / "top101-3.csv", index=False, encoding="utf-8-sig")
-          jq.to_csv(outdir / f"top101-3_{td}.csv", index=False, encoding="utf-8-sig")
-          print(f"[WRITE] outputs/top101-3.csv rows={len(jq)}")
-          print(f"[WRITE] outputs/top101-3_{td}.csv rows={len(jq)}")
+          path = Path("outputs/learning/pred_top10_latest.csv")
+          if not path.exists():
+              raise SystemExit(f"missing published ranking: {path}")
+          df = pd.read_csv(path)
+          rank = pd.to_numeric(df.get("rank"), errors="coerce")
+          prob = pd.to_numeric(df.get("Probability"), errors="coerce")
+          expected = list(range(1, len(df) + 1))
+          if rank.astype("Int64").tolist() != expected:
+              raise SystemExit(f"rank contract failed: {rank.tolist()}")
+          if not prob.is_monotonic_decreasing:
+              raise SystemExit(f"Probability is not descending: {prob.tolist()}")
+          calibrated = df.get("probability_is_calibrated")
+          calibrated = calibrated.astype(str).str.strip().str.lower().isin({"1", "true", "yes"})
+          p_cal = pd.to_numeric(df.get("p_limit_up_calibrated"), errors="coerce")
+          if not calibrated.all() or p_cal.isna().any():
+              raise SystemExit("published ranking contains uncalibrated probability rows")
+          if not prob.equals(p_cal):
+              raise SystemExit("Probability must equal p_limit_up_calibrated")
+          print(f"[PASS] published ranking is calibrated and strict Probability descending, rows={len(df)}")
           PY
+
+      - name: Run Step7 strict T+1 learning and evaluation
         env:
-          TOP10_TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
+          TRADE_DATE: ${{ steps.resolve_date.outputs.trade_date }}
+        run: |
+          set -euo pipefail
+          python -m a_top10.steps.step7_self_learning
+
+      - name: Validate Top1-3 JoinQuant export
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+
+          top10 = pd.read_csv("outputs/learning/pred_top10_latest.csv")
+          export = pd.read_csv("outputs/top101-3.csv")
+          expected_columns = [
+              "trade_date", "target_trade_date", "jq_code", "target_weight",
+              "risk_budget", "regime", "reason",
+          ]
+          if export.columns.tolist() != expected_columns:
+              raise SystemExit(f"unexpected JoinQuant columns: {export.columns.tolist()}")
+          if len(export) != min(3, len(top10)):
+              raise SystemExit(f"unexpected Top1-3 row count: {len(export)}")
+          if abs(pd.to_numeric(export["target_weight"]).sum() - 1.0) > 1e-9:
+              raise SystemExit("Top1-3 target weights must sum to 1")
+          print("[PASS] Top1-3 JoinQuant export is minimal and complete")
+          PY
 
       - name: Validate intraday refine artifacts
         run: |
