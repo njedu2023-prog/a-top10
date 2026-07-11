@@ -24,6 +24,44 @@
     "auction_available_ratio": 1.0
   },
   "prob_source_counts": {
-    "fallback_rule": 91
+    "hgb": 91
+  },
+  "probability_semantics_counts": {
+    "calibrated_probability": 91
+  },
+  "model_contracts": {
+    "lr": {
+      "status": "valid",
+      "reason": "ordered feature contract validated",
+      "expected_feature_count": 5,
+      "actual_feature_count": 5,
+      "manifest_schema_version": "1",
+      "feature_schema_version": "step5_core_features_v1",
+      "probability_is_calibrated": true,
+      "prediction_status": "ok",
+      "prediction_error": ""
+    },
+    "hgb": {
+      "status": "valid",
+      "reason": "ordered feature contract validated",
+      "expected_feature_count": 5,
+      "actual_feature_count": 5,
+      "manifest_schema_version": "1",
+      "feature_schema_version": "step5_core_features_v1",
+      "probability_is_calibrated": true,
+      "prediction_status": "ok",
+      "prediction_error": ""
+    },
+    "lgbm": {
+      "status": "valid",
+      "reason": "ordered feature contract validated",
+      "expected_feature_count": 5,
+      "actual_feature_count": 5,
+      "manifest_schema_version": "1",
+      "feature_schema_version": "step5_core_features_v1",
+      "probability_is_calibrated": true,
+      "prediction_status": "ok",
+      "prediction_error": ""
+    }
   }
 }
