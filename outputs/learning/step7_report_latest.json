@@ -1,43 +1,32 @@
 {
-  "ts": "2026-07-11 20:52:25",
+  "ts": "2026-07-13 21:42:11",
   "run_mode": "auto_daily",
-  "today_yyyymmdd": "20260711",
-  "latest_snapshot_yyyymmdd": "20260710",
-  "label_upper_bound_yyyymmdd": "20260710",
+  "today_yyyymmdd": "20260713",
+  "latest_snapshot_yyyymmdd": "20260713",
+  "label_upper_bound_yyyymmdd": "20260713",
   "feature_history_file": "outputs/learning/feature_history.csv",
   "latest_hit": {
-    "trade_date": "20260709",
-    "verify_date": "20260710",
+    "trade_date": "20260710",
+    "verify_date": "20260713",
     "topn": 10,
-    "hit": 1,
-    "hit_rate": 0.1,
-    "note": "src=feature_history_v3;ranking=published_file:pred_top10_20260709.csv",
-    "ranking_source": "published_file:pred_top10_20260709.csv",
+    "hit": 0,
+    "hit_rate": 0.0,
+    "note": "src=feature_history_v3;ranking=published_file:pred_top10_20260710.csv",
+    "ranking_source": "published_file:pred_top10_20260710.csv",
     "top1_n": 1,
     "top1_hit": 0,
     "top1_hit_rate": 0.0,
     "top3_n": 3,
-    "top3_hit": 1,
-    "top3_hit_rate": 0.3333,
+    "top3_hit": 0,
+    "top3_hit_rate": 0.0,
     "top5_n": 5,
-    "top5_hit": 1,
-    "top5_hit_rate": 0.2,
+    "top5_hit": 0,
+    "top5_hit_rate": 0.0,
     "top10_n": 10,
-    "top10_hit": 1,
-    "top10_hit_rate": 0.1
+    "top10_hit": 0,
+    "top10_hit_rate": 0.0
   },
   "hit_rows_done_last10": [
-    {
-      "trade_date": "20260626",
-      "verify_date": "20260629",
-      "topn": 10,
-      "hit": 3,
-      "hit_rate": "0.3",
-      "top1_hit_rate": 1.0,
-      "top3_hit_rate": 1.0,
-      "top5_hit_rate": 0.6,
-      "top10_hit_rate": 0.3
-    },
     {
       "trade_date": "20260629",
       "verify_date": "20260630",
@@ -136,32 +125,43 @@
       "top3_hit_rate": 0.3333,
       "top5_hit_rate": 0.2,
       "top10_hit_rate": 0.1
+    },
+    {
+      "trade_date": "20260710",
+      "verify_date": "20260713",
+      "topn": 10,
+      "hit": 0,
+      "hit_rate": "0.0",
+      "top1_hit_rate": 0.0,
+      "top3_hit_rate": 0.0,
+      "top5_hit_rate": 0.0,
+      "top10_hit_rate": 0.0
     }
   ],
   "ranking_metrics": {
     "Top1": {
-      "trade_days": 108,
-      "sample_count": 108,
+      "trade_days": 109,
+      "sample_count": 109,
       "hit_count": 59,
-      "hit_rate": 0.5463
+      "hit_rate": 0.5413
     },
     "Top3": {
-      "trade_days": 108,
-      "sample_count": 324,
+      "trade_days": 109,
+      "sample_count": 327,
       "hit_count": 149,
-      "hit_rate": 0.4599
+      "hit_rate": 0.4557
     },
     "Top5": {
-      "trade_days": 108,
-      "sample_count": 540,
+      "trade_days": 109,
+      "sample_count": 545,
       "hit_count": 219,
-      "hit_rate": 0.4056
+      "hit_rate": 0.4018
     },
     "Top10": {
-      "trade_days": 108,
-      "sample_count": 1080,
+      "trade_days": 109,
+      "sample_count": 1090,
       "hit_count": 362,
-      "hit_rate": 0.3352
+      "hit_rate": 0.3321
     }
   },
   "batch_gate": {
@@ -1485,6 +1485,18 @@
         "turnover_rate_missing_rate": 0.0,
         "open_times_missing_rate": 0.0,
         "seal_amount_missing_rate": 0.0,
+        "mature_learnable_samples": 91,
+        "batch_quality_score": 97.0,
+        "pass": true,
+        "fail_reasons": []
+      },
+      "20260713": {
+        "StrengthScore_missing_rate": 0.0,
+        "ThemeBoost_missing_rate": 0.0,
+        "Probability_missing_rate": 0.0,
+        "turnover_rate_missing_rate": 0.0,
+        "open_times_missing_rate": 0.0,
+        "seal_amount_missing_rate": 0.0,
         "mature_learnable_samples": 0,
         "batch_quality_score": 72.9167,
         "pass": false,
@@ -1601,27 +1613,28 @@
       "20260706",
       "20260707",
       "20260708",
-      "20260709"
+      "20260709",
+      "20260710"
     ],
     "fail_dates": [
       "20260407",
-      "20260710"
+      "20260713"
     ],
-    "eligible_train_rows": 7917,
-    "eligible_positive_rows": 1308
+    "eligible_train_rows": 8008,
+    "eligible_positive_rows": 1317
   },
   "reject_reason_summary": {
-    "total_rows": 8101,
-    "learnable_rows": 7917,
-    "rejected_rows": 184,
+    "total_rows": 8129,
+    "learnable_rows": 8008,
+    "rejected_rows": 121,
     "top_reasons": [
       {
         "reason": "pending_next_snapshot",
-        "count": 184
+        "count": 121
       }
     ],
     "reasons": {
-      "pending_next_snapshot": 184
+      "pending_next_snapshot": 121
     },
     "trade_dates": {
       "20260407": {
@@ -1633,12 +1646,12 @@
           }
         ]
       },
-      "20260710": {
-        "rejected_rows": 91,
+      "20260713": {
+        "rejected_rows": 28,
         "top_reasons": [
           {
             "reason": "pending_next_snapshot",
-            "count": 91
+            "count": 28
           }
         ]
       }
@@ -1650,9 +1663,9 @@
     "trained": true,
     "updated": true,
     "detail": {
-      "train_rows": 7917,
-      "pos": 1308,
-      "neg": 6609,
+      "train_rows": 8008,
+      "pos": 1317,
+      "neg": 6691,
       "feature_coverage": 1.0,
       "level": "level3",
       "batch_gate_pass": true,
@@ -1764,14 +1777,15 @@
         "20260706",
         "20260707",
         "20260708",
-        "20260709"
+        "20260709",
+        "20260710"
       ],
       "fail_trade_dates": [
         "20260407",
-        "20260710"
+        "20260713"
       ],
-      "eligible_train_rows": 7917,
-      "eligible_positive_rows": 1308,
+      "eligible_train_rows": 8008,
+      "eligible_positive_rows": 1317,
       "step5_train_result": {
         "ok": true,
         "updated": true,
@@ -1781,8 +1795,8 @@
           "allow_model_update_raw": "auto",
           "allow_model_update": true,
           "level": "level3",
-          "mature_samples": 7917,
-          "positive_samples": 1308,
+          "mature_samples": 8008,
+          "positive_samples": 1317,
           "feature_coverage": 1.0,
           "formal_update_allowed": true,
           "trial_training_only": false,
@@ -1791,12 +1805,12 @@
           "updated": true,
           "reason": "formal_model_updated",
           "data_reason": "ok",
-          "eligible_trade_dates_count": 108,
+          "eligible_trade_dates_count": 109,
           "feature_mode": "core",
           "core_feature_coverage": 1.0,
-          "enhanced_feature_coverage": 0.37511202535833077,
-          "intraday_available_rate": 0.13843627636731085,
-          "auction_available_rate": 0.19199191612984717,
+          "enhanced_feature_coverage": 0.3816718995290425,
+          "intraday_available_rate": 0.13686313686313686,
+          "auction_available_rate": 0.20117382617382618,
           "features": [
             "StrengthScore",
             "ThemeBoost",
@@ -1808,20 +1822,20 @@
           "calibration": {
             "method": "sigmoid",
             "split": "trailing_trade_dates",
-            "unique_trade_dates": 108,
+            "unique_trade_dates": 109,
             "validation": {
-              "holdout_start": "20260625",
+              "holdout_start": "20260626",
               "holdout_days": 11,
-              "holdout_rows": 968,
-              "brier": 0.11446789737077999,
-              "constant_base_rate_brier": 0.11654476790913645,
+              "holdout_rows": 972,
+              "brier": 0.11477681496633416,
+              "constant_base_rate_brier": 0.11687295516927229,
               "p_at_1": 0.5454545454545454,
-              "positive_rate": 0.1322314049586777
+              "positive_rate": 0.13271604938271606
             },
             "reason": "ok",
-            "calibration_start": "20260609",
-            "train_rows": 5807,
-            "calibration_rows": 2110,
+            "calibration_start": "20260610",
+            "train_rows": 5937,
+            "calibration_rows": 2071,
             "calibration_days": 22
           },
           "path": "models/step5_lr.joblib"
@@ -1831,8 +1845,8 @@
           "allow_model_update_raw": "auto",
           "allow_model_update": true,
           "level": "level3",
-          "mature_samples": 7917,
-          "positive_samples": 1308,
+          "mature_samples": 8008,
+          "positive_samples": 1317,
           "feature_coverage": 1.0,
           "formal_update_allowed": true,
           "trial_training_only": false,
@@ -1841,12 +1855,12 @@
           "updated": true,
           "reason": "formal_model_updated",
           "data_reason": "ok",
-          "eligible_trade_dates_count": 108,
+          "eligible_trade_dates_count": 109,
           "feature_mode": "core",
           "core_feature_coverage": 1.0,
-          "enhanced_feature_coverage": 0.37511202535833077,
-          "intraday_available_rate": 0.13843627636731085,
-          "auction_available_rate": 0.19199191612984717,
+          "enhanced_feature_coverage": 0.3816718995290425,
+          "intraday_available_rate": 0.13686313686313686,
+          "auction_available_rate": 0.20117382617382618,
           "features": [
             "StrengthScore",
             "ThemeBoost",
@@ -1858,20 +1872,20 @@
           "calibration": {
             "method": "sigmoid",
             "split": "trailing_trade_dates",
-            "unique_trade_dates": 108,
+            "unique_trade_dates": 109,
             "validation": {
-              "holdout_start": "20260625",
+              "holdout_start": "20260626",
               "holdout_days": 11,
-              "holdout_rows": 968,
-              "brier": 0.11349662240975589,
-              "constant_base_rate_brier": 0.11654476790913645,
-              "p_at_1": 0.7272727272727273,
-              "positive_rate": 0.1322314049586777
+              "holdout_rows": 972,
+              "brier": 0.1143296838384888,
+              "constant_base_rate_brier": 0.11687295516927229,
+              "p_at_1": 0.5454545454545454,
+              "positive_rate": 0.13271604938271606
             },
             "reason": "ok",
-            "calibration_start": "20260609",
-            "train_rows": 5807,
-            "calibration_rows": 2110,
+            "calibration_start": "20260610",
+            "train_rows": 5937,
+            "calibration_rows": 2071,
             "calibration_days": 22
           },
           "path": "models/step5_hgb.joblib"
@@ -1881,8 +1895,8 @@
           "allow_model_update_raw": "auto",
           "allow_model_update": true,
           "level": "level3",
-          "mature_samples": 7917,
-          "positive_samples": 1308,
+          "mature_samples": 8008,
+          "positive_samples": 1317,
           "feature_coverage": 1.0,
           "formal_update_allowed": true,
           "trial_training_only": false,
@@ -1891,12 +1905,12 @@
           "updated": true,
           "reason": "formal_model_updated",
           "data_reason": "ok",
-          "eligible_trade_dates_count": 108,
+          "eligible_trade_dates_count": 109,
           "feature_mode": "core",
           "core_feature_coverage": 1.0,
-          "enhanced_feature_coverage": 0.37511202535833077,
-          "intraday_available_rate": 0.13843627636731085,
-          "auction_available_rate": 0.19199191612984717,
+          "enhanced_feature_coverage": 0.3816718995290425,
+          "intraday_available_rate": 0.13686313686313686,
+          "auction_available_rate": 0.20117382617382618,
           "features": [
             "StrengthScore",
             "ThemeBoost",
@@ -1908,20 +1922,20 @@
           "calibration": {
             "method": "sigmoid",
             "split": "trailing_trade_dates",
-            "unique_trade_dates": 108,
+            "unique_trade_dates": 109,
             "validation": {
-              "holdout_start": "20260625",
+              "holdout_start": "20260626",
               "holdout_days": 11,
-              "holdout_rows": 968,
-              "brier": 0.1134861054096431,
-              "constant_base_rate_brier": 0.11654476790913645,
-              "p_at_1": 0.8181818181818182,
-              "positive_rate": 0.1322314049586777
+              "holdout_rows": 972,
+              "brier": 0.11407591417415122,
+              "constant_base_rate_brier": 0.11687295516927229,
+              "p_at_1": 0.6363636363636364,
+              "positive_rate": 0.13271604938271606
             },
             "reason": "ok",
-            "calibration_start": "20260609",
-            "train_rows": 5807,
-            "calibration_rows": 2110,
+            "calibration_start": "20260610",
+            "train_rows": 5937,
+            "calibration_rows": 2071,
             "calibration_days": 22
           },
           "path": "models/step5_lgbm.joblib"

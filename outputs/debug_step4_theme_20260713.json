@@ -1,0 +1,82 @@
+{
+  "step5_feature_passthrough": {
+    "mapped": {},
+    "missing": []
+  },
+  "trade_date": "20260713",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260713",
+  "params": {
+    "rank_decay_k": 0.18,
+    "topk_industry": 40,
+    "dragon_bonus": 0.08,
+    "north_bonus": 0.05,
+    "fuzzy_max_rows": 300
+  },
+  "source_rows": {
+    "candidate": 28,
+    "hot_boards": 10,
+    "stock_basic": 5530,
+    "top_list": 91,
+    "moneyflow_hsgt": 1
+  },
+  "industry_score_map": {
+    "ok": true,
+    "reason": "",
+    "industry_col": "industry",
+    "rank_col": "rank",
+    "heat_col": "",
+    "size": 10,
+    "top5": [
+      {
+        "industry": "化学制药",
+        "theme_heat": 1.0,
+        "board_rank": 1
+      },
+      {
+        "industry": "中药Ⅱ",
+        "theme_heat": 0.7946272018253463,
+        "board_rank": 2
+      },
+      {
+        "industry": "化学制品",
+        "theme_heat": 0.6230854212758787,
+        "board_rank": 3
+      },
+      {
+        "industry": "IT服务Ⅱ",
+        "theme_heat": 0.479801681970459,
+        "board_rank": 4
+      },
+      {
+        "industry": "专用设备",
+        "theme_heat": 0.36012104274902346,
+        "board_rank": 5
+      }
+    ]
+  },
+  "apply": {
+    "candidate_rows": 28,
+    "candidate_code_col": "ts_code",
+    "theme_main_before_ratio": 1.0,
+    "theme_main_after_ratio": 1.0,
+    "matched_industry_count": 20,
+    "matched_industry_exact": 0,
+    "matched_industry_norm": 20,
+    "matched_industry_fuzzy": 0,
+    "lhb_hits": 16,
+    "north_hits": 0,
+    "reason": "theme boost applied"
+  },
+  "diagnosis": "theme boost applied",
+  "quality_distribution": {
+    "A": 20,
+    "C": 8
+  },
+  "missing_rate": {
+    "theme_main": 0.0,
+    "theme_heat": 0.2857142857142857,
+    "board_rank": 0.2857142857142857,
+    "lhb_net_buy": 0.4285714285714286,
+    "ThemeBoost": 0.0
+  }
+}

@@ -1,18 +1,18 @@
 # Step3 Debug Report
 
-- trade_date: `20260710`
-- rows: 91
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260710`
+- trade_date: `20260713`
+- rows: 28
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260713`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5521
-- daily_basic.csv: 5599
-- top_list.csv: 98
+- daily.csv: 5524
+- daily_basic.csv: 5602
+- top_list.csv: 91
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 93
+- limit_list_d.csv: 30
 - limit_break_d.csv: 0
-- stk_limit.csv: 7694
+- stk_limit.csv: 7695
 
 ## Missing rate
 - close: 0.0000
@@ -46,12 +46,12 @@
 ## Nonzero rate
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
-- open_times: 0.6044
-- intraday_available: 0.0000
-- auction_available: 1.0000
+- open_times: 0.7143
+- intraday_available: 1.0000
+- auction_available: 0.9643
 
 ## Strength quality distribution
-- A: 91
+- A: 28
 
 ## Duplicate contract columns after closeout
 - amount_x
@@ -61,17 +61,17 @@
 
 ```json
 {
-  "trade_date": "20260710",
+  "trade_date": "20260713",
   "step": "step3_strength_score_v3_closeout",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260710",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260713",
   "files": {
-    "daily.csv": 5521,
-    "daily_basic.csv": 5599,
-    "top_list.csv": 98,
+    "daily.csv": 5524,
+    "daily_basic.csv": 5602,
+    "top_list.csv": 91,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 93,
+    "limit_list_d.csv": 30,
     "limit_break_d.csv": 0,
-    "stk_limit.csv": 7694
+    "stk_limit.csv": 7695
   },
   "missing_rate": {
     "close": 0.0,
@@ -105,12 +105,12 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
-    "open_times": 0.6043956043956044,
-    "intraday_available": 0.0,
-    "auction_available": 1.0
+    "open_times": 0.7142857142857143,
+    "intraday_available": 1.0,
+    "auction_available": 0.9642857142857143
   },
   "quality_distribution": {
-    "A": 91
+    "A": 28
   },
   "duplicate_contract_cols_after_closeout": [
     "amount_x",
