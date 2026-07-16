@@ -1,5 +1,5 @@
 {
-  "ts": "2026-07-16 20:53:19",
+  "ts": "2026-07-16 21:05:19",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260716",
   "latest_snapshot_yyyymmdd": "20260716",
@@ -1869,7 +1869,7 @@
               "holdout_start": "20260630",
               "holdout_days": 12,
               "holdout_rows": 987,
-              "brier": 0.1159669369100333,
+              "brier": 0.11596693691003332,
               "constant_base_rate_brier": 0.1161129064325275,
               "p_at_1": 0.5833333333333334,
               "positive_rate": 0.13171225937183384
