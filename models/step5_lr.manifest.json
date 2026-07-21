@@ -10,7 +10,7 @@
   ],
   "model_kind": "logistic",
   "probability_is_calibrated": true,
-  "created_at_utc": "2026-07-21T12:49:08Z",
+  "created_at_utc": "2026-07-21T13:00:17Z",
   "calibration": {
     "method": "sigmoid",
     "split": "trailing_trade_dates",
