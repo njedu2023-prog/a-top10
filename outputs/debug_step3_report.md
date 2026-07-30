@@ -1,18 +1,18 @@
 # Step3 Debug Report
 
-- trade_date: `20260729`
-- rows: 81
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260729`
+- trade_date: `20260730`
+- rows: 52
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260730`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5524
-- daily_basic.csv: 5524
-- top_list.csv: 81
+- daily.csv: 5528
+- daily_basic.csv: 5528
+- top_list.csv: 113
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 81
+- limit_list_d.csv: 52
 - limit_break_d.csv: 0
-- stk_limit.csv: 7712
+- stk_limit.csv: 7715
 
 ## Missing rate
 - close: 0.0000
@@ -46,12 +46,12 @@
 ## Nonzero rate
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
-- open_times: 0.4074
-- intraday_available: 0.5185
+- open_times: 0.4423
+- intraday_available: 1.0000
 - auction_available: 1.0000
 
 ## Strength quality distribution
-- A: 81
+- A: 52
 
 ## Duplicate contract columns after closeout
 - amount_x
@@ -61,17 +61,17 @@
 
 ```json
 {
-  "trade_date": "20260729",
+  "trade_date": "20260730",
   "step": "step3_strength_score_v3_closeout",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260729",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260730",
   "files": {
-    "daily.csv": 5524,
-    "daily_basic.csv": 5524,
-    "top_list.csv": 81,
+    "daily.csv": 5528,
+    "daily_basic.csv": 5528,
+    "top_list.csv": 113,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 81,
+    "limit_list_d.csv": 52,
     "limit_break_d.csv": 0,
-    "stk_limit.csv": 7712
+    "stk_limit.csv": 7715
   },
   "missing_rate": {
     "close": 0.0,
@@ -105,12 +105,12 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
-    "open_times": 0.4074074074074074,
-    "intraday_available": 0.5185185185185185,
+    "open_times": 0.4423076923076923,
+    "intraday_available": 1.0,
     "auction_available": 1.0
   },
   "quality_distribution": {
-    "A": 81
+    "A": 52
   },
   "duplicate_contract_cols_after_closeout": [
     "amount_x",
