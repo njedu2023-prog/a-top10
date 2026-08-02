@@ -23,6 +23,22 @@ from a_top10.intraday_features import (
 CODE_COL_CANDIDATES = ["ts_code", "TS_CODE", "code", "CODE", "证券代码", "股票代码", "代码"]
 NAME_COL_CANDIDATES = ["name", "名称", "股票简称", "ts_name", "证券名称"]
 INDUSTRY_COL_CANDIDATES = ["industry", "行业", "industry_name", "所属行业"]
+UP_LIMIT_COL_CANDIDATES = ["up_limit", "涨停价"]
+DOWN_LIMIT_COL_CANDIDATES = ["down_limit", "跌停价"]
+PRE_CLOSE_COL_CANDIDATES = ["pre_close", "preclose", "昨收", "昨收价", "前收盘"]
+LIMIT_PCT_COL_CANDIDATES = [
+    "limit_pct",
+    "limit_rate",
+    "price_limit_pct",
+    "涨停幅度",
+    "涨跌幅限制",
+    "pct_chg",
+    "涨幅",
+    "涨跌幅",
+]
+
+STANDARD_LIMIT_MIN_PCT = 8.5
+STANDARD_LIMIT_MAX_PCT = 11.5
 
 
 # ============================================================
@@ -238,6 +254,117 @@ def _filter_close_limit_up(df: pd.DataFrame, enabled: bool = True) -> tuple[pd.D
     return out, stats
 
 
+def _numeric_series(df: pd.DataFrame, col: Optional[str]) -> pd.Series:
+    if df is None or not col or col not in df.columns:
+        return pd.Series(index=df.index if isinstance(df, pd.DataFrame) else None, dtype="float64")
+    cleaned = (
+        df[col]
+        .astype("string")
+        .str.replace(",", "", regex=False)
+        .str.replace("%", "", regex=False)
+        .str.strip()
+    )
+    return pd.to_numeric(cleaned, errors="coerce")
+
+
+def _limit_regime_from_code(ts_code: Any) -> Optional[float]:
+    code = _normalize_ts_code_value(ts_code)
+    digits = code.split(".", 1)[0]
+    exchange = code.split(".", 1)[1] if "." in code else ""
+
+    if exchange == "BJ" or digits.startswith(("4", "8", "92")):
+        return 30.0
+    if digits.startswith(("300", "301", "688", "689")):
+        return 20.0
+    if digits.startswith(("000", "001", "002", "003", "600", "601", "603", "605")):
+        return 10.0
+    return None
+
+
+def _infer_limit_regime(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    regime = pd.Series(float("nan"), index=df.index, dtype="float64")
+    source = pd.Series("unknown", index=df.index, dtype="string")
+
+    up_col = _first_existing_col(df, UP_LIMIT_COL_CANDIDATES)
+    down_col = _first_existing_col(df, DOWN_LIMIT_COL_CANDIDATES)
+    if up_col and down_col:
+        up_limit = _numeric_series(df, up_col)
+        down_limit = _numeric_series(df, down_col)
+        valid = up_limit.notna() & down_limit.notna() & (up_limit > down_limit) & ((up_limit + down_limit) > 0)
+        regime.loc[valid] = ((up_limit.loc[valid] - down_limit.loc[valid]) / (up_limit.loc[valid] + down_limit.loc[valid])) * 100.0
+        source.loc[valid] = "up_limit+down_limit"
+
+    pre_close_col = _first_existing_col(df, PRE_CLOSE_COL_CANDIDATES)
+    if up_col and pre_close_col:
+        up_limit = _numeric_series(df, up_col)
+        pre_close = _numeric_series(df, pre_close_col)
+        missing = regime.isna()
+        valid = missing & up_limit.notna() & pre_close.notna() & (pre_close > 0) & (up_limit > pre_close)
+        regime.loc[valid] = ((up_limit.loc[valid] / pre_close.loc[valid]) - 1.0) * 100.0
+        source.loc[valid] = "up_limit+pre_close"
+
+    pct_col = _first_existing_col(df, LIMIT_PCT_COL_CANDIDATES)
+    if pct_col:
+        pct = _numeric_series(df, pct_col).abs()
+        fraction = pct.notna() & pct.le(1.0)
+        pct.loc[fraction] = pct.loc[fraction] * 100.0
+        valid = regime.isna() & pct.notna()
+        regime.loc[valid] = pct.loc[valid]
+        source.loc[valid] = pct_col
+
+    if "ts_code" in df.columns:
+        code_regime = df["ts_code"].map(_limit_regime_from_code)
+        valid = regime.isna() & code_regime.notna()
+        regime.loc[valid] = pd.to_numeric(code_regime.loc[valid], errors="coerce")
+        source.loc[valid] = "code_board"
+
+    return regime, source
+
+
+def _filter_standard_10pct_limit(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    stats: Dict[str, Any] = {
+        "rule": "standard_10pct_only",
+        "tolerance_pct": [STANDARD_LIMIT_MIN_PCT, STANDARD_LIMIT_MAX_PCT],
+        "input_rows": int(len(df)) if isinstance(df, pd.DataFrame) else 0,
+        "kept_rows": 0,
+        "dropped_rows": 0,
+        "source_counts": {},
+        "regime_counts": {
+            "5pct": 0,
+            "10pct": 0,
+            "20pct": 0,
+            "30pct": 0,
+            "other_or_unknown": 0,
+        },
+        "dropped_code_samples": [],
+    }
+    if df is None or df.empty:
+        return df, stats
+
+    out = df.copy()
+    regime, source = _infer_limit_regime(out)
+    standard_mask = regime.between(STANDARD_LIMIT_MIN_PCT, STANDARD_LIMIT_MAX_PCT, inclusive="both")
+
+    buckets = pd.Series("other_or_unknown", index=out.index, dtype="string")
+    buckets.loc[regime.between(3.5, 6.5, inclusive="both")] = "5pct"
+    buckets.loc[standard_mask] = "10pct"
+    buckets.loc[regime.between(17.0, 23.0, inclusive="both")] = "20pct"
+    buckets.loc[regime.between(27.0, 33.0, inclusive="both")] = "30pct"
+
+    stats["source_counts"] = {str(k): int(v) for k, v in source.value_counts(dropna=False).to_dict().items()}
+    observed_counts = buckets.value_counts(dropna=False).to_dict()
+    for bucket in stats["regime_counts"]:
+        stats["regime_counts"][bucket] = int(observed_counts.get(bucket, 0))
+
+    dropped_codes = _safe_series(out.loc[~standard_mask], "ts_code").tolist()
+    stats["dropped_code_samples"] = dropped_codes[:20]
+
+    out = out.loc[standard_mask].copy()
+    stats["kept_rows"] = int(len(out))
+    stats["dropped_rows"] = int(stats["input_rows"] - stats["kept_rows"])
+    return out, stats
+
+
 def _merge_stock_basic(base_df: pd.DataFrame, stock_basic: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     dbg: Dict[str, Any] = {
         "ok": False,
@@ -408,7 +535,12 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
         "base_source": "",
         "base_rows": 0,
         "stock_basic_used": False,
-        "filters": {"drop_st": 0, "drop_delist": 0, "close_limit_up": {}},
+        "filters": {
+            "drop_st": 0,
+            "drop_delist": 0,
+            "close_limit_up": {},
+            "standard_10pct_limit": {},
+        },
         "industry_merge": {},
         "final_rows": 0,
         "final_cols": [],
@@ -438,6 +570,9 @@ def step2_build_candidates(s: Settings, ctx: Dict[str, Any]) -> pd.DataFrame:
             "stock_basic_rows": 0,
             "industry_nonblank_ratio_after": float((_safe_series(base_df, "industry") != "").mean()) if len(base_df) else 0.0,
         }
+
+    base_df, standard_limit_stats = _filter_standard_10pct_limit(base_df)
+    debug["filters"]["standard_10pct_limit"] = standard_limit_stats
 
     candidates_df = _finalize_schema(base_df)
     candidates_df, filter_stats = _filter_bad_names(candidates_df)
