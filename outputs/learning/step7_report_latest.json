@@ -1,5 +1,5 @@
 {
-  "ts": "2026-08-03 19:42:16",
+  "ts": "2026-08-03 21:59:47",
   "run_mode": "auto_daily",
   "today_yyyymmdd": "20260803",
   "latest_snapshot_yyyymmdd": "20260803",
@@ -9,22 +9,22 @@
     "trade_date": "20260731",
     "verify_date": "20260803",
     "topn": 10,
-    "hit": 1,
-    "hit_rate": 0.1,
+    "hit": 2,
+    "hit_rate": 0.2,
     "note": "src=feature_history_v3;ranking=published_file:pred_top10_20260731.csv",
     "ranking_source": "published_file:pred_top10_20260731.csv",
     "top1_n": 1,
     "top1_hit": 0,
     "top1_hit_rate": 0.0,
     "top3_n": 3,
-    "top3_hit": 0,
-    "top3_hit_rate": 0.0,
+    "top3_hit": 1,
+    "top3_hit_rate": 0.3333,
     "top5_n": 5,
-    "top5_hit": 0,
-    "top5_hit_rate": 0.0,
+    "top5_hit": 2,
+    "top5_hit_rate": 0.4,
     "top10_n": 10,
-    "top10_hit": 1,
-    "top10_hit_rate": 0.1
+    "top10_hit": 2,
+    "top10_hit_rate": 0.2
   },
   "hit_rows_done_last10": [
     {
@@ -130,12 +130,12 @@
       "trade_date": "20260731",
       "verify_date": "20260803",
       "topn": 10,
-      "hit": 1,
-      "hit_rate": "0.1",
+      "hit": 2,
+      "hit_rate": "0.2",
       "top1_hit_rate": 0.0,
-      "top3_hit_rate": 0.0,
-      "top5_hit_rate": 0.0,
-      "top10_hit_rate": 0.1
+      "top3_hit_rate": 0.3333,
+      "top5_hit_rate": 0.4,
+      "top10_hit_rate": 0.2
     }
   ],
   "ranking_metrics": {
@@ -148,20 +148,20 @@
     "Top3": {
       "trade_days": 124,
       "sample_count": 372,
-      "hit_count": 164,
-      "hit_rate": 0.4409
+      "hit_count": 165,
+      "hit_rate": 0.4435
     },
     "Top5": {
       "trade_days": 124,
       "sample_count": 620,
-      "hit_count": 242,
-      "hit_rate": 0.3903
+      "hit_count": 244,
+      "hit_rate": 0.3935
     },
     "Top10": {
       "trade_days": 124,
       "sample_count": 1240,
-      "hit_count": 399,
-      "hit_rate": 0.3218
+      "hit_count": 400,
+      "hit_rate": 0.3226
     }
   },
   "batch_gate": {
@@ -2037,7 +2037,7 @@
               "holdout_start": "20260715",
               "holdout_days": 13,
               "holdout_rows": 928,
-              "brier": 0.13342472268261735,
+              "brier": 0.1333833911855982,
               "constant_base_rate_brier": 0.13273469182220204,
               "p_at_1": 0.3076923076923077,
               "positive_rate": 0.15732758620689655
@@ -2087,7 +2087,7 @@
               "holdout_start": "20260715",
               "holdout_days": 13,
               "holdout_rows": 928,
-              "brier": 0.12920844947674268,
+              "brier": 0.12915609873870074,
               "constant_base_rate_brier": 0.13273469182220204,
               "p_at_1": 0.6153846153846154,
               "positive_rate": 0.15732758620689655
@@ -2137,7 +2137,7 @@
               "holdout_start": "20260715",
               "holdout_days": 13,
               "holdout_rows": 928,
-              "brier": 0.1295097893029824,
+              "brier": 0.12960414363400644,
               "constant_base_rate_brier": 0.13273469182220204,
               "p_at_1": 0.46153846153846156,
               "positive_rate": 0.15732758620689655

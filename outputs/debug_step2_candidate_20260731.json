@@ -12,6 +12,41 @@
       "input_rows": 100,
       "kept_rows": 100,
       "dropped_rows": 0
+    },
+    "standard_10pct_limit": {
+      "rule": "standard_10pct_only",
+      "tolerance_pct": [
+        8.5,
+        11.5
+      ],
+      "input_rows": 100,
+      "kept_rows": 87,
+      "dropped_rows": 13,
+      "source_counts": {
+        "up_limit+down_limit": 100
+      },
+      "regime_counts": {
+        "5pct": 0,
+        "10pct": 87,
+        "20pct": 12,
+        "30pct": 1,
+        "other_or_unknown": 0
+      },
+      "dropped_code_samples": [
+        "300058.SZ",
+        "300364.SZ",
+        "300418.SZ",
+        "300508.SZ",
+        "300720.SZ",
+        "300789.SZ",
+        "300795.SZ",
+        "300996.SZ",
+        "301171.SZ",
+        "301231.SZ",
+        "301396.SZ",
+        "688095.SH",
+        "920130.BJ"
+      ]
     }
   },
   "industry_merge": {
@@ -20,7 +55,7 @@
     "stock_basic_rows": 5534,
     "industry_nonblank_ratio_after": 1.0
   },
-  "final_rows": 100,
+  "final_rows": 87,
   "final_cols": [
     "ts_code",
     "name",
@@ -140,25 +175,25 @@
     "ok": true,
     "reason": "",
     "limit_stage_rows": 206,
-    "matched_rows": 99,
-    "stage_nonblank_rows": 100
+    "matched_rows": 87,
+    "stage_nonblank_rows": 87
   },
   "intraday_merge": {
     "intraday_file_rows": 80,
     "auction_file_rows": 7872,
-    "candidate_rows": 100,
+    "candidate_rows": 87,
     "intraday_matched_rows": 0,
-    "auction_matched_rows": 100,
-    "missing_rows": 100,
+    "auction_matched_rows": 87,
+    "missing_rows": 87,
     "intraday_match_ratio": 0.0,
     "auction_match_ratio": 1.0,
     "missing_policy": "neutral",
     "missing_reason_count": {
-      "missing_stock": 100
+      "missing_stock": 87
     },
     "default_value_counts": {
-      "quality_default": 100,
-      "reseal_default": 100,
+      "quality_default": 87,
+      "reseal_default": 87,
       "auction_default": 0
     },
     "added_columns": [

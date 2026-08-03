@@ -1,6 +1,6 @@
 {
   "trade_date": "20260731",
-  "candidate_count": 100,
+  "candidate_count": 87,
   "topn_count": 10,
   "intraday_rows": 80,
   "auction_rows": 7872,
@@ -14,47 +14,47 @@
   "nondegenerate_features": [],
   "feature_distributions": {},
   "feature_saturation_rates": {},
-  "auction_code_overlap_count": 100,
+  "auction_code_overlap_count": 87,
   "auction_code_overlap_rate": 1.0,
-  "auction_valid_count": 100,
+  "auction_valid_count": 87,
   "auction_valid_rate": 1.0,
   "auction_nondegenerate_features": [
     "auction_strength_score"
   ],
   "auction_feature_distributions": {
     "auction_strength_score": {
-      "sample_count": 100,
-      "unique_count": 85,
-      "upper_saturation_rate": 0.14,
-      "boundary_saturation_rate": 0.14,
+      "sample_count": 87,
+      "unique_count": 74,
+      "upper_saturation_rate": 0.13793103448275862,
+      "boundary_saturation_rate": 0.13793103448275862,
       "min": 0.15,
       "max": 1.0
     }
   },
   "auction_feature_saturation_rates": {
-    "auction_strength_score": 0.14
+    "auction_strength_score": 0.13793103448275862
   },
   "topn_matched_count": 0,
   "topn_matched_rate": 0.0,
-  "missing_count": 100,
+  "missing_count": 87,
   "missing_top10_count": 10,
   "missing_reason_counts": {
-    "missing_stock": 100
+    "missing_stock": 87
   },
   "risk_counts": {
     "low": 0,
-    "medium": 100,
+    "medium": 87,
     "high": 0,
     "extreme": 0
   },
   "default_value_counts": {
-    "quality_default": 100,
-    "reseal_default": 100,
+    "quality_default": 87,
+    "reseal_default": 87,
     "auction_default": 0
   },
   "risk_label_counts": {
-    "分时缺失": 100,
-    "低置信": 100
+    "分时缺失": 87,
+    "低置信": 87
   },
   "intraday_enabled": true,
   "fallback_policy": "neutral",
