@@ -10,7 +10,7 @@
   ],
   "model_kind": "hist_gradient_boosting",
   "probability_is_calibrated": true,
-  "created_at_utc": "2026-08-12T11:17:36Z",
+  "created_at_utc": "2026-08-12T12:28:08Z",
   "calibration": {
     "method": "sigmoid",
     "split": "trailing_trade_dates",
