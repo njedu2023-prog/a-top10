@@ -1,5 +1,5 @@
 {
-  "trade_date": "20260812",
+  "trade_date": "20260813",
   "intraday_features_in_ml": [
     "limitup_quality_score",
     "intraday_quality_score",
@@ -20,14 +20,14 @@
   ],
   "feature_count": 21,
   "intraday_feature_coverage": {
-    "intraday_available_ratio": 0.3372093023255814,
+    "intraday_available_ratio": 0.76,
     "auction_available_ratio": 1.0
   },
   "prob_source_counts": {
-    "hgb": 86
+    "hgb": 50
   },
   "probability_semantics_counts": {
-    "calibrated_probability": 86
+    "calibrated_probability": 50
   },
   "model_contracts": {
     "lr": {
