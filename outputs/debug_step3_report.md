@@ -1,18 +1,18 @@
 # Step3 Debug Report
 
-- trade_date: `20260814`
-- rows: 51
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260814`
+- trade_date: `20260817`
+- rows: 92
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260817`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5540
-- daily_basic.csv: 5540
-- top_list.csv: 72
+- daily.csv: 5539
+- daily_basic.csv: 5539
+- top_list.csv: 59
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 63
+- limit_list_d.csv: 106
 - limit_break_d.csv: 0
-- stk_limit.csv: 7742
+- stk_limit.csv: 7744
 
 ## Missing rate
 - close: 0.0000
@@ -46,12 +46,12 @@
 ## Nonzero rate
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
-- open_times: 0.4314
-- intraday_available: 0.4902
+- open_times: 0.3913
+- intraday_available: 0.0000
 - auction_available: 1.0000
 
 ## Strength quality distribution
-- A: 51
+- A: 92
 
 ## Duplicate contract columns after closeout
 - amount_x
@@ -61,17 +61,17 @@
 
 ```json
 {
-  "trade_date": "20260814",
+  "trade_date": "20260817",
   "step": "step3_strength_score_v3_closeout",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260814",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260817",
   "files": {
-    "daily.csv": 5540,
-    "daily_basic.csv": 5540,
-    "top_list.csv": 72,
+    "daily.csv": 5539,
+    "daily_basic.csv": 5539,
+    "top_list.csv": 59,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 63,
+    "limit_list_d.csv": 106,
     "limit_break_d.csv": 0,
-    "stk_limit.csv": 7742
+    "stk_limit.csv": 7744
   },
   "missing_rate": {
     "close": 0.0,
@@ -105,12 +105,12 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
-    "open_times": 0.43137254901960786,
-    "intraday_available": 0.49019607843137253,
+    "open_times": 0.391304347826087,
+    "intraday_available": 0.0,
     "auction_available": 1.0
   },
   "quality_distribution": {
-    "A": 51
+    "A": 92
   },
   "duplicate_contract_cols_after_closeout": [
     "amount_x",
