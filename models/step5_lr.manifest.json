@@ -10,24 +10,24 @@
   ],
   "model_kind": "logistic",
   "probability_is_calibrated": true,
-  "created_at_utc": "2026-08-17T11:53:54Z",
+  "created_at_utc": "2026-08-18T11:37:23Z",
   "calibration": {
     "method": "sigmoid",
     "split": "trailing_trade_dates",
-    "unique_trade_dates": 134,
+    "unique_trade_dates": 135,
     "validation": {
-      "holdout_start": "20260728",
+      "holdout_start": "20260729",
       "holdout_days": 14,
-      "holdout_rows": 1043,
-      "brier": 0.1677147843942857,
-      "constant_base_rate_brier": 0.16495693368496953,
+      "holdout_rows": 1074,
+      "brier": 0.16579810132994935,
+      "constant_base_rate_brier": 0.16348764779163452,
       "p_at_1": 0.14285714285714285,
-      "positive_rate": 0.20613614573346117
+      "positive_rate": 0.20391061452513967
     },
     "reason": "ok",
-    "calibration_start": "20260709",
-    "train_rows": 7843,
-    "calibration_rows": 1952,
+    "calibration_start": "20260710",
+    "train_rows": 7917,
+    "calibration_rows": 1970,
     "calibration_days": 27
   }
 }
