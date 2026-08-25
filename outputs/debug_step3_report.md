@@ -1,18 +1,18 @@
 # Step3 Debug Report
 
-- trade_date: `20260824`
-- rows: 44
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260824`
+- trade_date: `20260825`
+- rows: 61
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260825`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5545
-- daily_basic.csv: 5545
-- top_list.csv: 64
+- daily.csv: 5546
+- daily_basic.csv: 5546
+- top_list.csv: 61
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 46
+- limit_list_d.csv: 65
 - limit_break_d.csv: 0
-- stk_limit.csv: 7758
+- stk_limit.csv: 7759
 
 ## Missing rate
 - close: 0.0000
@@ -46,12 +46,12 @@
 ## Nonzero rate
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
-- open_times: 0.5682
-- intraday_available: 0.9091
+- open_times: 0.4426
+- intraday_available: 0.3115
 - auction_available: 1.0000
 
 ## Strength quality distribution
-- A: 44
+- A: 61
 
 ## Duplicate contract columns after closeout
 - amount_x
@@ -61,17 +61,17 @@
 
 ```json
 {
-  "trade_date": "20260824",
+  "trade_date": "20260825",
   "step": "step3_strength_score_v3_closeout",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260824",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260825",
   "files": {
-    "daily.csv": 5545,
-    "daily_basic.csv": 5545,
-    "top_list.csv": 64,
+    "daily.csv": 5546,
+    "daily_basic.csv": 5546,
+    "top_list.csv": 61,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 46,
+    "limit_list_d.csv": 65,
     "limit_break_d.csv": 0,
-    "stk_limit.csv": 7758
+    "stk_limit.csv": 7759
   },
   "missing_rate": {
     "close": 0.0,
@@ -105,12 +105,12 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
-    "open_times": 0.5681818181818182,
-    "intraday_available": 0.9090909090909091,
+    "open_times": 0.4426229508196721,
+    "intraday_available": 0.3114754098360656,
     "auction_available": 1.0
   },
   "quality_distribution": {
-    "A": 44
+    "A": 61
   },
   "duplicate_contract_cols_after_closeout": [
     "amount_x",
