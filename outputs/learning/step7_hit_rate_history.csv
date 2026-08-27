@@ -141,4 +141,5 @@
 20260821,20260824,10,3,0.3,src=feature_history_v3;ranking=published_file:pred_top10_20260821.csv,published_file:pred_top10_20260821.csv,1,0,0.0,3,0,0.0,5,1,0.2,10,3,0.3
 20260824,20260825,10,4,0.4,src=feature_history_v3;ranking=published_file:pred_top10_20260824.csv,published_file:pred_top10_20260824.csv,1,0,0.0,3,1,0.3333,5,2,0.4,10,4,0.4
 20260825,20260826,10,3,0.3,src=feature_history_v3;ranking=published_file:pred_top10_20260825.csv,published_file:pred_top10_20260825.csv,1,0,0.0,3,1,0.3333,5,1,0.2,10,3,0.3
-20260826,20260827,10,,,pending_label;ranking=published_file:pred_top10_20260826.csv,published_file:pred_top10_20260826.csv,1,,,3,,,5,,,10,,
+20260826,20260827,10,4,0.4,src=feature_history_v3;ranking=published_file:pred_top10_20260826.csv,published_file:pred_top10_20260826.csv,1,1,1.0,3,2,0.6667,5,4,0.8,10,4,0.4
+20260827,20260828,10,,,pending_label;ranking=published_file:pred_top10_20260827.csv,published_file:pred_top10_20260827.csv,1,,,3,,,5,,,10,,
