@@ -7,66 +7,59 @@
   "auction_source": "auction_features.csv",
   "code_overlap_count": 50,
   "code_overlap_rate": 0.6410256410256411,
-  "matched_count": 50,
-  "matched_rate": 0.6410256410256411,
-  "valid_feature_count": 50,
-  "valid_feature_rate": 0.6410256410256411,
-  "nondegenerate_features": [
-    "limitup_quality_score",
-    "intraday_risk_score",
-    "late_withdraw_score",
-    "reseal_score",
-    "seal_stability_score",
-    "open_board_count"
-  ],
+  "matched_count": 0,
+  "matched_rate": 0.0,
+  "valid_feature_count": 0,
+  "valid_feature_rate": 0.0,
+  "nondegenerate_features": [],
   "feature_distributions": {
     "limitup_quality_score": {
       "sample_count": 50,
-      "unique_count": 44,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.0,
-      "min": 0.1603,
-      "max": 0.8402769999999999
+      "boundary_saturation_rate": 1.0,
+      "min": 0.0,
+      "max": 0.0
     },
     "intraday_risk_score": {
       "sample_count": 50,
-      "unique_count": 41,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
       "boundary_saturation_rate": 0.0,
-      "min": 0.07,
-      "max": 0.48140625
+      "min": 0.75,
+      "max": 0.75
     },
     "late_withdraw_score": {
       "sample_count": 50,
-      "unique_count": 7,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.86,
+      "boundary_saturation_rate": 1.0,
       "min": 0.0,
-      "max": 0.953905
+      "max": 0.0
     },
     "reseal_score": {
       "sample_count": 50,
-      "unique_count": 39,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.08,
+      "boundary_saturation_rate": 1.0,
       "min": 0.0,
-      "max": 0.816508
+      "max": 0.0
     },
     "seal_stability_score": {
       "sample_count": 50,
-      "unique_count": 21,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.04,
+      "boundary_saturation_rate": 1.0,
       "min": 0.0,
-      "max": 0.8
+      "max": 0.0
     },
     "open_board_count": {
       "sample_count": 50,
-      "unique_count": 6,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
       "boundary_saturation_rate": 0.0,
       "min": 0.0,
-      "max": 8.0
+      "max": 0.0
     }
   },
   "feature_saturation_rates": {
@@ -97,33 +90,30 @@
   "auction_feature_saturation_rates": {
     "auction_strength_score": 0.16666666666666666
   },
-  "topn_matched_count": 10,
-  "topn_matched_rate": 1.0,
-  "missing_count": 28,
-  "missing_top10_count": 0,
+  "topn_matched_count": 0,
+  "topn_matched_rate": 0.0,
+  "missing_count": 78,
+  "missing_top10_count": 10,
   "missing_reason_counts": {
+    "degenerate_features": 50,
     "missing_stock": 28
   },
   "risk_counts": {
-    "low": 42,
-    "medium": 28,
-    "high": 8,
+    "low": 0,
+    "medium": 78,
+    "high": 0,
     "extreme": 0
   },
   "default_value_counts": {
-    "quality_default": 28,
-    "reseal_default": 28,
+    "quality_default": 78,
+    "reseal_default": 78,
     "auction_default": 0
   },
   "risk_label_counts": {
-    "健康涨停": 44,
-    "分时缺失": 28,
-    "低置信": 28,
-    "多次炸板": 4,
-    "回封偏弱": 3,
-    "尾盘撤退": 1
+    "分时缺失": 78,
+    "低置信": 78
   },
   "intraday_enabled": true,
   "fallback_policy": "neutral",
-  "fallback_used": false
+  "fallback_used": true
 }

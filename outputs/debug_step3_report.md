@@ -47,7 +47,7 @@
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
 - open_times: 0.4744
-- intraday_available: 0.6410
+- intraday_available: 0.0000
 - auction_available: 1.0000
 
 ## Strength quality distribution
@@ -106,7 +106,7 @@
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
     "open_times": 0.47435897435897434,
-    "intraday_available": 0.6410256410256411,
+    "intraday_available": 0.0,
     "auction_available": 1.0
   },
   "quality_distribution": {
