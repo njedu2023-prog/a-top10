@@ -17,17 +17,17 @@
       "sample_count": 2,
       "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.0,
-      "min": 0.76,
-      "max": 0.76
+      "boundary_saturation_rate": 1.0,
+      "min": 0.0,
+      "max": 0.0
     },
     "intraday_risk_score": {
       "sample_count": 2,
       "unique_count": 1,
       "upper_saturation_rate": 0.0,
       "boundary_saturation_rate": 0.0,
-      "min": 0.061875,
-      "max": 0.061875
+      "min": 0.75,
+      "max": 0.75
     },
     "late_withdraw_score": {
       "sample_count": 2,
@@ -41,17 +41,17 @@
       "sample_count": 2,
       "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.0,
-      "min": 0.65,
-      "max": 0.65
+      "boundary_saturation_rate": 1.0,
+      "min": 0.0,
+      "max": 0.0
     },
     "seal_stability_score": {
       "sample_count": 2,
       "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.0,
-      "min": 0.7,
-      "max": 0.7
+      "boundary_saturation_rate": 1.0,
+      "min": 0.0,
+      "max": 0.0
     },
     "open_board_count": {
       "sample_count": 2,
