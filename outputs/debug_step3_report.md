@@ -1,18 +1,18 @@
 # Step3 Debug Report
 
-- trade_date: `20260831`
-- rows: 79
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260831`
+- trade_date: `20260901`
+- rows: 76
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20260901`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5545
-- daily_basic.csv: 5545
-- top_list.csv: 76
+- daily.csv: 5546
+- daily_basic.csv: 5546
+- top_list.csv: 68
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 88
+- limit_list_d.csv: 83
 - limit_break_d.csv: 0
-- stk_limit.csv: 7768
+- stk_limit.csv: 7771
 
 ## Missing rate
 - close: 0.0000
@@ -46,12 +46,12 @@
 ## Nonzero rate
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
-- open_times: 0.4937
-- intraday_available: 0.0000
+- open_times: 0.4737
+- intraday_available: 0.5263
 - auction_available: 1.0000
 
 ## Strength quality distribution
-- A: 79
+- A: 76
 
 ## Duplicate contract columns after closeout
 - amount_x
@@ -61,17 +61,17 @@
 
 ```json
 {
-  "trade_date": "20260831",
+  "trade_date": "20260901",
   "step": "step3_strength_score_v3_closeout",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260831",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20260901",
   "files": {
-    "daily.csv": 5545,
-    "daily_basic.csv": 5545,
-    "top_list.csv": 76,
+    "daily.csv": 5546,
+    "daily_basic.csv": 5546,
+    "top_list.csv": 68,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 88,
+    "limit_list_d.csv": 83,
     "limit_break_d.csv": 0,
-    "stk_limit.csv": 7768
+    "stk_limit.csv": 7771
   },
   "missing_rate": {
     "close": 0.0,
@@ -105,12 +105,12 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
-    "open_times": 0.4936708860759494,
-    "intraday_available": 0.0,
+    "open_times": 0.47368421052631576,
+    "intraday_available": 0.5263157894736842,
     "auction_available": 1.0
   },
   "quality_distribution": {
-    "A": 79
+    "A": 76
   },
   "duplicate_contract_cols_after_closeout": [
     "amount_x",
