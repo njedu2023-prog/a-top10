@@ -173,21 +173,21 @@
     "stage_nonblank_rows": 86
   },
   "intraday_merge": {
-    "intraday_file_rows": 80,
+    "intraday_file_rows": 173,
     "auction_file_rows": 7941,
     "candidate_rows": 86,
-    "intraday_matched_rows": 0,
+    "intraday_matched_rows": 86,
     "auction_matched_rows": 86,
-    "missing_rows": 86,
-    "intraday_match_ratio": 0.0,
+    "missing_rows": 0,
+    "intraday_match_ratio": 1.0,
     "auction_match_ratio": 1.0,
     "missing_policy": "neutral",
     "missing_reason_count": {
-      "missing_stock": 86
+      "ok": 86
     },
     "default_value_counts": {
-      "quality_default": 86,
-      "reseal_default": 86,
+      "quality_default": 0,
+      "reseal_default": 0,
       "auction_default": 0
     },
     "added_columns": [
