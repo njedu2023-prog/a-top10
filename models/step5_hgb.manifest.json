@@ -10,24 +10,24 @@
   ],
   "model_kind": "hist_gradient_boosting",
   "probability_is_calibrated": true,
-  "created_at_utc": "2026-09-22T15:40:31Z",
+  "created_at_utc": "2026-09-23T15:35:04Z",
   "calibration": {
     "method": "sigmoid",
     "split": "trailing_trade_dates",
     "unique_trade_dates": 150,
     "validation": {
-      "holdout_start": "20260901",
+      "holdout_start": "20260902",
       "holdout_days": 15,
-      "holdout_rows": 855,
-      "brier": 0.17146714614275485,
-      "constant_base_rate_brier": 0.17314763420499923,
-      "p_at_1": 0.26666666666666666,
-      "positive_rate": 0.21754385964912282
+      "holdout_rows": 838,
+      "brier": 0.17166929955989438,
+      "constant_base_rate_brier": 0.17450485602557214,
+      "p_at_1": 0.2,
+      "positive_rate": 0.21957040572792363
     },
     "reason": "ok",
-    "calibration_start": "20260811",
-    "train_rows": 8867,
-    "calibration_rows": 1774,
+    "calibration_start": "20260812",
+    "train_rows": 8876,
+    "calibration_rows": 1780,
     "calibration_days": 30
   }
 }
