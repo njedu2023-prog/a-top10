@@ -10,7 +10,7 @@
   ],
   "model_kind": "hist_gradient_boosting",
   "probability_is_calibrated": true,
-  "created_at_utc": "2026-09-24T15:55:59Z",
+  "created_at_utc": "2026-09-25T15:56:01Z",
   "calibration": {
     "method": "sigmoid",
     "split": "trailing_trade_dates",
@@ -19,7 +19,7 @@
       "holdout_start": "20260903",
       "holdout_days": 15,
       "holdout_rows": 832,
-      "brier": 0.1752453623758932,
+      "brier": 0.17524536237589322,
       "constant_base_rate_brier": 0.17890274028149972,
       "p_at_1": 0.3333333333333333,
       "positive_rate": 0.22596153846153846
