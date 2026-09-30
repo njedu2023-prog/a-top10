@@ -1,9 +1,9 @@
 {
   "trade_date": "20260930",
-  "prev_smooth": 0.4888,
+  "prev_smooth": 0.48,
   "state": "neutral",
   "score": 0.48,
-  "weight": 0.8932,
+  "weight": 0.888,
   "inputs": {
     "E1": 52,
     "E2": 0.0,

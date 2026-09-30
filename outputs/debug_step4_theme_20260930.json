@@ -69,8 +69,8 @@
   },
   "diagnosis": "theme boost applied",
   "quality_distribution": {
-    "C": 24,
-    "A": 24
+    "A": 24,
+    "C": 24
   },
   "missing_rate": {
     "theme_main": 0.0,
