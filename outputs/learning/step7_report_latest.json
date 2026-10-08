@@ -1,7 +1,7 @@
 {
-  "ts": "2026-10-08 22:15:33",
+  "ts": "2026-10-09 02:00:44",
   "run_mode": "auto_daily",
-  "today_yyyymmdd": "20261008",
+  "today_yyyymmdd": "20261009",
   "latest_snapshot_yyyymmdd": "20261008",
   "label_upper_bound_yyyymmdd": "20261008",
   "feature_history_file": "outputs/learning/feature_history.csv",
