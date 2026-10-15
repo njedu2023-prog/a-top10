@@ -1,0 +1,124 @@
+{
+  "trade_date": "20261015",
+  "candidate_count": 34,
+  "topn_count": 10,
+  "intraday_rows": 80,
+  "auction_rows": 6093,
+  "auction_source": "auction_features.csv",
+  "code_overlap_count": 34,
+  "code_overlap_rate": 1.0,
+  "matched_count": 34,
+  "matched_rate": 1.0,
+  "valid_feature_count": 34,
+  "valid_feature_rate": 1.0,
+  "nondegenerate_features": [
+    "limitup_quality_score",
+    "intraday_risk_score",
+    "late_withdraw_score",
+    "reseal_score",
+    "seal_stability_score",
+    "open_board_count"
+  ],
+  "feature_distributions": {
+    "limitup_quality_score": {
+      "sample_count": 34,
+      "unique_count": 34,
+      "upper_saturation_rate": 0.0,
+      "boundary_saturation_rate": 0.0,
+      "min": 0.17872,
+      "max": 0.80408
+    },
+    "intraday_risk_score": {
+      "sample_count": 34,
+      "unique_count": 33,
+      "upper_saturation_rate": 0.0,
+      "boundary_saturation_rate": 0.0,
+      "min": 0.07,
+      "max": 0.56757
+    },
+    "late_withdraw_score": {
+      "sample_count": 34,
+      "unique_count": 4,
+      "upper_saturation_rate": 0.0,
+      "boundary_saturation_rate": 0.8529411764705882,
+      "min": 0.0,
+      "max": 0.36
+    },
+    "reseal_score": {
+      "sample_count": 34,
+      "unique_count": 32,
+      "upper_saturation_rate": 0.0,
+      "boundary_saturation_rate": 0.08823529411764706,
+      "min": 0.0,
+      "max": 0.875378
+    },
+    "seal_stability_score": {
+      "sample_count": 34,
+      "unique_count": 15,
+      "upper_saturation_rate": 0.0,
+      "boundary_saturation_rate": 0.0,
+      "min": 0.0416,
+      "max": 0.78
+    },
+    "open_board_count": {
+      "sample_count": 34,
+      "unique_count": 6,
+      "upper_saturation_rate": 0.0,
+      "boundary_saturation_rate": 0.0,
+      "min": 0.0,
+      "max": 6.0
+    }
+  },
+  "feature_saturation_rates": {
+    "limitup_quality_score": 0.0,
+    "intraday_risk_score": 0.0,
+    "late_withdraw_score": 0.0,
+    "reseal_score": 0.0,
+    "seal_stability_score": 0.0,
+    "open_board_count": 0.0
+  },
+  "auction_code_overlap_count": 34,
+  "auction_code_overlap_rate": 1.0,
+  "auction_valid_count": 34,
+  "auction_valid_rate": 1.0,
+  "auction_nondegenerate_features": [
+    "auction_strength_score"
+  ],
+  "auction_feature_distributions": {
+    "auction_strength_score": {
+      "sample_count": 34,
+      "unique_count": 29,
+      "upper_saturation_rate": 0.17647058823529413,
+      "boundary_saturation_rate": 0.17647058823529413,
+      "min": 0.15,
+      "max": 1.0
+    }
+  },
+  "auction_feature_saturation_rates": {
+    "auction_strength_score": 0.17647058823529413
+  },
+  "topn_matched_count": 10,
+  "topn_matched_rate": 1.0,
+  "missing_count": 0,
+  "missing_top10_count": 0,
+  "missing_reason_counts": {},
+  "risk_counts": {
+    "low": 26,
+    "medium": 0,
+    "high": 8,
+    "extreme": 0
+  },
+  "default_value_counts": {
+    "quality_default": 0,
+    "reseal_default": 0,
+    "auction_default": 0
+  },
+  "risk_label_counts": {
+    "健康涨停": 20,
+    "回封偏弱": 10,
+    "多次炸板": 5
+  },
+  "intraday_enabled": true,
+  "fallback_policy": "neutral",
+  "fallback_used": false
+}

@@ -1,5 +1,5 @@
 {
-  "trade_date": "20261014",
+  "trade_date": "20261015",
   "intraday_features_in_ml": [
     "limitup_quality_score",
     "intraday_quality_score",
