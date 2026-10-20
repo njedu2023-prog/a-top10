@@ -10,7 +10,7 @@
   ],
   "model_kind": "logistic",
   "probability_is_calibrated": true,
-  "created_at_utc": "2026-10-20T14:00:49Z",
+  "created_at_utc": "2026-10-20T15:50:48Z",
   "calibration": {
     "method": "sigmoid",
     "split": "trailing_trade_dates",
@@ -19,7 +19,7 @@
       "holdout_start": "20260921",
       "holdout_days": 15,
       "holdout_rows": 739,
-      "brier": 0.17134363351762696,
+      "brier": 0.17134363351762694,
       "constant_base_rate_brier": 0.1841461414569268,
       "p_at_1": 0.7333333333333333,
       "positive_rate": 0.23410013531799728
