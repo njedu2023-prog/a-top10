@@ -186,18 +186,18 @@
     "intraday_file_rows": 206,
     "auction_file_rows": 6095,
     "candidate_rows": 109,
-    "intraday_matched_rows": 109,
+    "intraday_matched_rows": 0,
     "auction_matched_rows": 109,
-    "missing_rows": 0,
-    "intraday_match_ratio": 1.0,
+    "missing_rows": 109,
+    "intraday_match_ratio": 0.0,
     "auction_match_ratio": 1.0,
     "missing_policy": "neutral",
     "missing_reason_count": {
-      "ok": 109
+      "degenerate_features": 109
     },
     "default_value_counts": {
-      "quality_default": 0,
-      "reseal_default": 0,
+      "quality_default": 109,
+      "reseal_default": 109,
       "auction_default": 0
     },
     "added_columns": [
