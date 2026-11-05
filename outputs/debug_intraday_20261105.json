@@ -7,66 +7,59 @@
   "auction_source": "auction_features.csv",
   "code_overlap_count": 71,
   "code_overlap_rate": 1.0,
-  "matched_count": 71,
-  "matched_rate": 1.0,
-  "valid_feature_count": 71,
-  "valid_feature_rate": 1.0,
-  "nondegenerate_features": [
-    "limitup_quality_score",
-    "intraday_risk_score",
-    "late_withdraw_score",
-    "reseal_score",
-    "seal_stability_score",
-    "open_board_count"
-  ],
+  "matched_count": 0,
+  "matched_rate": 0.0,
+  "valid_feature_count": 0,
+  "valid_feature_rate": 0.0,
+  "nondegenerate_features": [],
   "feature_distributions": {
     "limitup_quality_score": {
       "sample_count": 71,
-      "unique_count": 63,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.0,
-      "min": 0.25,
-      "max": 0.8545470000000001
+      "boundary_saturation_rate": 1.0,
+      "min": 0.0,
+      "max": 0.0
     },
     "intraday_risk_score": {
       "sample_count": 71,
-      "unique_count": 56,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
       "boundary_saturation_rate": 0.0,
-      "min": 0.07,
-      "max": 0.514778
+      "min": 0.75,
+      "max": 0.75
     },
     "late_withdraw_score": {
       "sample_count": 71,
-      "unique_count": 4,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.9295774647887324,
+      "boundary_saturation_rate": 1.0,
       "min": 0.0,
-      "max": 0.24
+      "max": 0.0
     },
     "reseal_score": {
       "sample_count": 71,
-      "unique_count": 61,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.014084507042253521,
+      "boundary_saturation_rate": 1.0,
       "min": 0.0,
-      "max": 0.8151579999999999
+      "max": 0.0
     },
     "seal_stability_score": {
       "sample_count": 71,
-      "unique_count": 22,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
-      "boundary_saturation_rate": 0.014084507042253521,
+      "boundary_saturation_rate": 1.0,
       "min": 0.0,
-      "max": 0.8
+      "max": 0.0
     },
     "open_board_count": {
       "sample_count": 71,
-      "unique_count": 8,
+      "unique_count": 1,
       "upper_saturation_rate": 0.0,
       "boundary_saturation_rate": 0.0,
       "min": 0.0,
-      "max": 11.0
+      "max": 0.0
     }
   },
   "feature_saturation_rates": {
@@ -97,28 +90,29 @@
   "auction_feature_saturation_rates": {
     "auction_strength_score": 0.09859154929577464
   },
-  "topn_matched_count": 10,
-  "topn_matched_rate": 1.0,
-  "missing_count": 0,
-  "missing_top10_count": 0,
-  "missing_reason_counts": {},
+  "topn_matched_count": 0,
+  "topn_matched_rate": 0.0,
+  "missing_count": 71,
+  "missing_top10_count": 10,
+  "missing_reason_counts": {
+    "degenerate_features": 71
+  },
   "risk_counts": {
-    "low": 64,
-    "medium": 0,
-    "high": 7,
+    "low": 0,
+    "medium": 71,
+    "high": 0,
     "extreme": 0
   },
   "default_value_counts": {
-    "quality_default": 0,
-    "reseal_default": 0,
+    "quality_default": 71,
+    "reseal_default": 71,
     "auction_default": 0
   },
   "risk_label_counts": {
-    "健康涨停": 56,
-    "回封偏弱": 13,
-    "多次炸板": 8
+    "分时缺失": 71,
+    "低置信": 71
   },
   "intraday_enabled": true,
   "fallback_policy": "neutral",
-  "fallback_used": false
+  "fallback_used": true
 }
