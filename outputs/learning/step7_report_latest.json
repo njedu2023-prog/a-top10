@@ -1,7 +1,7 @@
 {
-  "ts": "2026-11-06 19:15:31",
+  "ts": "2026-11-07 02:22:55",
   "run_mode": "auto_daily",
-  "today_yyyymmdd": "20261106",
+  "today_yyyymmdd": "20261107",
   "latest_snapshot_yyyymmdd": "20261106",
   "label_upper_bound_yyyymmdd": "20261106",
   "feature_history_file": "outputs/learning/feature_history.csv",
@@ -3019,7 +3019,7 @@
               "holdout_start": "20261016",
               "holdout_days": 15,
               "holdout_rows": 827,
-              "brier": 0.1667368397297193,
+              "brier": 0.16673683972971928,
               "constant_base_rate_brier": 0.1735092398064338,
               "p_at_1": 0.5333333333333333,
               "positive_rate": 0.218863361547763
