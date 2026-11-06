@@ -1,28 +1,27 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-11-06 02:58:11
+- 生成时间：2026-11-06 19:15:31
 - RunMode：auto_daily
 - Today：20261106
-- LatestSnapshot：20261105
-- LabelUpperBound：20261105
+- LatestSnapshot：20261106
+- LabelUpperBound：20261106
 
 ## 1) 最新命中
 
-- trade_date：20261104
-- verify_date：20261105
-- hit/topn：2/10
-- hit_rate：0.2
+- trade_date：20261105
+- verify_date：20261106
+- hit/topn：3/10
+- hit_rate：0.3
 - top1：0/1，hit_rate=0.0
 - top3：1/3，hit_rate=0.3333
 - top5：1/5，hit_rate=0.2
-- top10：2/10，hit_rate=0.2
-- note：src=feature_history_v3;ranking=published_file:pred_top10_20261104.csv
+- top10：3/10，hit_rate=0.3
+- note：src=feature_history_v3;ranking=published_file:pred_top10_20261105.csv
 
 ## 1.1) 近10日发布排名命中率（done-only）
 
 | trade_date | verify_date | top1_hit_rate | top3_hit_rate | top5_hit_rate | top10_hit_rate |
 | --- | --- | --- | --- | --- | --- |
-| 20261022 | 20261023 | 0.0 | 0.3333 | 0.2 | 0.4 |
 | 20261023 | 20261026 | 0.0 | 0.3333 | 0.2 | 0.3 |
 | 20261026 | 20261027 | 0.0 | 0.3333 | 0.6 | 0.5 |
 | 20261027 | 20261028 | 0.0 | 0.3333 | 0.4 | 0.2 |
@@ -32,44 +31,45 @@
 | 20261102 | 20261103 | 1.0 | 0.6667 | 0.4 | 0.2 |
 | 20261103 | 20261104 | 1.0 | 0.3333 | 0.6 | 0.4 |
 | 20261104 | 20261105 | 0.0 | 0.3333 | 0.2 | 0.2 |
+| 20261105 | 20261106 | 0.0 | 0.3333 | 0.2 | 0.3 |
 
 ## 1.2) 发布排名累计指标
 
 | rank | trade_days | sample_count | hit_count | hit_rate |
 | --- | --- | --- | --- | --- |
-| Top1 | 186 | 186 | 91 | 0.4892 |
-| Top3 | 186 | 558 | 242 | 0.4337 |
-| Top5 | 186 | 930 | 351 | 0.3774 |
-| Top10 | 186 | 1860 | 591 | 0.3177 |
+| Top1 | 187 | 187 | 91 | 0.4866 |
+| Top3 | 187 | 561 | 243 | 0.4332 |
+| Top5 | 187 | 935 | 352 | 0.3765 |
+| Top10 | 187 | 1870 | 594 | 0.3176 |
 
 ## 2) 批级闸门
 
 - pass：True
 - reason：partial_pass_bad_trade_dates_excluded
-- trade_dates：188
-- pass_dates：186
+- trade_dates：189
+- pass_dates：187
 - fail_dates：2
-- eligible_train_rows：12635
+- eligible_train_rows：12706
 
 ## 2.1) 样本拒绝分布
 
-- total_rows：12799
-- learnable_rows：12635
-- rejected_rows：164
+- total_rows：12828
+- learnable_rows：12706
+- rejected_rows：122
 
 | reason | count |
 | --- | --- |
-| pending_next_snapshot | 164 |
+| pending_next_snapshot | 122 |
 
 ## 3) 训练执行结果
 
 - trained：True
 - updated：True
 - level：level3
-- train_rows：12635
-- pos/neg：2267/10368
+- train_rows：12706
+- pos/neg：2277/10429
 - feature_coverage：1.0
-- pass_trade_dates：186
+- pass_trade_dates：187
 - fail_trade_dates：2
 - reason：ok_partial_pass_dates_model_updated
 
