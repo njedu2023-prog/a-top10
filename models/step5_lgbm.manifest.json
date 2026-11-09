@@ -10,7 +10,7 @@
   ],
   "model_kind": "lightgbm",
   "probability_is_calibrated": true,
-  "created_at_utc": "2026-11-09T12:03:40Z",
+  "created_at_utc": "2026-11-09T21:39:48Z",
   "calibration": {
     "method": "sigmoid",
     "split": "trailing_trade_dates",
@@ -19,7 +19,7 @@
       "holdout_start": "20261019",
       "holdout_days": 15,
       "holdout_rows": 801,
-      "brier": 0.1693101790238454,
+      "brier": 0.16931017902384543,
       "constant_base_rate_brier": 0.17750025309204087,
       "p_at_1": 0.4,
       "positive_rate": 0.2247191011235955
