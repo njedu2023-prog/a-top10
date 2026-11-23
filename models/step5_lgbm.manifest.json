@@ -10,7 +10,7 @@
   ],
   "model_kind": "lightgbm",
   "probability_is_calibrated": true,
-  "created_at_utc": "2026-11-23T11:16:39Z",
+  "created_at_utc": "2026-11-23T22:53:47Z",
   "calibration": {
     "method": "sigmoid",
     "split": "trailing_trade_dates",
