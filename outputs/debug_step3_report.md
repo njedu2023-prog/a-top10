@@ -1,16 +1,16 @@
 # Step3 Debug Report
 
-- trade_date: `20261123`
-- rows: 117
-- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20261123`
+- trade_date: `20261124`
+- rows: 47
+- snapshot_dir: `_warehouse/a-share-top3-data/data/raw/2026/20261124`
 - snapshot_missing: `False`
 
 ## Files rows
-- daily.csv: 5570
-- daily_basic.csv: 5570
-- top_list.csv: 92
+- daily.csv: 5576
+- daily_basic.csv: 5576
+- top_list.csv: 72
 - moneyflow_hsgt.csv: 1
-- limit_list_d.csv: 147
+- limit_list_d.csv: 55
 - limit_break_d.csv: 0
 - stk_limit.csv: 5658
 
@@ -46,12 +46,12 @@
 ## Nonzero rate
 - StrengthScore: 1.0000
 - limit_strength_raw: 1.0000
-- open_times: 0.5043
-- intraday_available: 0.0000
+- open_times: 0.4681
+- intraday_available: 1.0000
 - auction_available: 1.0000
 
 ## Strength quality distribution
-- A: 117
+- A: 47
 
 ## Duplicate contract columns after closeout
 - amount_x
@@ -61,15 +61,15 @@
 
 ```json
 {
-  "trade_date": "20261123",
+  "trade_date": "20261124",
   "step": "step3_strength_score_v3_closeout",
-  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20261123",
+  "snapshot_dir": "_warehouse/a-share-top3-data/data/raw/2026/20261124",
   "files": {
-    "daily.csv": 5570,
-    "daily_basic.csv": 5570,
-    "top_list.csv": 92,
+    "daily.csv": 5576,
+    "daily_basic.csv": 5576,
+    "top_list.csv": 72,
     "moneyflow_hsgt.csv": 1,
-    "limit_list_d.csv": 147,
+    "limit_list_d.csv": 55,
     "limit_break_d.csv": 0,
     "stk_limit.csv": 5658
   },
@@ -105,12 +105,12 @@
   "nonzero_rate": {
     "StrengthScore": 1.0,
     "limit_strength_raw": 1.0,
-    "open_times": 0.5042735042735043,
-    "intraday_available": 0.0,
+    "open_times": 0.46808510638297873,
+    "intraday_available": 1.0,
     "auction_available": 1.0
   },
   "quality_distribution": {
-    "A": 117
+    "A": 47
   },
   "duplicate_contract_cols_after_closeout": [
     "amount_x",
