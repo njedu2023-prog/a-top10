@@ -1,8 +1,8 @@
 # Step7 自学习报告（latest）
 
-- 生成时间：2026-11-26 19:17:42
+- 生成时间：2026-11-27 04:29:44
 - RunMode：auto_daily
-- Today：20261126
+- Today：20261127
 - LatestSnapshot：20261126
 - LabelUpperBound：20261126
 
